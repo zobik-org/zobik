@@ -1,0 +1,30 @@
+# Writing Guidelines
+
+How the documentation in this directory is written. These guidelines are not part of any specification and no document cites them from its body. Each document adds, in its own header, what applies only to it.
+
+## Scope
+
+| Document | Guidelines |
+| :--- | :--- |
+| [architecture.md](architecture.md) | All of these, plus the ones in its header. |
+| [implementation.md](implementation.md) | All of these, with one exception: it names concrete technologies, because that is its purpose. |
+
+## The guidelines
+
+**A document describes a state, not a journey.** It is written in the present tense, as if the design had always been this way. It never mentions versions, iterations, changes from an earlier design, discarded options or the fact that a section was rewritten: no *"this used to be solved with…"*, *"from now on…"*, *"we added…"*, *"this section now states…"*. The model reader opens the document for the first time with no context about its history, and any reference to how the text evolved is noise they cannot interpret. Alternatives appear only when they explain *why the design is what it is* —a current trade-off, not a change of mind—, and then they are stated as a property of the current design. The history of a document lives in version control.
+
+**Everything is said once, in one place.** Before explaining a mechanism, check whether it is already explained elsewhere, in this document or another: if it is, reference it instead of repeating it. Repetition is not just redundant, it is a source of inconsistency — two statements of the same mechanism diverge as soon as one of them is edited. When a concept is needed in several places, one is its canonical section —the one that defines it and the one that is edited when it changes— and the others cite it. A short rephrasing is allowed when the local argument cannot be followed without it, as long as it adds no detail of its own and carries the reference to the canonical section; a second definition that can go stale on its own is not.
+
+**Items are not counted.** Lists are not announced with quantities: no *"the three axes"*, *"the following four conditions"*, *"for two reasons"*, and no ordinals that depend on the length of the list. Write *"the axes"*, *"the conditions"*, *"for the reasons below"*. The reason is maintenance: adding or removing an item would otherwise mean finding and fixing every count that mentions it —including those in other documents—, and an outdated count is a silent error no reader can detect without recounting. The same applies to referring to an item by its position (*"the second point"*, *"the last bullet"*): name it by its content. Quantities that belong to the architecture and not to the text stay —*"a node claims a single topic"*, *"the only authority"*—, because there the number is the statement, not an index.
+
+**Things are defined by what they are.** A definition that opens with a negation —*"X is not Y"*, *"this should not be confused with Z"*— attributes to the reader a confusion the document never gave them reason to have, and spends the opening sentence, which carries the most weight, on the other concept instead of its own. Write what each thing is, what it holds, what it decides and who reads it; when two neighboring definitions are precise, the contrast between them needs no statement. The negative form is reserved for statements where what does not happen **is** the property being fixed —*"the Task Broker does not read domain content"*, *"the Catalog never deletes physically"*, *"a node cannot forge the proof"*—: there the negation is the guarantee, and without it the contract stays open. The test: if deleting the negation loses a verifiable constraint, it stays; if it only loses a clarification, it goes.
+
+**Between two sentences that say the same thing, the simpler one wins.** Documentation is read to apply its rules, so each statement goes straight to the point: first what the mechanism does, then the condition or trade-off that bounds it. Prefer the plain word to the technical one when both name the same thing, the short sentence to the long subordinate one, and the literal statement to the figure — no personified components, no metaphors the reader has to translate back into the mechanism, and no closing a paragraph by restating with more style what its first sentence already fixed. Emphasis follows the same economy: bold marks the governing statement, and stops marking it if it falls on every sentence of the paragraph. An ornate passage does not read as stronger but as less precise, because the reader has to separate the rule from the ornament to know what is required. The test is the same as above: if deleting a sentence loses no fact, constraint or reference, it goes; if the same thing can be said with fewer words, it is.
+
+**Consequences on form.** Some concrete habits follow from the above:
+
+* Cross-references to the specification are written with the section sign and number (§3.13.3), which is the deduplication mechanism of the whole documentation. Moving or renumbering a section of `architecture.md` means updating everything that cites it, in that document and in the others.
+* Defined terms —those in the component glossary (architecture §4) and the names of Global Configuration parameters (architecture §2.3)— are always spelled the same way, and their definition lives only where it belongs.
+* System identifiers —configuration parameters, payload keys, event fields, topic names and enumeration values— are written in backticks and in `snake_case`. The dot separates segments only where it names a path: the `type` of an event (`task.announced`) and a key inside the payload (`data.topic`).
+* The general term for any independent component of the network is **node** (architecture §2.1). "Agent" does not name components — it is reserved for paradigm names (*AI Swarm*, *multi-agent systems*), the identifier `agent_similarity_floor` (architecture §2.3), and people.
+* When a rule has exceptions, they are stated next to the rule, not in a remote section the reader has no reason to visit.
