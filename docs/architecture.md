@@ -2405,3 +2405,168 @@ The **Category** column is the same as in §2.1 and makes this glossary derivabl
 | **Egress destinations** | external dependency | Third-party APIs / External Systems | The services a node reaches outside the substrate—model providers, paid APIs, repos, filesystems—always through its Integration Sidecar and only if an `egress_registry` entry names them and the node has it among its `egress_grants` (§3.16). Whoever operates the platform contracts them; the network only declares which ones are authorized. |
 | **Rate Source** | external dependency | Pricing Feed / Rate Table | Whatever yields the rate with which the Integration Sidecar prices each mediated call (§3.10). The Global Configuration declares which source it is and not the values, so maintaining it by hand and refreshing it against a service are the same thing for the network (§2.3). |
 | **Shared Catalog** | external dependency | Federated Artifact Registry | Federated service, external to every individual network, that aggregates the blueprints and bundles operators promote from their Local Catalogs and **declares its own vector space**, independent of that of any participating network. It scans each artifact on receiving it, keeps reputation per origin network and charges the acquisition of priced entries against the credit of the tenant's account. No network queries it or writes to it unless its operator activates the integration, which is an entry of its `egress_registry` (§3.13.6). |
+
+## 5. Configuration examples and flows
+
+This section adds no new mechanisms—it instantiates the ones already defined in §2–§3 on concrete cases, so they can be walked through mentally and frictions detected before they show up in a real implementation. The examples share the same structural components (§2.1); the domain-work ones differ only in which nodes the Spawner ends up populating, and the operation one involves no domain work at all—it walks through an operator action on the already populated network.
+
+**How to read the role names.** The nodes that appear here with a proper name are emergent roles (§2.1), invented for the example and not required by the architecture. When an example says "the Planner generates X", it should be read as "the node that plays that role in that concrete network"; any rule that depends on that generation must be able to fall on any equivalent node, or simply not apply if that role does not exist in a given instance of the network.
+
+### 5.1. Cold start: minimum deployment configuration
+
+Infrastructure that exists *before* the network has resolved a single request—without this deployed, there is no network.
+
+It is the list of §2.1, in the same order and with the same categories, instantiated: what these columns add is how many instances, how they are partitioned and in what state they start.
+
+| Component | Category (§2.1) | Instances | Partition | Initial state |
+| :--- | :--- | :--- | :--- | :--- |
+| Bus | substrate | 1 (cluster) | — | empty |
+| `intake` (§3.7.7) | fixed-convention topic | — (not instantiated) | — | name fixed by convention; no candidates |
+| Entry Node (User-Proxy) | structural node | 1 (the entry interface it is deployed with: CLI, web, Slack, whichever) | — | publishing on `intake` (does not claim it, §3.5.1); listening on `hitl_contact_user` |
+| Operator Channel (User-Proxy) | structural node | 1 (credential provisioned with the deployment, §3.14.2) | — | listening on `hitl_contact_operator`; with the administration affordance (§3.17) |
+| Spawner | structural node | N partitions, own ring (§3.19) | by `topic` | empty Catalog; signing key certified by the deployment (§3.14.2) |
+| Config Store (§2.3, §3.14.4) | structural node | 1 (shared) | — | `v0` provisioned with the deployment, with `network_admission = frozen` and no `embedding_model` (§2.3); listening on `config_change` |
+| Tracing Collector | structural node | N partitions | by `TraceID` | no traces, coverage leases taken |
+| Task Broker | protocol service | N partitions | by `topic` | no tasks |
+| Network Monitor | protocol service | N partitions, own ring (§3.12.1) | by `topic` | no observations |
+| Context Store | off-Bus service | 1 (or sharded by `TraceID`) | — | empty |
+| Contention Registry (§3.15.2) | off-Bus service | 1 (shared) | — | empty |
+| Specialty Catalog (blueprints + Topic Registry, §3.7.6) | off-Bus service | 1 (shared) | — | empty |
+| Admission Scanner (§3.14.1) | off-Bus service | 1 (shared with the tenant, like the Catalog) | — | stateless; ruleset provisioned with the deployment |
+
+`intake` does not correspond to a process: nothing is brought up and nothing is provisioned, because the name is a fixed convention (§3.7.7) and is already agreed before the deployment.
+
+**The `1` of the two node rows is exactly one, not a minimum.** A cold start brings up **one** Entry Node and **one** Operator Channel, and they are the only two User-Proxy instances the deployment provisions (§4): with one entry and one root of trust there is already a network, and that is the entire criterion of §2.1—structural is what has to be brought up to *have* a network—not "one per interface". Every additional channel comes later and by its own path:
+
+* **The operator brings up the other channels.** A second entry interface, the email and SMS that pick up round 2 of `hitl_contact_user` (§3.5.2), or the channel of an audience the `egress_registry` names, like `finance_approval` in §5.4: the operator creates them or brings them in, and instantiates them through `node_provision`, whose proof admits them and, to an entry interface, grants opening traces (§3.13.8, §3.14.2); the same request associates the ingress of a channel that receives messages from outside (§3.16.7). That is why they do not appear in this table.
+* **Operator channels too, and none replaces the deployment's.** A `hitl_contact_operator` channel brought up this way answers queries and receives notices—the messenger to escalate to when the person is not at the console—and does not sign acts (§3.14.2). A second channel that signs is provisioned through another act of deployment: it is the exact counterpart of why the first one is structural, because nothing inside the network can mint the authority that controls it.
+
+Outside the table, the network assumes its **external dependencies** are available (§2.1, §4): the embedding model, the tracing backend, the orchestrator with its Active Node Registry (§3.11), the image registry, the secret store that resolves each `credential_handle` and each `verify_handle` (§3.16.6), and the authorized egress destinations together with the source of their rates (§3.16). They are not deployed *for* the network; they are configured.
+
+**The root of trust is not among them, and the startup order reflects it.** The credential of `hitl_contact_operator` is minted in the act of deployment and guarded there (§3.14.2), not in the secret store—which in turn may need its own bootstrap procedure, and that one runs **before** the network admits anything, because until it runs there is no `credential_handle` to resolve. A deployment that rested the root on that store would have to guard elsewhere the secret that store starts with, and the root would be protected by something that depends on a bootstrap secret.
+
+The **Integration Sidecar** is the generic half of every node (§3.6.1), so at cold start no instance of it runs: the first one is born with the first node the Spawner provisions. What is provisioned now is its **image** and the `runtime_interface_range` it declares (§2.3): they are the substrate against which all future blueprints will be built, and that is why they belong to the deployment even though they do not run yet.
+
+The clients of the embedding model are the **Integration Sidecar** of each node, which generates the `task_embedding` when publishing (§3.6.1), and the **Spawner**, which generates the capability embedding and signs it (§3.7.3, §3.14.2)—that is where the scope of the procedure of §3.13.7 comes from. No Logic Container consumes it, so changing models is an `egress_registry` entry plus a key of §2.3—never a migration of blueprints.
+
+Everything partitioned (Task Broker, Spawner, Tracing Collector) already covers the whole space of possible `topic`/`TraceID` values from this moment, even though no domain topic exists yet (§2.1).
+
+**Before the first request, the network is already administrable.** If the operator needs to adjust a parameter—lower `trace_budget_cost` from `10.00` to `5.00`, say—not a single emergent node needs to exist: their channel shows them the `v0` snapshot with the current value, the person writes the new value, and the channel emits `task.announced(topic=config_change)` with the artifact `{ base_version: v0, trace_budget_cost: 5.00 }` and its signed proof. The Config Store claims it by deterministic routing—no auction, no vacancy, no Spawner—validates the layers, publishes `v1` and closes with `task.completed`. The next trace that opens will stamp `v1` and the Tracing Collector will apply the new ceiling to it (§2.3, §3.14.4).
+
+**The first act of administration gives the network its vector space.** The network is born in `frozen` and without `embedding_model` (§2.3), so the Task Broker rejects `intake` (§3.18). By the same path, the operator registers the `egress_registry` entry through which the Embedding Model is reached, assigns `embedding_model` with the network still paused, and opens admission in a later `config_change`. The first request below arrives after that.
+
+First request:
+
+1. `T1`: the User-Proxy publishes `task.announced(subject=T1, topic=intake)` (§2.1, §3.5), stamping the current `config_version` (§3.5.1). It falls in the Task Broker partition that owns `intake`.
+2. Nobody proposes—the Catalog is empty. Vacancy, backoff, re-announcement (§3.7.5, §3.1).
+3. On crossing the rounds threshold (§3.13.2), the Spawner of that partition acts: the Topic Registry is empty, so the neighbor search for `intake` returns none (§3.7.6). It queries the blueprint Catalog (also empty) and provisions the first node, a broad-purpose **Router** ("classifies and decomposes any incoming request").
+4. The Router registers, wins `T1` on the next re-announcement, and decides a subtask on a domain topic that probably does not exist yet either. The same vacancy cycle repeats topic by topic until the Spawner populates the network enough to resolve the complete request.
+
+A freshly deployed network takes several rounds of cascading vacancy to resolve its first end-to-end request. Once populated, the following requests already find active candidates and do not pay that cost again unless a genuinely new specialty appears.
+
+### 5.2. Complete flow: "Add validation to an endpoint"
+
+A concrete, possible composition of nodes (invented as an example) resolving a typical code-editing request, to illustrate how the rules of §2, §3.3, §3.6, §3.7 and §3.9 combine in practice. Another network, with other nodes available, could resolve the same request with a different composition, or not resolve it if some necessary node is missing (§2.1). Nodes involved: **User-Proxy**, **Repo-Scout** (context search in the repository), **Planner**, **Coder**, **Sandbox/Verifier** and **Integrator** (git operations).
+
+1. **User-Proxy** (deterministic) receives the request ("add input validation to the login endpoint"), generates `TraceID=T0`, sanitizes/normalizes, initializes the Context Store under `T0` and publishes the entry subtask (§3.5.1): `task.announced` (`subject=T1`, `topic=intake`, the entry topic of §2.1). *(Cost: $0)*
+2. **Planner** (semantic) wins `T1` competing on `intake` (`task.proposed`→`task.assigned`)—in this network it is the node best positioned to classify and decompose requests of this kind; another network, with another catalog, could have a different role winning the same topic. Before decomposing it needs context from the repo, so it emits a child `task.announced` (`subject=T2`, `topic=context_retrieval`, `traceparent` inherits from `T1`). *(Cost: minor LLM tokens)*
+3. **Repo-Scout** wins `T2`, locates the relevant code (semantic search/grep), persists it in the Context Store under `T0` and responds `task.completed` (`subject=T2`, addressed to the Planner) with the Claim-Check reference. *(Cost: low or $0, depending on the implementation)*
+4. **Planner** hydrates that context and decides the plan: a coding subtask. It publishes `task.announced` (`subject=T3`, `topic=coding`) and waits for its resolution (§3.9.1)—it will not publish its own `task.completed` for `T1` until `T3` (and any other subtask it decides to open) is resolved. *(Cost: major LLM tokens)*
+5. **Coder** wins `T3`, hydrates the code fragment, produces the diff and saves it in the Context Store. Before declaring itself satisfied, it decides on its own to request verification (§3.9.2): it publishes `task.announced` (`subject=T4`, `topic=testing`) referencing the patch. *(Cost: minor LLM tokens)*
+6. **Sandbox/Verifier** (deterministic) wins `T4`, runs in an isolated container and publishes `task.failed` (`subject=T4`, to the Coder) with the traceback of a broken test. *(Cost: $0)*
+7. **Coder** fixes the diff internally from the traceback and reopens the verification toward the network (§3.3): it publishes `task.announced` (`subject=T4'`, `previous_attempt=T4`), a new attempt on `testing` with the embedding regenerated from the fixed patch and the `current_attempts` its Integration Sidecar stamps. *(Cost: minor LLM tokens)*
+8. **Sandbox/Verifier** approves: `task.completed` (`subject=T4'`, to the Coder). The Coder, satisfied by its own confidence criterion, publishes `task.completed` (`subject=T3`, to the Planner). *(Cost: $0)*
+9. **Planner** sees the only subtask it depended on resolved and decides one more step before closing: asking for the diff to be integrated into the repository. It publishes `task.announced` (`subject=T5`, `topic=integration`) referencing the final patch. *(Cost: minor LLM tokens)*
+10. **Integrator** (deterministic) wins `T5`, applies the diff, creates the branch/commit/PR and publishes `task.completed` (`subject=T5`, to the Planner). *(Cost: $0)*
+11. **Planner**, with all its subtasks resolved, closes the entry subtask: `task.completed` (`subject=T1`, to the User-Proxy, §3.9.1). *(Cost: $0)*
+12. **User-Proxy**, requester of `T1`, receives that `task.completed`, and its Integration Sidecar opens the delivery of the outcome: `task.announced` (`subject=T6`, `topic=hitl_contact_user`, §3.5.4). It wins it itself in round 1, as owner of `T0`; it builds the natural-language answer, delivers it to the user and closes `T6` with `task.completed`. *(Cost: $0)*
+13. **User-Proxy** closes the root: `task.completed` with `subject=T0` (§3.9.1). *(Cost: $0)*
+
+In practice the path is asynchronous and potentially cyclic (retries local to the node, reopens toward the network, multiple `task.proposed` in parallel on the same topic), just as the CNP pattern of §3.8 describes—the numbering above is one possible happy path among several, not a sequence the system imposes.
+
+### 5.3. Mature structure: code network
+
+It extends the previous example (§5.2) with more specialization—same mechanism, wider network:
+
+| Node | Type | Topic | Notes |
+| :--- | :--- | :--- | :--- |
+| Router/Planner | semantic | `intake` | decomposes the root request |
+| Repo-Scout | semantic | `context_retrieval` | semantic search in the repo |
+| Coder-FastAPI | semantic | `coding` | narrow specialty (§3.7.1) |
+| Coder-React | semantic | `coding` | competes by similarity (Layer 2) on the same topic as Coder-FastAPI |
+| Sandbox/Verifier | deterministic | `testing` | `exit 0/1`, cost $0 |
+| Security-Reviewer | semantic | `review_security` | optional subtask the Coder can request (§3.9.2) |
+| Integrator | deterministic | `integration` | the only one with write `egress_grants` on the repo (§3.16.3) |
+| Docs-Writer | semantic | `docs` | subtask the Planner can request in parallel to `coding` |
+
+The example shows two nodes (Coder-FastAPI, Coder-React) coexisting on the same topic without conflict, resolved entirely by Layer 2, and a network that grew by composition—more nodes, same mechanisms—without touching anything structural.
+
+### 5.4. Flow in a different domain: customer support triage and resolution
+
+The same architectural core, applied to a problem that is not about code—to verify that no rule of §2–§3 implicitly assumed a programming domain.
+
+| Node | Type | Topic |
+| :--- | :--- | :--- |
+| User-Proxy (chat widget) | deterministic | — (publishes on `intake`); serves `hitl_contact_customer`—entry channel the operator brings up (§3.13.8) |
+| User-Proxy (internal finance channel) | deterministic | `hitl_contact_finance_approval`—different audience, different channel (§3.5.3) |
+| Classifier | semantic | `intake` |
+| Account-Analyst | semantic | `support_account` (queries the CRM internally, §2.2) |
+| Refund-Approver | semantic | `support_refund` (proposes the amount; with no payment entry granted, §3.16.3) |
+| Payment-Executor | deterministic | `payment_execute` (the only one with the `payment_charge` entry granted) |
+| Human Escalation Node | deterministic (human-backed node pattern, §3.6.3) | `support_escalation` |
+
+Flow:
+
+1. User: *"I was charged twice, I want a refund."* → User-Proxy opens the trace and publishes its entry subtask, `T1(topic=intake)` (§3.5.1).
+2. Classifier wins `T1` on `intake`, decides the account needs to be reviewed before resolving. It publishes `T2(topic=support_account)`.
+3. Account-Analyst wins `T2`, confirms the double charge, persists the finding in the Context Store, `task.completed(T2)`.
+4. Classifier, satisfied with the finding, decides the resolution: refund. It publishes `T3(topic=support_refund)`.
+5. Refund-Approver wins `T3`. Its `egress_grants` include no entry that moves money (§3.16.3): it evaluates the policy and publishes `T4(topic=payment_execute)` with the proposed amount, referencing the decision patch in the Context Store. Same pattern as the Coder leaving the diff for the Integrator to apply (§5.2).
+6. Payment-Executor wins `T4` and asks its Integration Sidecar for the charge call. The `payment_charge` entry carries these `rules` (§3.16.2):
+
+   ```yaml
+   rules:
+     - when: body.beneficiary in egress_lists.blocked_beneficiaries
+       then: deny
+     - when: body.amount <= 50
+       then: allow
+     - then: { audience: finance_approval }
+   ```
+
+   The beneficiary is not blocked and the amount exceeds the threshold, so the Sidecar opens `T5` on `hitl_contact_finance_approval` with the rendered call and its digest, and waits for its `task.completed` (§3.16.4). The finance User-Proxy wins it—the chat one does not compete, it does not serve that audience—a business person approves → the Sidecar evaluates the rules again, which still send the call to `finance_approval`, and executes exactly the approved request → `task.completed(T4)`.
+7. The chain of closes goes up to `T1` (§3.9.1); the chat User-Proxy delivers the answer to the customer through `hitl_contact_customer` and closes the trace (§3.5.4).
+
+**What this exercise confirms:** the egress gate (§3.16), whose typical case is a push to a remote, generalizes unchanged to a payments domain—the only thing that changes is which entry each node has granted and which fields its rules read, and the mechanism that enforces it is the same. If the operator adds the beneficiary to `blocked_beneficiaries` while the approval is pending, the second evaluation denies it even though finance approved it (§3.16.4). The human escalation node is an instance of the pattern already generalized in §3.6.3, available in this network even though this path does not get to exercise it. And the example separates human populations—the customer who opens the trace and whoever approves the refund—each with its own topic (§3.5.3): the instance belongs to a tenant, the business, and not to the person who originated the trace (§2.4).
+
+### 5.5. Operator flow: publishing a blueprint to the Shared Catalog
+
+The previous examples walk through domain work. This one walks through the only path in which a person acts **on** the network instead of asking it for something, and in which the network does not take part in the decision: promoting a blueprint to a Shared Catalog (§3.13.6). It assumes a mature network that has already activated that integration, and an operator who wants to share a specialty.
+
+**Look first.** The administration channel emits `task.announced(topic=node_catalog_query)` (§3.13.3). It emits it as a requester, without claiming anything and without reading any store on its own (§3.17.1). Any Spawner instance can answer by auction without similarity, because the Catalog is shared among partitions; it reads the Catalog, cross-checks with the Active Node Registry (§3.11) for the `state` and returns the listing by Claim-Check to the Context Store (§3.4). The operator sees the whole library:
+
+| `state` | `topic` | `artifact_ref` | `score` |
+| :--- | :--- | :--- | :--- |
+| `active` | `support_refund` | `sha256:9f2…` | — (lives in the point form of `node_query`, §3.12.3) |
+| `active` | `payment_execute` | `sha256:41c…` | — (same) |
+| `archived` | `invoice_reconcile` | `sha256:e07…` | `0.91`—metrics snapshot, `trigger_reason = no_demand` |
+
+The `invoice_reconcile` row exists because this query covers the library and not the fleet. It is a node the Spawner archived for `no_demand` (§3.12.3)—invoice reconciliation stopped appearing in this network—with a high score frozen the day it stopped running, and the snapshot's `trigger_reason` is what says so without the operator having to deduce it from that number. It does not appear in the `node_query` census, because there is nothing deployed to count. Nor can the point form be requested for it, because the Network Monitor's aggregate let go of the node when it stopped running (§3.12.1): the snapshot the Catalog returns is all there is about it, and it is enough.
+
+**Decide.** This is where the automatable part stops. The network can say that `invoice_reconcile` performed well and that it no longer uses it; it cannot say whether its `artifact_ref` carries something private from the use case it was derived from, because no component reads inside the node (§3.13.3). The operator chooses **full promotion**—they want other networks to be able to instantiate it, not just know that the niche can be covered (§3.13.6, full promotion)—accepting that it exposes the internal logic.
+
+**Publish.** The channel emits `task.announced(topic=node_catalog_publish)` with `data.kind = publish`, the reference to the blueprint, its topic in `data.target_topic`, the promotion level, and **the operator's proof** (§3.14.2), with the same form as the one it attaches to `config_change`. The channel carries and derives nothing (§3.17.1).
+
+**Execute.** The Spawner that owns `invoice_reconcile` self-selects, as for `node_review`, and the Task Broker assigns trivially—without similarity, because it is a fixed-convention topic with a structural claimant (§3.7.5, step 4). Then:
+
+1. It verifies the proof and the admissibility floors against the persisted snapshot: `0.91` clears `score_floor_publish`, and the accumulated observations exceed `min_observations_publish` (§3.13.6, local reputation floor).
+2. It builds the payload from the Catalog: `capability_text`, `attempt_window`, Node Runtime Interface version, `memory_required` and `artifact_ref`. **The local vector does not travel** (§3.13.6, `capability_text` mandatory and the vector never).
+3. It pushes it to the Shared Catalog through the egress entry that reaches it (§3.13.6). The catalog runs the static scan of the artifact (§3.13.6, security check), regenerates the embedding from the `capability_text` under its own canonical model, and accepts.
+4. `task.completed` closes the cycle. The channel returns the outcome to the person: promoted, or the reason for the rejection.
+
+The whole path—the query and the action—is traced by the Tracing Collector like any other flow (§3.2, §3.17.1).
+
+**Months later, withdrawing it.** The operator emits `node_catalog_publish` with `data.kind = unpublish`, by the same path and with their own proof. The catalog marks the blueprint as not importable: no new network can take it or promote an update over it. The networks that already imported it **keep running it**, and this network has no way to know which ones they are or to reach them (§3.13.6). That is where the reversibility of promotion ends.
+
+**The same action, on a bundle.** If instead the operator wants to share the entire fleet rather than a single blueprint, the affordance is the same: `data.kind = publish` with a list of members instead of a single `artifact_ref`, plus the `purpose_text` that describes what that set is for, and without `data.target_topic`. Any Spawner instance claims it (§3.13.6), and computes the strict closure against its Active Node Registry before pushing (§3.13.6): if some member announces a topic no other claims, the request fails with that reason instead of promoting a set that does not close.
+
+**What this exercise confirms:** that the path adds no decision to the Spawner (§3.13.1)—along the whole way it chose nothing: it verified, built and pushed. That the operator's authority needs no side channel: it emits a task, a structural component claims it by deterministic routing, and it closes with `task.completed`, exactly like editing the configuration in §5.1. And that `node_catalog_query` (§3.13.3) is the query that puts the library within the operator's reach—served, like everything asked about the Catalog, by the component that writes it.
