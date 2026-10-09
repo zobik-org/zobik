@@ -709,3 +709,281 @@ What does not leave the machine or the local network, like a Forge of the same t
 **Shutdown requires nothing of it.** The process can die at any instant, and the idempotency §3.6.4 asks of the Logic Container already covers that.
 
 **A Logic Container that crashes again and again needs no mechanism of its own.** If it crashes with assigned tasks, each crash fails a task with a reason that names it, and metering carries it to replacement (§3.12, §3.13.4). If it crashes before the `Accepted`, it never competes, and its tasks stay vacant like those of a niche without coverage (§3.13.2).
+
+## 3. The Node Runtime Interface service
+
+§3.6.1 fixes what crosses the boundary between the two halves of the node and the compatibility rule—the Integration Sidecar expands what it does, never what it requires—; §2.1 fixes the transport. This section fixes the service that runs over that transport, which is what a major version of the interface freezes.
+
+```proto
+syntax = "proto3";
+package zobik.nri.v1;
+
+service NodeRuntime {
+  rpc Attach(stream LogicMessage) returns (stream SidecarMessage);
+  rpc Publish(PublishRequest)     returns (PublishAck);
+  rpc ReadContext(ContextRead)    returns (stream Chunk);
+  rpc WriteContext(stream ContextWrite) returns (ContextRef);
+  rpc ListContext(ContextList)    returns (ContextListing);
+  rpc Call(EgressRequest)         returns (EgressResponse);
+  rpc Open(stream OpenTrace)      returns (OpenAck);
+  rpc Purge(PurgeRequest)         returns (PurgeAck);
+  rpc Reply(IngressReply)         returns (ReplyAck);
+}
+
+// Logic Container → Integration Sidecar, over Attach
+message LogicMessage {
+  oneof body {
+    Hello    hello    = 1;  // interface version it was built with
+    Received received = 2;  // confirms a delivery by its delivery_id
+  }
+}
+
+message Hello {
+  uint32 minor = 1;  // minor version; the major one is the package
+}
+
+message Received {
+  string delivery_id = 1;
+}
+
+message Accepted {}
+
+// Integration Sidecar → Logic Container, over Attach
+message SidecarMessage {
+  oneof body {
+    Accepted accepted   = 1;
+    Delivery assignment = 2;  // task.assigned, without the scope token
+    Delivery result     = 3;  // terminal event directed to the node, without source
+    Delivery notice     = 4;  // notice of a watched broadcast topic
+    Inbound  inbound    = 5;  // message admitted by an ingress entry
+  }
+}
+
+message Inbound {
+  string delivery_id   = 1;  // the one it is confirmed and replied with
+  string slot          = 2;  // name of the ingress_required slot
+  string operation     = 3;  // operation of that slot's interface
+  bytes  fields        = 4;  // JSON, already validated against the interface
+  bool   expects_reply = 5;  // the protocol expects a reply
+  repeated InboundBody bodies = 6;  // empty if the operation brings no bodies
+}
+
+message InboundBody {
+  string path       = 1;  // relative to /run/zobik/inbound/<delivery_id>/
+  string name       = 2;  // the one the sender declared
+  string media_type = 3;  // the one the sender declared
+  bool   context    = 4;  // from the conversation's context, not from the request
+}
+
+message Delivery {
+  string delivery_id = 1;
+  bytes  event       = 2;     // structured CloudEvent in JSON (§1.2.1)
+}
+
+// Publication requests: only what the Logic Container decides
+message PublishRequest {
+  string task_id = 1;           // one of the tasks assigned to the node
+  oneof body {
+    AnnounceTask announce = 2;  // topic, data, optional previous_attempt
+    CompleteTask complete = 3;  // data; on a query, optional delivery_id of the Inbound that answers it
+    FailTask     fail     = 4;  // failure_reason, data
+    AskRequester ask      = 5;  // data, optional previous_attempt; always on hitl_contact_<origin_audience>
+  }
+}
+
+message AnnounceTask {
+  string topic            = 1;
+  bytes  data             = 2;  // JSON of the payload
+  string previous_attempt = 3;  // TaskID of the attempt it reopens; empty if it does not reopen
+}
+
+message CompleteTask {
+  bytes  data        = 1;  // JSON of the payload
+  string delivery_id = 2;  // Inbound that answers the query; empty if none
+}
+
+message FailTask {
+  string failure_reason = 1;
+  bytes  data           = 2;  // JSON of the payload
+  string failure_code   = 3;  // only on hitl_contact_*: undelivered | unanswered
+}
+
+message AskRequester {
+  bytes  data             = 1;  // JSON of the query's payload
+  string previous_attempt = 2;  // TaskID of the query it reopens; empty if it does not reopen
+}
+
+message PublishAck {
+  string task_id = 1;  // TaskID of the subtask that announce and ask open
+}
+
+// Context Store: a portion is a name within a task's section
+message ContextRef {
+  string trace_id = 1;
+  string task_id  = 2;  // the section
+  string name     = 3;  // the portion
+}
+
+message ContextRead {
+  string     task_id = 1;  // task whose token authorizes the read
+  ContextRef ref     = 2;  // from that task's trace
+}
+
+message ContextWrite {
+  oneof body {
+    ContextWriteHeader header = 1;  // first message
+    bytes              chunk  = 2;
+  }
+}
+
+message ContextWriteHeader {
+  string task_id = 1;  // task in whose section the write goes
+  string name    = 2;  // up to 120 bytes
+}
+
+message ContextList {
+  string task_id = 1;  // task whose token authorizes the listing
+  string section = 2;  // TaskID of a section of its trace
+}
+
+message ContextListing {
+  repeated ContextRef refs = 1;
+}
+
+message Chunk {
+  bytes data = 1;  // up to 1 MiB
+}
+
+// Egress request: without target, which the slot's association resolves
+message EgressRequest {
+  string task_id   = 1;  // task whose metrics the call is charged to
+  string slot      = 2;  // name of the egress_required slot
+  string operation = 3;  // operation of that slot's interface
+  bytes  fields    = 4;  // JSON, validated against the interface
+  string body      = 5;  // path of the body, relative to the task's work area; empty with no body
+}
+
+message EgressResponse {
+  bytes  fields = 1;  // JSON, the response outside its body
+  string body   = 2;  // path of the response's body in the work area; empty with no body
+}
+
+// Opening a trace: only in a channel with a granted entry_topic
+message OpenTrace {
+  oneof body {
+    OpenHeader header = 1;  // first message: the Inbound's delivery_id, data and optional workspace
+    bytes      chunk  = 2;  // heavy payload, which goes to the Context Store
+  }
+}
+
+message OpenHeader {
+  string delivery_id = 1;  // that of the Inbound the trace comes from
+  bytes  data        = 2;  // JSON of the entry subtask's data
+  string workspace   = 3;  // empty if the channel does not use it
+}
+
+message OpenAck {
+  string trace_id      = 1;  // TaskID of the root, by which it is named afterwards
+  string entry_task_id = 2;  // TaskID of the entry subtask
+}
+
+message PurgeRequest {
+  string task_id = 1;  // one of the roots the node opened
+}
+
+message PurgeAck {}
+
+// Reply to an ingress message, over the connection that brought it
+message IngressReply {
+  string delivery_id = 1;  // that of the Inbound it answers
+  bytes  fields      = 2;  // JSON, validated against the reply shape
+}
+
+message ReplyAck {}
+```
+
+### The session
+
+**`Attach` is the node's session, and the Logic Container opens it**, because it is the one that dials (§2.1). Its first message is `Hello`; the Integration Sidecar answers `Accepted` and only then binds to its durable consumer (§1.2.1). If the version does not serve it, it exits with an error without having bound, through the check detailed further down.
+
+**Everything the Logic Container receives arrives through the session**: the assignments that give it its tasks, the terminal events of the tasks it opened, the `notice` of the broadcast topics the node watches and, in a channel with ingress, the messages it admitted (below). The announcements of its topic do not arrive, because proposing belongs to the Integration Sidecar (§3.6.1). A terminal event arrives without `source`: the Integration Sidecar removes it when assembling the delivery, because the requester does not know who resolved its subtask (§3.3).
+
+**A delivery is confirmed from the Logic Container.** The Integration Sidecar acks to the Bus and marks the `id` as processed (§3.6.4) when it receives the `Received` of that delivery, not when it forwards it. The stretch between the two halves is thus *at-least-once* just like the Bus, and the idempotency of the effect stays where §3.6.4 puts it: in the Logic Container.
+
+**The live session is what upholds the lease.** The Integration Sidecar renews the lease of each assigned task (§3.1, §1.2.1) while the session is open, which it checks with gRPC's keepalive. If the session is cut, it closes each of those tasks with `task.failed` (§3.6.1) and unbinds from its durable consumer, so without a session the node does not propose. A later `Hello` opens a session with no tasks.
+
+### The publication requests
+
+**A request carries only what the Logic Container decides.** All of them carry the task they act on; `AnnounceTask`, in addition, the topic, the payload and optionally `previous_attempt`; `AskRequester`, the payload and optionally `previous_attempt`; `CompleteTask`, the payload; `FailTask`, the payload, the `failure_reason` and, on a `hitl_contact_*` query, the `failure_code`. The Integration Sidecar puts the rest of the event, by the responsibilities of §3.6.1: `id`, `source`, `subject`, `time`, `traceparent`, `configversion`, the `workspace`, the `task_embedding`, `current_attempts`, the recipient of a terminal event, and the `metrics`, which it composes. That the recipient **does not exist** in the message, and that the task can only be one of those assigned to the node, is what makes structural the rule that the Logic Container neither chooses whom a terminal event reaches nor answers a task it was not assigned: there is no field for the Integration Sidecar to overwrite.
+
+**Every request names by its `task_id` the task it acts on**, and the Integration Sidecar looks it up among the assignments it retains. An `AnnounceTask` or an `AskRequester` opens a subtask of it, and `CompleteTask` or `FailTask` close it. The recipient, the `traceparent` and the `metrics` account of the request come from that assignment. It rejects a `task_id` that is not among them with `FAILED_PRECONDITION`.
+
+**The field is mandatory in every node**, even though a common node retains a single task and only a `hitl_contact_*` channel holds several (§3.6.1). So the request has a single shape, and the client library fills it in with the assignment received. An empty `task_id` that stood for "the only one" would leave the request ambiguous precisely in the node that holds several.
+
+**`PublishAck` returns the `TaskID` of the subtask** that an `AnnounceTask` or an `AskRequester` opens, which the Integration Sidecar mints. With it the Logic Container recognizes the terminal event that reaches it through the session, keeps its count of §3.9.1 and names the attempt in a reopen.
+
+**A subtask the Integration Sidecar reopens because of a stale space keeps that `TaskID` before the Logic Container** (§3.3). To reopen it, the Integration Sidecar retains the topic and the `data` of each open subtask until it receives its terminal event. It delivers to the Logic Container the terminal event of the new attempt with the `subject` the Logic Container knows, and resolves a reopen whose `previous_attempt` names it to the last attempt of the lineage.
+
+**A reopen names by `previous_attempt` the attempt it reopens.** The Integration Sidecar looks that `TaskID` up among the subtasks it opened from the request's task and applies the conditions of §3.3 to it; it rejects one that does not meet them—including a `topic` different from that of the reopened attempt, or an `AskRequester` that reopens an answered query or its final round—with `FAILED_PRECONDITION`. It stamps `current_attempts`, `previous_attempt` and `final_round` on the event itself, and rejects a payload that brings any of those keys with `INVALID_ARGUMENT`. The same holds for `workspace`, which it copies from the request's task (§3.8.1).
+
+**`AskRequester` is the only request with which the Logic Container reaches a person.** The Integration Sidecar publishes it on the task's `hitl_contact_<origin_audience>` (§3.5.3), and since the message carries no topic, the audience is not something the Logic Container can choose. It rejects an `AnnounceTask` whose topic carries the `hitl_contact_` prefix with `INVALID_ARGUMENT`: the Integration Sidecar itself opens the other audiences, through the gate of a `Call` (§3.16.4).
+
+**`Publish` returns when the event is in the outbox**, not when the Bus has confirmed it: it is the durability boundary of §3.6.4, and from there on delivery belongs to the Integration Sidecar.
+
+**The payload travels as JSON bytes.** On a fixed-convention topic it has the schema of §10, which changes with the binary and not with the interface, so a new field in a payload does not touch the NRI version. The Integration Sidecar validates against it the `data` of an `AnnounceTask` on one of those topics and that of a `CompleteTask` on a `hitl_contact_*` query, and rejects with `INVALID_ARGUMENT` the one that does not validate.
+
+### Context Store and egress
+
+**`ReadContext` and `WriteContext` name a task and a portion, and nothing more.** The Logic Container names by `task_id` which task it reads or writes on, and what it reads or what it writes; in `WriteContext` the task goes in the first message of the stream. The Integration Sidecar attaches that task's scope token and fixes the `TaskID` section in the write (§3.14.3): the tasks a channel holds come from different traces, each with its own token. The `task_id` can also be that of a root the node opened (below). They are streamed because the Context Store exists for heavy content (§3.4).
+
+**A portion is a name the Logic Container chooses within a section** (§1.2.9). `WriteContext` writes in its task's section, the only one it can write in (§3.14.3), and returns the `ContextRef`, which names the trace, the section and the portion. `ReadContext` reads by its `ContextRef` any portion of the task's trace, and `ListContext` lists those of a section of that trace, like that of the attempt the task reopens (§3.3). The names that start with `zobik/` belong to the Integration Sidecar—`zobik/payload` for the payload of an `Open`, `zobik/bodies/<delivery_id>/<index>` for the bodies of a message—, and it rejects a `WriteContext` that names one with `INVALID_ARGUMENT`.
+
+**The reference travels in the event's `data` as JSON, with the proto's field names.** That of a task's payload goes in `data.context_ref`, which the Logic Container writes in an `AnnounceTask` and the Integration Sidecar in an `Open`; those of a message's bodies, in `data.bodies` (below). The Integration Sidecar does not interpret them: the Context Store evaluates the scope on the reference itself (§3.14.3).
+
+**`Call` carries the task, the slot, the operation and the fields.** The billing datum of the response goes into that task's `metrics` (§3.6.1), and the whole procedure of §3.16.4 runs on the Integration Sidecar's side, human gate included: the Logic Container waits for the response, which can take as long as the person takes to answer. It carries no `target`: the destination comes from the slot's association in the node's `egress_grants` (§3.16.3), so there is no field with which the Logic Container could name another.
+
+**The fields travel as JSON bytes**, for the same reason as the payload of a publication request: their schema is that of the slot's interface (§3.16.2), which changes with each interface and not with the NRI.
+
+**The body travels as a file in the task's work area** (§3.6.1, §3.16.2). The Integration Sidecar creates `/run/zobik/tasks/<task_id>/` on delivering the assignment—and on answering an `Open`, for the root it opens—, with the Logic Container's UID as owner, and deletes it with the task's terminal event or the root's close. When the session is cut, and at startup, it deletes the whole of `tasks/`.
+
+**`body` is a path relative to the directory of the request's task.** The Integration Sidecar resolves it without following symlinks and rejects with `INVALID_ARGUMENT` one that leaves that directory: its container also mounts its private volume, and a followed symlink would send out the outbox or whatever is there. On receiving the request it copies the file to its private volume, and the ceiling, the digest, the approval and the sending are on that copy (§3.16.4), which it deletes when the call ends. It writes the response's body in the task's directory, with a name it chooses, and `EgressResponse.body` names it.
+
+**`Call` is unary.** A body does not change that, because it does not cross the socket. A streamed response—the one an LLM provider gives token by token—clashes with the `billing_rule`, which extracts the billing datum from the response and in that format finds it only in the last fragment. Adding it later is expanding what the Integration Sidecar offers without requiring anything new, so it goes into a minor version.
+
+**`body` and the work area are a minor version**: only a slot whose interface declares a body uses them, and the Spawner does not provision a blueprint with such a slot whose interface version is earlier than the minor one that brings them, as with `Inbound` (below).
+
+### The traces a channel opens
+
+**`Open` opens a trace in a single act** (§3.6.1, §3.5.1). The first message of the stream carries the `delivery_id` of the `Inbound` the trace comes from, the `data` of the entry subtask and, if the channel uses it, the `workspace`; the following ones, the heavy payload. The Integration Sidecar generates the `TraceID`, mints the root's token, writes the payload and the bodies of the `Inbound` (below) in the `TraceID`'s section, assembles the `task.announced` of the entry subtask on the proof's `entry_topic` with the payload's reference in `data.context_ref` and the current `configversion`, and returns when the event is in the outbox, like `Publish`. `OpenAck` returns the `TaskID` of the root and that of the entry subtask, with which the Logic Container recognizes its terminal event. The message carries no topic, so the Logic Container cannot choose it. In a node whose proof does not grant an `entry_topic`, `Open` fails with `PERMISSION_DENIED`, and with a `delivery_id` that is not that of a delivered and unconfirmed `Inbound`, with `FAILED_PRECONDITION`: a trace comes from an admitted message, and from each one at most one trace (§3.16.7).
+
+**A root is named by its `TraceID`**, which is its `TaskID` (§3.8.1). The Integration Sidecar retains the roots it opened next to the assignments, and a `task_id` looks them up in both sets. It stores them in the Integration Sidecar's private volume (§2.1), so they survive a restart, as §3.6.1 requires: a channel that comes back without them does not recognize the terminal event of the entry subtask nor closes the trace. `ReadContext`, `WriteContext`, `Call` and `Purge` apply to a root. `Call` is the egress the channel does for the trace it opened, like an acknowledgment of receipt (§3.16.7), and its cost goes into the `metrics` of the terminal event that closes the root. `Publish` rejects it with `FAILED_PRECONDITION`: the Integration Sidecar handles the delivery of the outcome and the root's close (§3.5.4).
+
+**A channel's decommissioning recreates its unit with `ZOBIK_DRAIN=1`** (§3.13.8), on the same volumes and with the `on-failure` restart policy on the Integration Sidecar; the Logic Container keeps its own (§2.4). While draining, `Open` fails with `FAILED_PRECONDITION`. When done, the Integration Sidecar exits with code 0 and Docker does not bring it up again; the unit disappears from the registry when the Spawner removes it on confirming it. The terminal event of the entry subtask reaches it through the session like any other terminal event directed to the node.
+
+**The delivery of the outcome arrives like any query of the audience**, through `assignment`, to the channel that wins it (§3.5.4). The Logic Container delivers it through `Reply` or through `Call` on it, and closes it with `CompleteTask` or with `FailTask`. On a `hitl_contact_*` task, `FailTask` carries `undelivered` or `unanswered` as `failure_code`, and the Integration Sidecar rejects another value, or the absence of one, with `INVALID_ARGUMENT` (§3.5.2). Outside that family it rejects every `failure_code`: the network stamps the others (§3.3). A `CompleteTask` without `decision` closes a delivery without `options`; on any other query, the requester treats it as silence (§3.5.2).
+
+**`Purge` deletes the entire trace** with the root's token (§3.4, §3.14.3). It only names roots the node opened: it rejects another `task_id` with `FAILED_PRECONDITION`.
+
+**`Open` and `Purge` are a minor version**: they expand what the Integration Sidecar offers without requiring anything new of a Logic Container that does not use them (§3.6.1).
+
+### Ingress
+
+**An admitted message arrives through the session as `Inbound`** (§3.16.7), with the slot, the operation and the fields already validated. It belongs to no task: the Logic Container decides what to do with it. If it opens a trace, the `Open` names it by its `delivery_id` and confirms it in the same act, and if it answers a query, the `CompleteTask` that closes the query does so (below); otherwise, it confirms it with `Received` like any delivery. With `listener`, with no open session the Integration Sidecar rejects the message before the sender and does not retain it. With `source`, with no session it neither seeks nor holds the connection with the source. With a source that stores, it marks the message consumed at the source when the Logic Container confirms it. With one that pushes—every `listener`, and the `source` entries that declare it (§8.7)—, it writes the `Inbound` to its private volume before acknowledging it and deletes it, with the original of its bodies, on confirmation; when a session opens, it first delivers the unconfirmed ones it stores.
+
+**The bodies of an `Inbound` travel as files in `/run/zobik/inbound/<delivery_id>/`** (§3.6.1), which the Integration Sidecar creates on delivering it, with the Logic Container's UID as owner, and in which it leaves a copy of each body; it keeps the original in its private volume. `Inbound.bodies` names them, and marks with `context` the ones the adapter brought or received as context (§3.16.7). When the session is cut, and at startup, it deletes the whole of `inbound/` together with `tasks/`.
+
+**The act that resolves the `Inbound` takes its bodies to the trace** (§3.16.7). With `Open`, it writes them in the `TraceID`'s section; with a `CompleteTask` that names its `delivery_id` on a `hitl_contact_*` query, in the query's section, and confirms the `Inbound` in the same act. In both, it writes from the original and stamps in the event's `data.bodies`, for each body, the reference, the size, the digest, the name, the media type and the `context` mark; it rejects a payload that brings that key with `INVALID_ARGUMENT`. A `Received` without either of the two discards the message and its bodies. After any of the three, it deletes the `Inbound`'s directory and its original. It rejects with `FAILED_PRECONDITION` a `CompleteTask` whose `delivery_id` is not that of a delivered and unconfirmed `Inbound`, or that names it on a task that is not a `hitl_contact_*` one.
+
+**`Reply` answers an `Inbound` by its `delivery_id`**, and the Integration Sidecar validates the fields against the interface's reply shape before returning them over the connection that brought the message; it rejects the ones that do not validate with `INVALID_ARGUMENT`. On a session protocol it admits several replies while the connection stays open. It rejects with `FAILED_PRECONDITION` a `Reply` on an `Inbound` that expects no reply, or whose connection has already closed.
+
+**`Inbound` and `Reply` are a minor version.** The Integration Sidecar only delivers `Inbound` to a node with `ingress_grants`, and the Spawner does not provision a blueprint with `ingress_required` whose interface version is earlier than the minor one that brings them, so no Logic Container receives a message it does not know (§3.6.1). **`Inbound.bodies` and the `delivery_id` of `CompleteTask` are another minor version**, with the same rule over the slots whose ingress interface declares bodies. `InboundBody.context` requires nothing: the Logic Container that does not read it receives the context's bodies like any other, and the Integration Sidecar takes them to the trace all the same.
+
+### The interface version
+
+**It is declared in an OCI label of the image, `io.zobik.nri.version`.** Since the `artifact_ref` is content-addressed (row 16), the digest fixes the label and the version cannot deviate from the artifact. The Admission Scanner (row 19) reads it from the same manifest it already opens by digest, and the act of registration writes it into the Catalog entry next to the `scan_result` (§3.13.3).
+
+**The Spawner compares it against `runtime_interface_range` without pulling the image** (§3.13.1), and when provisioning it passes it to the Integration Sidecar in its startup configuration (§1.2.4).
+
+**The Integration Sidecar compares the `Hello` against two things:** against the versions its binary speaks, not against the configuration—that is what §3.6.1 asks of that layer—, and against the version the Spawner passed it. A mismatch with the latter means the label does not describe the image, and it is rejected all the same.
+
+**The major version is the protobuf package** (`zobik.nri.v1`) and the minor one travels in the `Hello`. An Integration Sidecar that speaks two majors registers both services on the same socket, and a Logic Container of a major it does not speak receives `UNIMPLEMENTED` on its first call.
