@@ -1871,3 +1871,118 @@ The branches:
 * **Accept partial (`accept_partial`) or abandon (`abandon`):** the Tracing Collector emits `task.aborted` on the entry subtask, without having it assigned and addressed to the channel that opened the trace, which is its requester (§3.5.1). It is the terminal event of that subtask: the channel delivers the outcome and closes the root as with any other (§3.5.4), so the notice reaches whoever originated the trace through the same path as an answer. `data.disposition` distinguishes `"partial_accepted"` from `"abandoned"`, and the User-Proxy does not treat both cases the same: `"partial_accepted"` was an informed decision of the user. In the same act it removes the freeze mark, and it does not freeze that trace again: what remains in it is delivery and close.
 
 **Without a human answer, the way out is the conservative one.** If the `hitl_contact_operator` exhausts its reopen rounds (§3.5.2)—channel down, operator absent—the Tracing Collector treats that `task.failed` as the absence of a human decision and closes with `abandon`. Silence does not extend the budget, and the terminal event arrives anyway: with the requester guaranteed, the user's circuit always closes. The machinery of rounds and reopens runs through the Task Broker (§3.5.2).
+
+#### 3.15.7. Enforcement coverage and `network_risk`
+
+Everything above assumes there is a live Tracing Collector instance on the trace's partition. If there is none, no cost is accumulated, no threshold is crossed and the network keeps working without a ceiling—**a loss no node can detect**, unlike that of §3.10, where the requester at least sees a timeout. And since the Tracing Collector is partitioned, the loss is not all-or-nothing either: containment is switched off for the fraction of traces whose hash falls in the downed partition, without anything telling those traces apart from the others.
+
+**Coverage lease: the absence is the signal.** Each Tracing Collector instance **renews** the `coverage:<p>` key of the Contention Registry (§3.15.2) while it is operational. If it dies, the lease expires on its own: nobody has to detect anything or write anything at the moment of the failure, and the mechanism does not depend on a watcher that can in turn go down. If it comes back, it renews and coverage is restored with no cleanup in between. The cardinality is one key per partition and not one per trace: the network keeps no record of active `TraceID` values, and a trace that crossed no threshold is not marked.
+
+**Precondition for taking the lease.** An instance that starts or takes over a partition through rebalancing **does not claim `coverage:<p>` until it has loaded `budget:<TraceID>` and the open questions of the live traces of its range** (§3.15.2). The lease declares effective enforcement and not a running process: as long as the accumulated count and the open questions are not loaded, the instance cannot uphold the freeze or attend an operator query already in progress, so the lease would assert a containment that is not in force.
+
+**The lease carries as value the `TraceID` range it covers.** With that the Task Broker resolves coverage by asking *"is there a live lease that covers this `TraceID`?"*, without knowing the size of the Tracing Collector's ring—a datum of another component (§3.19). The resolution is by **live data**, so a rebalancing of the Tracing Collector does not force anyone else to find out. A `TraceID` that falls under no live range and one whose partition lost the lease are treated the same: in both, effective enforcement is missing, which is the only thing the Task Broker needs to know.
+
+**What the Task Broker does.** It already reads the registry on each admission (§3.15.3). If no live lease covers the `TraceID`, it applies `budget_coverage_policy` (§2.3):
+
+* `fail_closed`—it rejects new assignments of that `TraceID`, exactly as if that trace were frozen. Current leases run their course (§2.2); only admission is stopped. The blast radius stays bounded to what is actually unprotected: the traces of the other partitions, and all the rest of the network's work, go on normally.
+* `fail_open`—it keeps admitting, without a ceiling. It is the reasonable option in development (§2.4), where spending is bounded and stopping the network bothers more than it protects; in production it is a deliberate decision to run without containment, not a silent default.
+
+**Notice to the human: the `network_risk` topic.** The freeze does not depend on anyone giving notice—the lease absence the Task Broker already reads produces it—so the notice can live off the critical path without compromising anything: under `fail_closed`, if the notifier is down the freeze happens anyway, and it is very visible on top of that, because the network stops admitting tasks from that partition. Under `fail_open` the notice is all there is—consistent with `fail_open` being an explicit renunciation of containment, not a default. `network_risk` broadcasts with network scope the same class of condition that `trace_risk` broadcasts with trace scope: *something cannot be guaranteed and a human decision is needed*. It follows the shape of §3.15.2—**the structural producer opens the `hitl_contact_operator` and broadcasts a `notice`**, in that order and with the condition already in force before both acts. There are several producers and a `data.kind` that distinguishes them:
+
+| `data.kind` | Requester | Scope of the question | Key that holds it | Condition |
+| :--- | :--- | :--- | :--- | :--- |
+| `budget_coverage_lost` | Network Monitor (§3.12.1) | network | `risk:coverage`, Contention Registry (§3.15.2) | at least one `coverage:<p>` expired |
+| `niche_uncoverable` | Spawner (§3.13.5) | niche | the niche's `capped` mark, Specialty Catalog (§3.13.3) | `max_successive_candidates` reached |
+| `vector_space_unrepairable` | Spawner (§3.13.7) | network | vector space key, Specialty Catalog | embedding regeneration failing beyond the backoff |
+| `memory_growth` | Spawner (§3.13.10) | entry | the entry's reservation-raise key, Specialty Catalog (§3.13.3) | the reservation a death by memory asks for exceeds `memory_auto_share` of the capacity |
+
+**`audience_unreachable` broadcasts without asking.** The Spawner emits it when it closes a human query of an audience without a channel (§3.13.2), with the audience in `data` and backed by the Catalog's audience-without-a-channel key (§3.13.3). It does not open a `hitl_contact_operator`: what resolves the condition is bringing up a channel, which is an act of the operator (§3.13.8) and not a disposition that can be asked of them, and if the audience without a channel is `operator` there would be no way to ask either. The key stays as queryable state until a query of that audience stops being left vacant.
+
+**`catalog_credit_exhausted` broadcasts without asking**, for the same reason. The Spawner emits it when the Shared Catalog rejects an acquisition for insufficient credit, backed by the Catalog's exhausted-credit key (§3.13.3, §3.13.6). What resolves the condition is loading credit into the catalog account, an act outside the network.
+
+**`fleet_capacity_pressure` broadcasts without asking**, for the same reason. The Spawner emits it when evictions exceed their threshold (§3.13.10), backed by the Catalog's capacity-pressure key (§3.13.3). What resolves the condition is enlarging the fleet's capacity, which is a deployment act.
+
+**`artifact_storage_pressure` broadcasts without asking**, for the same reason. The Spawner emits it when the space taken by the artifacts exceeds `artifact_storage_pressure_share` of its capacity (§3.13.3), backed by the Catalog's storage-pressure key. What resolves the condition is deleting artifacts, which is an operator request (§3.13.8), or enlarging the capacity, which is a deployment act.
+
+**One key per decision, not per fact.** That is what the scope column fixes, and it governs how many times a person is interrupted. When the entire Tracing Collector fleet goes down, each partition without coverage is a distinct fact, but the operator decides a single thing: wait, or change `budget_coverage_policy`, which is **a single parameter for the whole network** (§2.3). That is why the question is one, with the list of affected partitions in the payload, while the `notice` keeps the granularity of the fact—one per partition—because there what matters is which one is being talked about. The same separates the others: `niche_uncoverable` is decided niche by niche, `memory_growth` entry by entry, and `vector_space_unrepairable` is a broken vector space and is decided once.
+
+**The write of that key is the election of the requester** (§3.15.2, write-if-absent), and it is what makes the question one with no aggregator and no designated owner. It also resolves *which Network Monitor instance gives notice*, given that the Network Monitor is partitioned by `topic` and this condition is about `TraceID` partitions: any instance that notices the missing lease tries to write and one wins, without a second partitioning scheme contradicting its own (§3.12.1). It holds just the same for the Spawner instances that detect the same broken vector space at once.
+
+The Spawner emits with the vocabulary it already has—it publishes `task.failed` (§3.13.2, specification branch), `task.proposed` and `task.completed`. The Task Broker, in contrast, does **not** emit: it is an arbiter on the critical path of every assignment (§2.1), and there each extra purpose is paid for in latency for the whole network.
+
+The relevant identifier (`partitions`, `topic`) travels in `data`, not in `subject`, by the general rule of the envelope (§3.8.1): `subject` is always the task the event belongs to, and the arguments go in the payload. In the `notice` events the type exception that same section fixes governs—`subject` is the resource the notice talks about—and none carries `traceparent`: **they have network scope and belong to no trace.**
+
+**What is asked in each one.** The requesters are structural and an Operator Channel renders all of them, so the invariant of §3.5.2 governs and the only thing missing is the table of each one. They all share one property: **no option is a value**, because the parameters these conditions touch—`budget_coverage_policy`, `max_successive_candidates`, `embedding_model`—are edited through `config_change` and never as a side effect of answering a query (§3.17.1). What comes back here is the disposition, and the requester only executes what falls within its own domain.
+
+`budget_coverage_lost`—**what it decides: wait while containing, or accept that the network runs without a ceiling.**
+
+| Field | Value |
+| :--- | :--- |
+| `scope` | `network` |
+| `options` | `wait` \| `run_uncontained` |
+| `outcome_if_silent` | `wait` |
+| Decision data | `partitions` (the affected ones), `partitions_total`, `oldest_lease_expiry`, `policy_in_effect` (`fail_closed` \| `fail_open`) |
+| `evidence` | re-announcements accumulated since `since` of tasks whose `TraceID` falls in `partitions` |
+
+`partitions_total` is there because the magnitude of the problem is the unprotected fraction, not the count: the same number of affected partitions on a small ring and on a large one are different decisions. `policy_in_effect` inverts the meaning of everything else—under `fail_closed` the evidence is stopped work; under `fail_open` it is work that ran without a ceiling—and that is why it travels in the announcement instead of being assumed known. That re-announcement count is the only reading of the damage the Network Monitor can derive without leaving its passive observation of the Bus (§3.12.1). With `run_uncontained` the Network Monitor stamps the decision and nothing more: it stops interrupting about those partitions, and under `fail_closed` the freeze stays in force until the operator edits `budget_coverage_policy` through `config_change` (§3.14.4), which is the only thing the Task Broker reads.
+
+`niche_uncoverable`—**what it decides: what happens to a niche the network fails to cover well.**
+
+| Field | Value |
+| :--- | :--- |
+| `scope` | `niche` |
+| `options` | `retry` \| `accept_current` \| `retire_niche` |
+| `outcome_if_silent` | `accept_current` |
+| Decision data | `topic`, `node_id` of the original node, `capability_text` of the niche, `successive_candidates`, `max_successive_candidates` |
+| `evidence` | `score`, `n_observations` and `reopen_rate` of the original node; `usage_share` of the node and assignment volume of the niche; for each failed candidate, its `artifact_ref` and the score with which it closed; which egress interfaces were denied or absent for that niche |
+
+The options are closed, and each one falls entirely within the domain of the Spawner, which is the one that executes it (§3.13.5). `retry` is also the option that fits if the operator raised the cap, without the number traveling here—and also the one that fits if they registered the missing egress entry, for the same reason. `accept_current` coincides with the conservative way out, and the difference is not cosmetic: it is recorded as a decision and stops interrupting.
+
+**The denied or absent egress interfaces are those the niche needed and the operator denied or never registered**—the per-interface keys of §3.16.5, crossed with the `egress_required` of what the Spawner tried to bring up on the niche. Without this datum, the most likely outcome given `outcome_if_silent = accept_current` is that the niche stays frozen in a crippled version without anyone knowing why: what this field shows is that `retry` has a precondition the operator controls, the same way it is already shown that raising the cap enables that option.
+
+**`node_id` and its signals are conditional, because not every `niche_uncoverable` escalation has a node behind it.** When the intervention that exhausted the cap came from a replacement under disqualification or from bringing up another instance of an entry that already runs (§3.13.5, §3.13.2), there is an active node and `node_id`, `score`, `n_observations` and `reopen_rate` travel. When it came from reviving, importing or deriving (§3.13.2) and no candidate managed to cover the niche, there never was a node to evaluate, and those fields are absent: what upholds the decision there is what belongs to the niche—`capability_text`, assignment volume and history of failed candidates, which always travel.
+
+The `capability_text` is the only human-readable thing the Catalog stores about a niche (§3.13.3), and the niche's assignment volume is what makes `retire_niche` decidable: retiring an idle niche and retiring one with demand are opposite decisions. The candidate history matters for the same reason: a series that converged to the same score and one that got worse uphold different decisions. **If the network participates in a Shared Catalog** (§3.13.6), the announcement also carries `shared_candidates` with their `shared_score`, `n_networks` and dispersion: it adds no new option—instantiating an imported one is `retry`—but it is what gives `retry` a candidate different from the one that already failed.
+
+`vector_space_unrepairable`—**what it decides: wait for the repair, or revert the model.**
+
+| Field | Value |
+| :--- | :--- |
+| `scope` | `network` |
+| `options` | `wait` \| `revert_model` |
+| `outcome_if_silent` | `wait` |
+| Decision data | current and previous `model_id`, `failure_mode` (`model_unreachable` \| `no_source_text`), `pending_entries` broken down into active blueprints, archived blueprints and Topic Registry entries |
+| `evidence` | `backoff_attempts` reached, current `network_admission`, the `topic` values whose neighborhood was left without a valid comparison, and the count of abstained decisions since `since` |
+
+**Abstention is not negotiable, and that is why those are the only options.** Comparing across different spaces is flatly forbidden (§3.7.3), so continuing to operate on the broken space is not a way out the operator can choose, and the payload does not offer it. `revert_model` is not a Spawner action either: the repair converges just the same in that direction (§3.13.7), the operator executes it through `config_change`, and the Spawner stays abstained until the current one changes.
+
+`failure_mode` is the field that weighs the most: `model_unreachable` is transient and `wait` resolves it on its own, whereas `no_source_text` **never clears by convergence**, because there is no text to regenerate from. Presenting both conditions with the same face would lead to waiting indefinitely for something that is not going to happen. And the count of abstained decisions is the real cost of the condition, which the Spawner has by construction: it is the number of times it answered *"I don't know"* instead of deciding.
+
+`memory_growth`—**what it decides: whether a node may take up more of the fleet than the network gives it without asking.**
+
+| Field | Value |
+| :--- | :--- |
+| `scope` | `entry` |
+| `options` | `raise` \| `remove` |
+| `outcome_if_silent` | `remove` |
+| Decision data | `topic`, `artifact_ref`, `node_id` (N), the effective reservation and the requested one, the fleet's capacity and `memory_auto_share` |
+| `evidence` | `memory_kills` of N; `usage_share` of the node and assignment volume of the niche |
+
+**`remove` is the conservative way out even though it removes a node.** N dies on every task that needs more memory, so leaving it with the current reservation is to keep losing those tasks; removing it leaves the niche vacant and in view. `raise` does not carry the value: the Spawner computes it with `memory_growth_factor` (§3.13.10). The niche's volume is what makes the question decidable: giving a large portion of the fleet to a niche with demand and to an idle one are opposite decisions.
+
+**Resolution.** Each requester applies what comes back by Claim-Check on its own domain, just like the Tracing Collector in §3.15.6. Unlike `trace_risk`, here there is no `TraceID` to unfreeze on close: in `budget_coverage_lost` the freeze lifts on its own when the lease comes back, in `niche_uncoverable` there never was a freeze—only stopped candidate creation (§3.13.5)—in `memory_growth` N keeps running with its current reservation (§3.13.10), and in `vector_space_unrepairable` the containment is the Spawner's abstention, in force since before the notice (§3.13.3).
+
+**And the key is stamped on answering, not deleted.** Deleting it on receiving the decision would reopen the question on the spot in the cases where the condition is still in force—which are precisely `wait` and `accept_current`, the two most likely answers—: the key would be free, the requester would write it again and the operator would receive once more the same query they just answered. The rule is then the same one that already governs silence: **the outcome is stamped in the key that held the question, and the key is deleted only when the condition clears.** A single statement thus covers both ways of closing—answered and unanswered—and with that the mechanism stays ready to fire again if the condition reappears.
+
+**Without a human answer: the state is the outcome, and there is no terminal event.** If the `hitl_contact_operator` exhausts its rounds (§3.5.2)—channel down, operator absent—the requester stamps the outcome in the same key that held the question and broadcasts a `notice`. **It emits no terminal `task.*`, and that is deliberate:** unlike `trace_risk`, here there is no root request to close and no user waiting on the other side—there is not even a trace to belong to. And what is needed here—that the outcome stay distinguishable and visible until someone attends to it—is better served by queryable state, which persists, than by an event that happens only once. And the requester never closes someone else's subtask: it is closed by the User-Proxy's `task.failed` for an expired window or by the Spawner's on a query no channel claimed (§3.13.2), and both mean exactly one thing (§3.5.2).
+
+With the key set and stamped as unattended, **nobody asks again**: the condition stays in force and visible, but it does not interrupt again an operator who has already shown they are not there. The query reopens on its own the day the condition clears and arises again, because only then will the key be free. That is what makes neither backoff nor a retry cap necessary.
+
+What the conservative state means in each case:
+
+* `budget_coverage_lost` **resolves itself**: the condition disappears when the lease comes back. If that already happened before the rounds ran out, the Network Monitor simply deletes the key—the question lost its object. If it is still in force, `fail_closed` is already containing in the meantime, which is exactly what makes not asking again tolerable.
+* `niche_uncoverable` **does not resolve itself**: nothing changes if nobody decides. The niche stays `capped` with no expiry, exactly the conservative state—the original node stays active, no new candidates are created, nothing is spent. The condition stays recorded in the Catalog next to the niche (§3.13.5) so that the next human decision finds it, instead of being lost because nobody was listening.
+* `memory_growth` **closes with the conservative way out**: the entry is removed and comes back only through `node_provision` (§3.13.10). The key stays stamped, so a later death of another instance of the same entry does not ask again.
+* `vector_space_unrepairable` **clears by convergence**: the Catalog repair is convergent and demand-driven (§3.13.7), so the day the model responds again, the next query that stumbles on a stale entry regenerates it and the condition clears without anyone having decided anything, within the limit `failure_mode` already fixes. Meanwhile the abstention stays in force, which is the conservative state: the Spawner answers *"I don't know"* instead of treating a niche as uncovered, and archives or duplicates nothing on a comparison that is not valid.
+
+In all of them, the same criterion as §3.15.6: silence never authorizes, but it does not leave a cycle spinning either.
