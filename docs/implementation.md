@@ -1656,3 +1656,275 @@ There is a single release channel.
 | Linux | `.deb` and `.rpm` | `systemd --user` unit |
 
 **The console is the only thing that updates `zobik`.** At the end of an update (above) it downloads the package for its operating system that the manifest names, compares its digest and runs it; if the package asks for administrator permissions, the operating system asks the person for them, who has the session open. That is why the packages are published standalone and not in an apt, dnf, Homebrew or winget repository: the package manager would also update `zobik`, and would change the binary without pausing admission or migrating the configuration.
+
+## 7. The Forge's seed bundle
+
+It instantiates the architecture's bundle proposal (§6.8): the set of blueprints a Forge is seeded with (§6.1). It is programmed by hand, outside the network, and travels with the distribution; `zobik init` registers it in the Catalog and the operator deploys it from the panel (§6). Its members are ordinary blueprints, built on the base image and the NRI library (row 13), and the semantic ones on the official default, LangGraph.
+
+### 7.1. One variant per language model provider
+
+**The distribution brings one variant of the bundle per provider, compiled from the same source with one adapter per provider.** Each variant is a complete and closed bundle, and all its model slots declare that provider's native interface, so one egress entry and one API key are enough to deploy it. A bundle that mixed providers would ask the operator for one key per provider before deriving the first node. The distribution starts with the OpenAI variant and adds the others one at a time. There is no local language model.
+
+**The model is a field of the call and each member's code sets it**, because model names belong to each provider. Which model a derived node uses is decided by the derivation and corrected by the lifecycle, with a candidate that changes model like any other (§3.13.4). Another provider enters a network when a derived node declares its interface, through §3.16.5; a Forge on another provider is another variant.
+
+### 7.2. The OpenAI model slot
+
+**The interface has one operation, `create_response`**, with `protocol` = `https`, which the declarative mapping translates to `POST /v1/responses` (§8.3). Neither the call nor the response carries a body: everything travels as fields, and all of them go in the request's JSON body.
+
+| Field | Type (§8.2) | Maps to |
+| :--- | :--- | :--- |
+| `model` | `string` | `/model` |
+| `instructions` | `string`, optional | `/instructions` |
+| `input` | `array` of `opaque` messages | `/input` |
+| `tools` | `array` of `opaque` tools, optional | `/tools` |
+| `text_format` | `opaque`, optional | `/text/format` |
+| `max_output_tokens` | `integer`, optional | `/max_output_tokens` |
+
+The response declares `output`, `model` and `usage`, from `/output`, `/model` and `/usage`.
+
+**The proposed entry** the variant brings, and that the console registers when deploying the Forge (§6):
+
+* `target`: `https://api.openai.com`, and `operations`: `create_response`.
+* `grant_scope` = `open`, because the nodes the Forge derives for other topics also use it (§6.3); the trace budget contains the spending (§3.15).
+* `rules`: a single rule, without `when`, with `allow`. Calling the model produces no effect outside the network, and what only costs needs no approval (§3.16.2).
+* `billing_rule`: the `usage` tokens—input, cached input and output—times the rate of the `model` the response returns (§8.5). The rate depends on the model and each call chooses the model, so a price per entry is not enough.
+
+  ```cel
+  response.status >= 400
+    ? 0.0
+    : double(response.usage.input_tokens - response.usage.input_tokens_details.cached_tokens) * rate[response.model].input
+      + double(response.usage.input_tokens_details.cached_tokens) * rate[response.model].cached_input
+      + double(response.usage.output_tokens) * rate[response.model].output
+  ```
+
+  An error response does not charge. A successful one without `usage`, or with a `model` the table does not have, cannot be evaluated and charges `max_per_call`.
+
+* `rate_source`: the per-model price table the variant brings, in `cost_unit`, with its `as_of` (§8.5).
+* `credential_handle`: that of the key the operator writes to the Secret Store when deploying, with `credential_placement` in `Authorization: Bearer` (§8.4).
+
+### 7.3. The fixed texts
+
+**The request's texts are constants of the `zobik` binary, and the variant declares them with the same value** in the `topics_announced` of the derivation entry. Both come from the same distribution, and the closure (§3.13.6) checks that the Deriver wins the announcement with each one. The Spawner's request carries the text in `announcement_text` and the rest in `material`; the entry announces the former and writes the latter to the Context Store of the trace it opens (§3.5.1).
+
+The texts of the subtopics are constants of the bundle's source, and they are in English like the members' `capability_text`, which is the language in which general-purpose embedding models separate best (row 15).
+
+### 7.4. The members and their slots
+
+**A Logic Container without a network reaches an HTTP service through a loopback proxy.** `--network=none` leaves the loopback interface (§2.2), and a process of the Logic Container itself listens on it and translates each HTTP request into a `Call` through the NRI, with the body as a file in the task's work area (§3.16.2). That way `pip` and `crane` run unmodified against the package index and the registry, and everything that goes out goes through the Integration Sidecar.
+
+| Member | Implementation | Slots and scope |
+| :--- | :--- | :--- |
+| Derivation entry | Channel with `on_inbound`: opens the trace with `announcement_text` and writes `material` | Ingress: the entry through which the requests arrive |
+| Deriver | LangGraph; writes the specification to the Context Store and announces each subtask with its fixed text | Model, `open` |
+| Evidence Collector | Reads from the Catalog (row 11) the entry of the `artifact_ref` and the `snapshot:<node_id>` record; queries Jaeger's query service (row 17) by `node_id`, `topic` and window, and summarizes each task's description and cost | Catalog read, `topics` on `forge_evidence`; backend read, `topics` on `forge_evidence` (§6.6) |
+| Builder | LangGraph; writes the code, a `requirements.txt` with versions pinned with `==` and the `pytest` tests | Model, `open` |
+| Packager | `pip download --only-binary=:all:` and `pip install --no-index --target`, and `crane append` on the base image, with the `pending-<TaskID>` tag (§1.2.16) | Package index, `topics` on `forge_package`; registry read and push, `topics` on `forge_package` |
+| Verifier | `crane export` of the digest and execution under PRoot against a test Integration Sidecar | Registry read, `topics` on `forge_test` |
+| Publisher | Performs the act of registration against the Catalog's interface (row 11) | Registration write, `topics` on `forge_publish` |
+
+**The infrastructure slots ask the operator for no key**, and the console registers them without asking anything (§6). The package index is two entries, `pypi.org` and `files.pythonhosted.org`, because they are two destinations (§3.16.2); the proxy rewrites the index's links so that the downloads go through the second one. Registry read and push are two entries on the same destination, because the scope is per entry and the Verifier, which runs generated code, only reads. For the same reason, the Catalog read and the registration write are two entries, with the network's `read` and `register` credentials (row 11), which the console issues. All of them close with `allow`. The `target` of the Catalog, registry and tracing backend entries is the piece's fixed name, the same on every host (§6, *The tenant CA, the link and the join code*), so the proposed entries do not depend on where the Forge runs.
+
+**The Packager does not run third-party code.** Installing only wheels is copying files: no `setup.py` runs. It downloads for its own platform, which is that of the nodes, because it runs on the same base image in the same deployment. The layer it adds carries the code and the dependencies directory, and the image inherits the `io.zobik.nri.version` label from the base (row 13). `pip` does the resolution of transitive dependencies; the Builder only pins the direct ones.
+
+**The Verifier runs the image with PRoot**, which mounts in user space the file root extracted from the digest and puts the socket of its test Integration Sidecar at `/run/zobik/nri.sock`. It is needed because §2.4 fixes the socket's path and forbids environment variables of its own: a subprocess without that redirection would dial the Verifier's real Integration Sidecar. PRoot only needs `ptrace` on its own children, which Docker's default seccomp profile admits without any capability, so the spec of §2.2 does not change. PRoot is not a security boundary: the boundary is the pod's confinement (§6.7), and that is why the Verifier has only registry read granted.
+
+**The test Integration Sidecar is a `zobik.nri.v1` server generated from the proto**, inside the Verifier's image. It has no egress or `credential_handle`, and it answers each `Call` with a synthetic response of the shape the interface declares (§3.16.2). The conformance test checks that the `Hello` declares the label's version, that each delivery is confirmed with `Received` and that a synthetic task ends in `complete`. Then the Builder's tests run inside the same file root. The Verifier cuts code that hangs with a maximum time, and the task's lease and the pod's limits bound the residue (§6.7).
+
+**The Verifier also measures the entry's `memory_required`** (§3.13.10). The kernel reports the peak resident memory of each child process when it ends (`getrusage`), so the Verifier reads it from the conformance test and from the tests, takes the largest, multiplies it by one and a half and rounds it up to multiples of 64 MB. The Publisher writes it in the act of registration. The tests are not the real load; the reservation raise corrects what fell short. The bundle's members declare it in their source, and the Verifier, which runs `pip` and other people's tests, declares more than the rest.
+
+## 8. The operation interface
+
+It answers to what the architecture fixes about an egress or ingress interface—its `protocol`, its operations with their typed fields, the shape of the response, the bodies and the context—and to its being identified by the digest of its content (§3.16.2, §3.16.7). This section fixes what it is written in. The format stays fixed with the first interface published, because changing it changes the digest of every interface written with it.
+
+The Config Store reads it when validating an entry (§3.14.4), the Spawner when associating a slot (§3.16.3), the Integration Sidecar when serving it, and whoever builds a blueprint. All of them use the same pieces the stack already brings: JSON Schema, like the Global Configuration schema (§1.2.5), and CEL, like the `rules` (§1.2.12).
+
+### 8.1. The document and its digest
+
+**An interface is a JSON document, and its digest is `sha256:` followed by the hexadecimal SHA-256 of its JCS canonical form** (RFC 8785). JCS sorts the keys and fixes how each number and each string is written, so two serializations of the same document give the same digest. It is computed with the RFC's reference implementation, `cyberphone/json-canonicalization`, which has a Go version.
+
+**The same canonical form is that of every digest over JSON at the boundary:** that of the request being approved, over an object with the entry's key, the operation, the fields and the body's digest (§3.16.4), and the `model_id`, over the value of `embedding_model` (§1.2.15).
+
+**JCS writes every number as an IEEE 754 double**, so an integer of more than 53 bits does not have a single spelling. That is why the type system bounds every `integer` to ±(2^53 − 1), and a longer identifier is declared `string` (§8.2).
+
+| Key | What it declares |
+| :--- | :--- |
+| `protocol` | `https` (§8.3), or that of an own adapter (§8.7) |
+| `direction` | `egress` or `ingress` |
+| `operations` | an object with one key per operation |
+| `verification` | in ingress through a `listener`, how the sender is verified (§8.6) |
+
+Each operation declares:
+
+| Key | What it declares |
+| :--- | :--- |
+| `fields` | the fields, as an object schema (§8.2) |
+| `response` | the shape of the response, as an object schema; in ingress, only when the protocol expects a reply |
+| `body` | in egress, `{ "request": bool, "response": bool }`: whether the call and the response carry a body |
+| `bodies` | in ingress, whether the message brings bodies |
+| `context` | in ingress, `max_messages`: the message's context window (§3.16.7); with `https`, also where it comes (§8.3) |
+| `https` | the declarative mapping, when `protocol` is `https` (§8.3) |
+
+**A JSON Schema that `zobik` and `zobik-sidecar` bring describes the format**, and the Config Store rejects an entry whose interface does not meet it.
+
+### 8.2. The types
+
+**The fields and the shape of the response are written in a structural subset of JSON Schema 2020-12**: each node of the schema has a single known type. It is the cut Kubernetes applies to the schemas of its custom resources to compile CEL rules for them, and for the same reason: the Config Store compiles each condition against the interface's fields (§1.2.12), and that requires each field to have a CEL type.
+
+| Schema | CEL type | Admitted keywords |
+| :--- | :--- | :--- |
+| `string` | `string` | `enum`, `minLength`, `maxLength` |
+| `string` with `format: date-time` | `timestamp` | — |
+| `integer` | `int` | `minimum`, `maximum` and their `exclusive` variants; the range never goes past ±(2^53 − 1) (§8.1) |
+| `number` | `double` | those of `integer` |
+| `boolean` | `bool` | — |
+| `array` | `list` of the `items` type | `items`, `minItems`, `maxItems` |
+| `object` with `properties` | an object with those fields | `properties`, `required`; it admits no other keys |
+| `object` with `additionalProperties` | `map(string, …)` of the type it declares | — |
+| any with `opaque: true` | `dyn` | none: the value is any JSON |
+
+`description` is valid on any node. An optional field is one that is not in `required`, and there is no `null`. **The format's schema rejects everything else**: `$ref`, `oneOf`, `anyOf`, `allOf`, `not`, `if`/`then`/`else`, `pattern` and a `type` with more than one value. Each of those constructions admits values without a single CEL type, and with them a condition could compile without meaning what it seems to.
+
+**`opaque` exists for what the network carries without looking**: the JSON schema a language model receives as its output format, or the list of tools of a call (§7.2). A condition that reads an `opaque` field compiles, and a type that does not match when evaluating it makes it unevaluable, which is `deny` (§3.16.2).
+
+**The conditions see each field as a top-level variable**, as in the Shared Catalog entry (§6, *The initial Global Configuration*), next to `operation`, `body_size` and `body_digest`, `egress_lists` and `now` (§1.2.12). In ingress, `bodies` is the list of bodies, each with its `size` and its `digest`. A condition is compiled once per entry, with the fields of all its operations, so **a field name has a single type in the whole interface**, and the format's schema rejects a field named like one of those variables or like one of those of the `billing_rule` (§8.5). In the call of an operation that does not declare a field, the field is absent, and the condition that reads it is unevaluable unless an earlier condition of the `&&` has already resolved it, like `operation == "acquire" && price > 50`.
+
+**What validates is what was compiled.** The Integration Sidecar validates the fields of each call and of each message with the same JSON Schema validator the Config Store uses, and with the subset there is no value the validator admits and CEL cannot type.
+
+### 8.3. The `https` adapter
+
+**Each operation's mapping says where each field goes, and the adapter executes it without knowing the API** (§3.16.2):
+
+```json
+{
+  "method": "POST",
+  "path": "/v1/repos/{owner}/{repo}/issues",
+  "headers": { "Accept": "application/json" },
+  "fields": {
+    "owner": { "in": "path" },
+    "repo":  { "in": "path" },
+    "title": { "in": "json", "at": "/title" },
+    "dry_run": { "in": "query", "at": "dry_run" }
+  },
+  "response": {
+    "number": { "from": "json", "at": "/number" },
+    "etag":   { "from": "header", "at": "ETag" }
+  }
+}
+```
+
+* **`in`** is `path`, `query`, `header` or `json`, and **`at`** is the name of the parameter or the header, or a JSON Pointer (RFC 6901) inside the request's JSON body. An absent optional field is not sent. `headers` declares constant headers.
+* **A `path` field replaces its `{name}` segment**, encoded as a single segment: a `/` or a `..` inside the value does not change the route. The path is resolved under the root of the `target`, which is what §3.16.2 requires.
+* **The adapter does not follow redirects.** A 3xx response returns to the Logic Container like any other, because following it would take the request out of the `target`.
+* **The format's schema rejects a mapping that writes `Host`, `Content-Length` or `Transfer-Encoding`**: the adapter sets them.
+
+**The response is assembled with `from` and `at`**: `json` with a JSON Pointer over the body, where `""` is the whole body, or `header` with a name. The values are copied without validating, because the shape of the response is not enforced (§3.16.2), and a pointer that does not resolve leaves the field absent. The response also carries `status`, the HTTP code, without declaring it. A 4xx or a 5xx is a response; what returns as an error is a call that got none: a connection, TLS or timeout failure.
+
+**With a body, the file is the HTTP body.** An operation with `body.request` sends the file as is and admits no `json` fields; a header, constant or from a field, gives its media type. With `body.response`, the HTTP body of the response is the file, and the response carries only the `header` fields and the `status`. It is what §3.16.2 asks for: the `billing_rule` reads the response outside its body.
+
+**In ingress, the same mapping goes in the opposite direction.** `method` and `path` choose the operation, with the path under the root of the `listener`, and a request that matches none is rejected. `in` and `at` say where each field comes from. An operation with `bodies` receives them as the file parts of a `multipart/form-data`, each with the name and media type the part declares. `context.at` is a JSON Pointer to a list in the body, from the oldest message to the newest, and each element arrives as a JSON body marked as context (§3.16.7). The response, when the operation declares it, is assembled with `in: json | header`, and its code is 200 unless it carries a `status` field.
+
+### 8.4. The credential in the request
+
+**`credential_placement` says where the adapter puts the credential**, and the entry declares it (§3.16.2):
+
+| Value | The request carries |
+| :--- | :--- |
+| `{ "header": "Authorization", "scheme": "Bearer" }` | `Authorization: Bearer <secret>` |
+| `{ "header": "Authorization", "scheme": "Basic" }` | `Authorization: Basic` with the secret, which is `user:password`, in base64 |
+| `{ "header": "<name>" }` | the secret in that header |
+| `{ "query": "<name>" }` | the secret in that parameter |
+
+**The entry declares it and not the interface because it depends on the destination.** The OpenAI API is served by providers that authenticate with `Authorization: Bearer`, with an `api-key` header or with no credential, like a local runtime (§1.2.15), and the interface is the same in all of them. The Config Store rejects an entry whose interface maps a field to the same header or the same parameter as its `credential_placement`.
+
+It is valid only with `https`. The own adapters use the credential as their protocol dictates (§8.7).
+
+### 8.5. Billing
+
+**The `billing_rule` is CEL, with one expression per operation the entry admits.** Each expression returns a `double`, the cost of the call in `cost_unit` (§3.10). It is compiled against the call's fields, like the conditions (§8.2); against `response`, with that operation's response shape as its type; against `rate`, as `map(string, map(string, double))`; and against `max_per_call`. The Config Store compiles it when validating the `config_change`, like the `rules`. The expression of an operation that costs nothing is `0.0`.
+
+**The rate comes from a table, and `rate_source` is its name.** The table is a JSON document:
+
+```json
+{
+  "as_of": "2026-10-01",
+  "max_per_call": 2.0,
+  "rates": {
+    "gpt-5": { "input": 0.00000125, "cached_input": 0.000000125, "output": 0.00001 }
+  }
+}
+```
+
+`rates` goes from a key—a model, an operation—to a unit price per component, in `cost_unit`. **The `as_of` is the table's**, and it travels with it because it changes when the values change. The Global Configuration names the table and does not store its values (§2.3).
+
+**The table lives in the Bus's `rates` KV bucket, with one key per table, and the key is the `rate_source`.** The Global Configuration schema restricts the `rate_source` to the characters a KV key admits. The bucket has no process of its own, like the Contention Registry (thesis 7): the table arrives validated, so neither the write nor the read has anything to judge. It stores only the current value, because the rate is current (§2.3) and what each call cost is already in its `metrics`.
+
+**The console writes it, and writing it is an act of deployment, like writing a secret** (§6, *The operator console*). That way the values change without a `config_change`, as §2.3 asks, and the rate's source stays as the external dependency §4 declares. The console writes the bucket directly with its platform identity, whose JWT allows it only that write on the NATS server, and publishes no event. Before writing, it validates the table against its format: `as_of` is a date, and `max_per_call` and each price are non-negative numbers. It writes it:
+
+* **when the operator edits it from the panel**, with the session open, in a form that comes from the table's format, as the administration affordance comes from the schema (row 3);
+* **when registering the proposed entry of a Forge variant** (§7.2), with the table the variant brings, if the bucket does not have that key or if the variant's has a later `as_of`. That way a distribution with new prices updates them, and does not overwrite a more recent edit by the operator.
+
+**The Integration Sidecar watches the bucket and keeps the tables in memory.** A KV watch delivers the value of each key on opening and then each change, so it values each call with the current rate without querying the bucket on every call. It watches the whole bucket and not only the keys of its grants: the tables are few and small, and an edit of the registry changes the table an entry names without touching the node (§3.16.3). The Spawner, which generates embeddings through the entry `embedding_model` names (§1.2.15), watches it the same way, and its signing key lets it read it without writing it.
+
+**An entry without `rate_source` is one that costs nothing**: its `billing_rule` is `0.0` in every operation, and the Config Store rejects any other expression. It is the form of the Forge's infrastructure entries (§7.4) and of an embedding model on a local runtime (§1.2.15), which have no price or table to write.
+
+**An entry that names a `rate_source` absent from the bucket does not execute.** Without a table there is no `max_per_call`, and a call whose `billing_rule` failed would have nothing to be charged with. The Integration Sidecar rejects it before executing it, with an error that names the table, and the error returns to the Logic Container like that of a `deny` (§3.16.4). On the `embedding_model` entry, the rejection is a failed generation, which follows `embedding_regeneration_backoff` like any other (§3.13.7).
+
+**An evaluation error charges `max_per_call`.** The shape of the response is not enforced (§3.16.2), so a provider that changes its response, or that returns a model the table does not have, makes the expression unevaluable. Charging zero would underestimate the spending without a signal, and the ceiling of §3.15.1 would stop containing it. The error goes in the call's span (§3.2). A provider that settles out of band (§3.10) uses `max_per_call` as the expression.
+
+### 8.6. Sender verification
+
+**The interface of an ingress through a `listener` declares in `verification` a scheme from a closed list, which the `zobik-sidecar` binary brings**, and the entry's `verify_handle` resolves the secret or the public key it is verified with (§3.16.7):
+
+| `scheme` | Parameters | What it checks | Used by |
+| :--- | :--- | :--- | :--- |
+| `shared_secret` | `header` | that the header brings the secret | Telegram |
+| `hmac` | `algorithm` (`sha256` \| `sha1`), `header`, `prefix`, `encoding` (`hex` \| `base64`), `signed`, and optionally `timestamp_header` and `max_skew` | the HMAC of the secret over `signed`: a list of parts—the body, a header or a literal—that are concatenated | WhatsApp, GitHub, Slack |
+| `ed25519` | `header`, `encoding`, `timestamp_header` | the Ed25519 signature with the public key over the timestamp and the body | Discord |
+
+**The comparisons are constant-time.** With `timestamp_header`, a message whose timestamp deviates from the current time by more than `max_skew` is rejected, and that bounds how useful replaying a captured message is; within that window, the Logic Container's idempotency absorbs the replay (§3.6.4).
+
+**An interface with `verification` requires an entry with a `verify_handle`, and one without it, an entry without a handle.** The Config Store rejects the two remaining combinations. An interface without `verification` is that of a sender that is a person, like a custom widget, who authenticates inside the blueprint (§2.3).
+
+**The list is closed for the same reason as the protocols:** a scheme is code that runs over the secret, and adding one is a new version of the Integration Sidecar and not of an interface (§1.2.12). Left out of it are Stripe's signature, which carries several versions inside one header, Twilio's, which is computed over the URL and the sorted parameters, and Teams', which is a JWT against keys that are fetched.
+
+### 8.7. The own adapters
+
+**The adapter publishes the interface of a protocol with its own adapter**, and it is copied whole. The adapter only understands the operations and fields it has code for, so a different interface would declare fields it does not read. The operations a slot uses and those an entry admits already trim what is reached (§3.16.3). Each interface travels with the Integration Sidecar binary, like that of the embeddings API (§1.2.15). **A version of the Integration Sidecar serves all the interfaces the earlier ones published**, as with the NRI versions (§3): changing one is publishing another, which the operator adopts.
+
+**`git`**, over HTTPS with the credential in `user:token`. The `target` is the root of the repositories, and `repository` is a path under it.
+
+| Operation | Fields | Body | Response |
+| :--- | :--- | :--- | :--- |
+| `fetch` | `repository`, `ref` | in the response: a `git bundle` with the `ref` | `oid` |
+| `push` | `repository`, `ref`, `force` (optional, `false` by default) | in the call: a `git bundle` that contains the `ref` | `old_oid`, `new_oid` |
+
+A rule on `ref` and `force` is what distinguishes pushing to a working branch from rewriting the main one.
+
+**`smtp`**, with mandatory TLS and AUTH with the credential in `user:password`. The `target` is the sending server.
+
+| Operation | Fields | Body | Response |
+| :--- | :--- | :--- | :--- |
+| `send` | `from`, `to`, and optionally `cc`, `bcc`, `reply_to`, `in_reply_to`, `subject`, `text`, `html`, `attachment_name` and `attachment_type` | in the call, optional: the attachment | `message_id` |
+
+`to`, `cc` and `bcc` are lists, so a rule reads the recipients against an `egress_lists` list. The attachment is one, because a call carries a single body (§3.16.2); several files go compressed into one.
+
+**`fs`**, without a credential. The `target` is the root of a directory on the host, and the Spawner mounts it in the Integration Sidecar's container when associating the slot. It is the protocol whose destination is fixed when provisioning (§3.16.3): a `target` that moves or widens applies from the node's re-provisioning, and one that narrows, on the next call, because the adapter resolves each `path` against the current `target` and not against the mount. `path` is relative to that root, and the adapter resolves it without following symlinks and rejects one that leaves it.
+
+| Operation | Fields | Body | Response |
+| :--- | :--- | :--- | :--- |
+| `read` | `path` | in the response: the file | `size` |
+| `write` | `path`, `overwrite` (optional, `false` by default) | in the call: the file | `size` |
+| `list` | `path` | — | `entries`: name, type and size of each one |
+| `delete` | `path` | — | — |
+
+**The ingress `source` entries** have a single operation, `message`. Each one fixes which fields it brings, whether there is context, whether the source stores or pushes, how it marks a message consumed or acknowledges it, and whether it distributes the messages among the channels that share the entry (§3.16.7):
+
+| `protocol` | Fields | Bodies | Context | Source | Consumed or acknowledgment | Distributes |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `imap` | `message_id`, `from`, `to`, `cc`, `subject`, `date`, `in_reply_to`, `text`, `html` | the attachments | the messages of the folder its `References` names | stores | fetches the unread ones in the `source`'s folder and marks the consumed one read | no |
+| `telegram` | `update_id`, `chat_id`, `message_id`, `from_id`, `from_username`, `date`, `reply_to_message_id`, `text` | the photo at its largest size, the document or the voice note | no: the bot API does not expose the history | stores | confirms by `offset` up to the oldest unresolved message | no |
+| `slack` | `event_id`, `team_id`, `channel`, `user`, `ts`, `thread_ts`, `text` | the message's files | the messages of the thread `thread_ts` names | pushes | acknowledges the envelope by its `envelope_id` | yes |
+
+With `imap`, the credential is `user:password` and the `source`'s folder belongs to the channel: a message a person opens from another client stays read and the adapter does not fetch it. With `telegram`, the credential is the bot's token. The `offset` confirms everything before it, so what comes after an unresolved message arrives again after a restart, and the Integration Sidecar recognizes it by its `update_id` (§3.16.7). Telegram retains unconfirmed messages for 24 hours: a channel down for longer loses those that arrived in the meantime.
+
+With `slack`, the adapter opens the Socket Mode connection, and the credential is `app_token:bot_token`: the app token opens the connection, and the bot token fetches the thread and downloads the files. Slack distributes the events among the app's open connections, and retries one without acknowledgment before discarding it; the retry brings the same `event_id`, by which the Integration Sidecar recognizes it.
