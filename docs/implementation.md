@@ -987,3 +987,228 @@ message ReplyAck {}
 **The Integration Sidecar compares the `Hello` against two things:** against the versions its binary speaks, not against the configuration—that is what §3.6.1 asks of that layer—, and against the version the Spawner passed it. A mismatch with the latter means the label does not describe the image, and it is rejected all the same.
 
 **The major version is the protobuf package** (`zobik.nri.v1`) and the minor one travels in the `Hello`. An Integration Sidecar that speaks two majors registers both services on the same socket, and a Logic Container of a major it does not speak receives `UNIMPLEMENTED` on its first call.
+
+## 4. The Spawner's decision strategy
+
+§3.13.4 separates the Spawner's decision into two layers: the guarantees every decision on a `node_review` respects, which the architecture fixes together with the path that orders them, and the **decision strategy**, the concrete rule by which the decision is made at the points that path leaves to it. This section is the default strategy: what objective each node has, how it is compared against a neighbor, which candidate is chosen in the face of a vacancy or of a node under review, how much a floor moves, when a niche is heterogeneous and which row of the floor history is used when provisioning.
+
+**It is compiled into the Spawner.** Changing strategy is deploying another version of the `zobik` binary (thesis 2), and that deployment needs no coordination: a single instance decides each topic (§3.13.1), so two instances with different strategies never judge the same fact—the test that makes the lifecycle parameters current (§2.3). What makes it replaceable in a network that already works is that the Network Monitor measures the whole vector and not only what this strategy reads (§3.12.3): a new strategy starts with the same evidence the previous one had.
+
+**Its parameters live in the Global Configuration**, declared in the schema that comes with the binary (§2.3), all of the current class: `promotion_margin`, `similarity_floor_step`, `max_cost_dispersion` and `max_duration_dispersion`. The list of §2.3 does not enumerate them because they belong to the strategy; another strategy declares its own. `high_win_rate` is in §2.3, because the path of §3.13.4 uses it to decide between archiving and widening.
+
+### 4.1. The objective of each node
+
+> If `cost_own_p50 > 0` or `cost_subtree_p50 > 0`, the objective is **`cost`** (denominated in `cost_unit`, §2.3). If both are zero, the objective becomes **`duration`**, because there is no other real cost to optimize.
+
+A deterministic node that calls a paid API is compared in `cost_unit` like any other; one that spends no money and opens no subtasks that spend is compared in time. Looking at the subtree too is what keeps an orchestrator with zero own cost and expensive subtasks from being compared only by duration. The predicate is about the metric and not about the type of node, as §3.13.4 requires.
+
+### 4.2. The comparison under tie-break by confidence
+
+§3.13.4 fixes that under tie-break a neighbor wins only by a difference the strategy tells apart from noise, and that a tie archives no one. The default strategy resolves it by **dominance without weights**, with relative margins:
+
+> With objective `cost`, a neighbor beats the node under review if it **improves `cost_per_resolution_own` or `cost_per_resolution_subtree` by more than `promotion_margin` without worsening the other by more than `promotion_margin`**. If neither moves beyond the margin, **`duration_p50` decides, with the same margin**. With objective `duration`, `duration_p50` decides directly. **Within the margin in everything compared, no one wins.**
+
+**`promotion_margin` is the margin that separates a real difference from noise**, because what is compared are two estimators with different variances (§3.13.4). It also applies to duration: a latency difference within the noise replaces no one, just like a cost one.
+
+**`cost_per_resolution_*` and not the cost per task**, because it is what prevents apparent replacement: a neighbor cheaper per task but reopened more is not cheaper, and comparing it by `cost_own_p50` would make it win.
+
+**Both variants, by dominance.** Comparing only `cost_per_resolution_own` lets a neighbor win that lowers its own cost by passing work to its subtasks, which is another apparent replacement; comparing only `cost_per_resolution_subtree` would charge a node with the cost of children that have their own lifecycle. Adding them up is forbidden (§3.12.2), and weighting them would require a number nobody can calibrate. Dominance requires improving on one without worsening on the other: it does not mix axes or invent weights, and a neighbor that only shifts cost from one side to the other does not win.
+
+**Duration decides after cost and not together with it.** Without that step, two nodes with the same cost and very different latencies are indistinguishable for the lifecycle, and the review closes `no_action` even if one takes ten times longer than the other. Nor is it an index: duration only decides when cost told no one apart.
+
+### 4.3. Choosing a candidate
+
+§3.13.2 and §3.13.4 go through the same sequence of sources—Local Catalog, Shared Catalog, Forge—and leave to the strategy which Local Catalog entry it chooses. Both use the comparison of §4.2, with the age of the evidence discounted (§3.13.3):
+
+* **An entry that runs is measured with its live signals**, which the Spawner asks for through the point form of `node_query` (§3.12.3). **An archived one is measured with the snapshot of the row of its floor history it would be provisioned with** (§4.6), which is not evaluable if it was written more than `evidence_staleness` ago.
+* **The age discount is binary**: current or not evaluable, without distinguishing axes, even though the cost axis is the one that ages fastest (§3.13.3).
+
+**In the face of a vacancy**, the candidates are the entries that would have proposed for the task (§3.13.2):
+
+* **Two evaluable entries are ordered with the rule of §4.2.**
+* **Among entries no comparison separates, the one that runs is preferred**, because its evidence is from today; and between two that run or two archived ones, the one with more observations. Here the tie-break by observations does decide, because it chooses what to provision and archives no one.
+* **A non-evaluable entry is chosen only if there is no evaluable one**, and among several such, the one with more observations in its snapshot.
+
+**In the face of a node under review**, the candidates are the archived entries within `agent_similarity_floor` of N, without N's entry (§3.13.4):
+
+* **Only the one that would beat N is a candidate**, with the rule of §4.2—under disqualification, the one that satisfied the constraint—. A non-evaluable one beats nothing.
+* **Among several, the one that beats the others**, and on equal terms, the one with more observations.
+* **If none would beat N**, the sequence continues with the Shared Catalog and the Forge.
+
+### 4.4. The floor step
+
+§3.13.4 asks the strategy for another instance of N's entry with the floor moved: widened in the face of a `low_usage` with a high `win_rate`, narrowed in the face of an `outer_gradient`. The default strategy moves the `similarity_floor` by `similarity_floor_step`: it lowers it to widen and raises it to narrow. It goes through neither the neighborhood search nor the Catalog: it keeps the `capability_text` and therefore the vector, so it satisfies the derivation bound by construction (§3.13.4). Widening is the cheapest trial in the system, because it derives nothing new, and narrowing is not even a trial.
+
+**A single step for both directions.** The step fixes the resolution with which the floor is calibrated, and that resolution does not depend on which way it moves. With the same step, moreover, widening a narrowed instance brings it back exactly to the abandoned floor, whose row is the one the rule that prevents undoing a current narrowing consults (§3.13.4).
+
+**Widening consumes `margin`.** It makes the node compete further from its `capability_text`, which predictably degrades quality there, and `margin` is how much quality is available to trade for cost (§3.12.2). With a negative `margin` §3.13.4 already archives N; with an undefined `margin`—N has few observations, which is typical of a node its floor silences—the widening proceeds, because there is no evidence of bad quality and the candidate is measured anyway.
+
+**`similarity_floor_step` is additive and dimensionless.** Additive because the floor is a threshold on the cosine scale, which is not a ratio scale, so adding is the only operation that makes sense there; dimensionless, in the floor's units. Convergence comes from the evidence and not from the parameter: each widening that replaces N did so by winning the new tasks, so the floor goes down while that keeps happening, and each narrowing raises the floor while the edge performs worse than the center (§5.3). Nor are caps needed: the low-floor end finishes in archiving, a legitimate and reversible outcome, and at the high-floor end the outer group stops gathering `min_observations` and the narrowing stops (§3.12.2).
+
+**A fixed rule is tolerable because it proposes and does not judge** (§3.13.4). If N was a specialist and not a silenced node, the widened candidate competes against better specialists, loses, and the usage axis archives it: it costs one round. Narrowing tolerates it for another reason: it only lets go of tasks the trigger already measured as worse than those of the center.
+
+### 4.5. When a niche is heterogeneous
+
+**A conjunction, not a threshold.** A high `cost_dispersion` (§3.12.2) has several causes and only one of them asks for splitting the niche. All the terms already travel in the `node_review` payload (§3.12.3):
+
+| Term | What it rules out if it fails |
+| :--- | :--- |
+| `cost_dispersion` above `max_cost_dispersion` | —it is the signal |
+| healthy `cost_own_p50` | if the median is bad the problem is the node and not the region: make it cheaper, do not split (§3.12.2) |
+| `margin` ≥ 0 | otherwise it is `low_score` and the tree of §3.13.4 already handles it |
+| `avg_attempts` does not explain the tail | internal self-correction produces a cost tail without region heterogeneity: it is fixed by rewriting the blueprint, not by splitting (§3.12.2) |
+| `tokens_in_p50`/`tokens_out_p50` do not explain the tail | a prompt inflated in some tasks is not a heterogeneous region—it is the diagnostic axis of §3.12.2 doing what it says it does |
+| `n_observations` ≥ `min_observations` | absent is *not evaluable* (§3.12.2) |
+
+When the objective is `duration` (§4.1), the same conjunction runs over `duration_dispersion` against `max_duration_dispersion`. With the conjunction true, the niche is split only if it also tolerates the cut (§3.13.9).
+
+**The conjunction carries no radial term.** A dispersion that grows toward the edge of the radius meets the condition of `outer_gradient`, which travels before `high_cost`, `high_latency` and `routine` (§5.6), so that node is narrowed instead of split (§3.12.2).
+
+**It is evaluated when no neighbor beats N, before the candidates** (§3.13.4). Splitting produces several candidates and takes the place of the replacement or exploration candidate of that round: in the reverse order, a heterogeneous niche would receive a single candidate, which inherits the same heterogeneous region.
+
+### 4.6. Which row of the floor history is used when provisioning
+
+§3.13.3 fixes that the floor of an entry that has already run in the network comes from its history, and that a row of a `model_id` that is not the current one is not chosen. The default strategy chooses, among the eligible rows, **that of the most recent archiving**.
+
+**The most recent one is that of the last floor left standing.** When a widening replaces N, the narrow floor is archived while the widened one keeps running, so if the widened one is later archived too, its row is the most recent. The same holds in any trial on the same entry: the loser is archived first. And in a narrowing, which archives the wide floor as soon as the narrow one is ready. The vacancy search simulates with this same floor (§3.13.2), so what is chosen because it would have proposed does propose.
+
+## 5. The Network Monitor's trigger logic
+
+§3.12.3 fixes what each `trigger_reason` asserts about a node, and with that which rule the Spawner applies to it. This section is the default **trigger logic**: with which signals of §3.12.2 the Network Monitor detects each assertion, against which threshold, and why that condition asserts what the name says. It includes the two pieces of §3.12.1 that the architecture fixes as a property and not as a mechanism: the score formula (§5.1) and the order of the emission queue (§5.7).
+
+**It is compiled into the Network Monitor**, by the same argument as the Spawner's strategy (§4): changing it is deploying another version of the `zobik` binary, and that deployment needs no coordination because a single instance observes each topic (§3.12.1). What makes it replaceable is that the vector travels whole in every `node_review` (§3.12.3): a different logic changes when a node is reviewed, not what the Spawner receives.
+
+**Its parameters live in the Global Configuration**, declared in the schema that comes with the binary (§2.3), all of the current class: `w1`, `max_idle_share`, `no_demand_retention`, `cost_drift_threshold`, `duration_drift_threshold`, `outer_reopen_threshold`, `outer_cost_threshold` and `outer_duration_threshold`. `score_floor`, `min_observations`, the windows, `outer_share` and the queue's—`review_emission_rate` and `exploration_share`—belong to the architecture, because they define the constraint, the signals both components read and the bound on the flow.
+
+**The properties of §3.12 apply to every condition:** every signal is a ratio or a position statistic, with no accumulators or rates against time (§3.12.2); each magnitude is denominated in the currency of its cause, and no interval without the possibility of generating evidence counts against a node, nor one whose evidence was lost (§3.12.1). The table says what each condition is counted in:
+
+| `trigger_reason` | Condition | Counted in | Own parameter |
+| :--- | :--- | :--- | :--- |
+| `low_score` | `score` < `score_floor`, with `n_observations ≥ min_observations` | the node's observations | — |
+| `notice_provenance` | some `notice` emitted by N within `evidence_staleness` (§3.12.2) | occurrences | — |
+| `memory_exhausted` | some `oom` event of N's Logic Container within `evidence_staleness` (§5.8) | occurrences | — |
+| `high_cost` | `cost_own_p50` of the current window / that of the previous one > 1 + `cost_drift_threshold` | the node's observations | `cost_drift_threshold` |
+| `high_latency` | `duration_p50` of the current window / that of the previous one > 1 + `duration_drift_threshold` | the node's observations | `duration_drift_threshold` |
+| `outer_gradient` | the outer group performs worse than the inner one in quality, cost or duration, with the outer group at `min_observations` (§5.3) | the node's observations | `outer_reopen_threshold`, `outer_cost_threshold`, `outer_duration_threshold` |
+| `low_usage` | `idle_share > max_idle_share`, with `usage_window` assignments since the last change to the topic's roster | the topic's assignments | `max_idle_share` |
+| `no_demand` | no assignment on the topic during `no_demand_retention` | `admission_clock` | `no_demand_retention` |
+| `routine` | none of the above; the emission queue's reserve chooses it (§3.12.1) | — | — |
+
+### 5.1. `low_score` and `notice_provenance`: the violation, read literally
+
+**The score.** §3.12.1 fixes it as a value in `[0, 1]`, a decreasing function of `reopen_rate` and of nothing else. The default logic computes it like this:
+
+> `score = 1 − clamp(w1·reopen_rate, 0, 1)`
+
+**`w1` fixes the scale, and `score_floor` fixes the cut.** With `w1`, the score reaches zero when `reopen_rate` reaches `1/w1`, and the constraint `score ≥ score_floor` is equivalent to `reopen_rate ≤ (1 − score_floor)/w1`. On the trigger, both parameters move the same cut. What `w1` decides on its own is the scale of the `margin` and of the floors read in score units, like `score_floor_publish` (§3.13.6): it stretches the range of `reopen_rate` that matters—that of small fractions—over the whole interval, instead of leaving it compressed near one. Changing `w1` requires recalibrating `score_floor` in the same `config_change`.
+
+> `low_score` triggers when `score` falls below `score_floor`, with `n_observations ≥ min_observations`.
+
+**The condition is the literal negation of the constraint**, because that is what `low_score` asserts: the constraint is `score ≥ score_floor` (§3.12.2), and the threshold is the same. It carries no parameter of its own on purpose: a trigger threshold different from that of the constraint would leave the Network Monitor and the Spawner disagreeing about what violating it is, and the Spawner applies disqualification on the trigger's word.
+
+**`min_observations` is what makes it an assertion and not noise.** `score` is a ratio over the last `quality_window` closed tasks (§3.12.1), and with fewer observations than the minimum N is not evaluable, not bad.
+
+> `notice_provenance` triggers with the first `notice` from N that the Network Monitor observes within `evidence_staleness`.
+
+It is the signal of §3.12.2 as is. The rule it violates is binary, so there is no statistic to compute or threshold to calibrate.
+
+### 5.2. `high_cost` and `high_latency`: the drift between two consecutive windows
+
+> `high_cost` triggers when `cost_own_p50` over the node's last `quality_window` observations exceeds that of the previous `quality_window` by more than `cost_drift_threshold`: `p50_current / p50_previous > 1 + cost_drift_threshold`. `high_latency` is the same condition on `duration_p50`, with `duration_drift_threshold`.
+
+**The node's history is its previous window.** It is what the trigger asserts—*it went up relative to its own history*—with the reference the architecture leaves to the Network Monitor: the comparison against the neighborhood belongs to the Spawner (§3.12.3).
+
+* **Two counting windows and not a lifetime baseline.** The quotient of two medians is a ratio of position statistics; a baseline from the node's creation would be an accumulator (§3.12.2). Both windows are counted in observations, so a pause moves neither, and both are trimmed by `evidence_staleness` (§3.12.1): if either is left with fewer than `min_observations`, the condition is not evaluable and does not trigger.
+* **The median and not the 90th percentile.** The p90 moves with the dispersion, which is the heterogeneity reading (§3.12.2, §4.5); the median going up means the whole node costs or takes more.
+* **`cost_own` and not `cost_subtree`**, because what is asserted is the node's cost. The subtree's drift does not trigger, and an orchestrator whose subtree became more expensive reaches review through `routine`, where the Spawner's comparison looks at both variants (§4.2).
+* **From zero.** If the previous window's `cost_own_p50` is zero, the quotient is undefined, and the condition triggers with any positive current median: the median stopped being zero, which is a real change in the node, and triggering too much is cheap (§3.12.1).
+* **Two thresholds**, because the noise of latency and that of cost are not alike, even though both drifts are dimensionless ratios.
+
+**The drift switches itself off.** When both windows describe the new level, the quotient goes back to hovering around one: a sustained increase triggers for as long as one window of observations lasts, and not forever. That is what bounds the reviews it repeats, because a `no_action` close does not silence an evidence trigger (§3.13.5). The flip side is that a slow drift, below the threshold in each window, never triggers; `routine` reaches it (§3.12.3).
+
+### 5.3. `outer_gradient`: the edge against the center
+
+> `outer_gradient` triggers when the outer group of the radial axis (§3.12.2) has at least `min_observations` tasks and any of these conditions holds:
+> * `reopen_rate_outer − reopen_rate_inner > outer_reopen_threshold`;
+> * `cost_own_p50_outer / cost_own_p50_inner > 1 + outer_cost_threshold`;
+> * `duration_p50_outer / duration_p50_inner > 1 + outer_duration_threshold`.
+
+**Each axis is compared against itself**, in the form it already has in the other conditions:
+
+* **Quality, by difference.** `reopen_rate` is a small fraction, and a ratio between two small fractions amplifies the noise: 2 % against 1 % is double and says nothing.
+* **Cost and duration, by ratio**, like the drift of §5.2 and for the same reason: they are scale-free magnitudes, and what matters is how much more the edge costs or takes, not in which unit.
+* **Their own thresholds, and not the drift's.** The drift measures a change in time over the same set of tasks; the gradient, a difference in space between two different sets. Their noises are not alike.
+* **From zero.** If the inner median is zero, the condition triggers with any positive outer median, with the same argument as §5.2.
+
+**It converges without a cap.** Almost every node performs somewhat worse far from its `capability_text` (§4.4), so what stops the cycle is the threshold. Each narrowing shrinks the range of similarities that separates the inner group from the outer one, and with it the difference a gentle gradient produces between the two. The floor goes up to the radius at which the node performs evenly within the thresholds.
+
+**The thresholds fix how specialized the network is.** With low values, the trigger narrows nodes that perform well at their edge, and each task let go goes through vacancy until an archived entry, an imported one or a new derivation takes it (§3.13.2). With reasonable values, it acts only where the edge is clearly worse, and that is where a more specific node pays for what it costs to obtain.
+
+**`outer_share` belongs to the architecture** because it defines a signal both components read (§3.12.2), just like the windows.
+
+### 5.4. `low_usage`: free while the network awards its work
+
+> `low_usage` triggers when `idle_share > max_idle_share`, and since the last change to the topic's roster at least `usage_window` assignments on it have been granted.
+
+Each part of the assertion of §3.12.3 is a part of the condition:
+
+* **"Its topic has demand"** is the denominator of `idle_share`: the last `usage_window` assignments granted on the topic. Without assignments the window does not advance.
+* **"N spends most of it free while others serve it"** is the numerator: the assignments another node won with N free.
+* **"Most" is `max_idle_share`**, and the schema declares its range as `[0.5, 1)`. With a lower value, the trigger would reach a node that spends most assignments busy or winning them, which is the opposite of what it asserts.
+
+**It is counted in assignments and never in wall-clock time.** An interval with no assignments on the topic does not move the window, and a pause is the case of zero demand (§3.12.1). That is why the only node of a topic with scarce demand does not trigger, even if it spends almost all wall-clock time without work: every time the network awards something of its topic while it is free, it wins it.
+
+**A saturated node does not trigger**, because it is busy in most assignments and its `idle_share` stays low. Its `usage_share` is also low if the niche is replicated, but that is not the trigger's signal.
+
+**It covers the cases of §3.12.2 without telling them apart**: the hyperspecific node that outlives its purpose—free, it does not propose, another wins—and the duplicate that proposes and loses. It also triggers on the node its floor silences, which is free while others win; whether that is read as archiving or as widening, the Spawner decides by `win_rate` (§3.13.4).
+
+**The window counts from the last change to the roster, because `idle_share` depends on how many nodes share the topic.** In a niche with surplus nodes, the trigger reaches several at once, and archiving one raises the occupation of the others. If the window of those that remain still spanned assignments from before the archiving, it would describe the previous population, and the trigger could archive too many. The same happens in the reverse direction when a node is provisioned on the topic: the occupation of the others goes down before their windows show it. That is why every addition or removal in the topic's roster (§3.12.1) leaves the window of all its nodes incomplete until `usage_window` new assignments come in, and meanwhile `low_usage` does not trigger on them.
+
+* **It adds no state.** The roster is the Active Node Registry, which the Network Monitor already reads to enumerate the axis's subjects, and the change is observed there. The assignments after the change come from the stream, like everything else (§3.12.1).
+* **The wait is counted in the currency of its cause.** What has to happen for the window to describe the new population is assignments on the topic, so the wait is measured in assignments and not in time or in a node's observations.
+* **The signal does not change.** `idle_share` travels in the vector with its window of §3.12.2. What waits for the roster change is the trigger, and the Spawner keeps reading the signal as it was measured.
+
+### 5.5. `no_demand`: the period without assignments
+
+> `no_demand` triggers on each node of a topic when `no_demand_retention` of `admission_clock` passes without any assignment granted on that topic.
+
+* **Assignments, the same denominator as `low_usage`**, so both triggers of the axis look at the same demand and split the cases without overlapping: with assignments, the question is who serves them; without them, `low_usage` sees nothing and `no_demand` answers.
+* **Time, gated by admission**, because what motivates the trigger is the cost of keeping the node up, which accrues in time (§3.12.1). Against `admission_clock` a pause does not count, and archiving the fleet for the lack of demand the pause itself produces is the expensive mistake.
+* **Without `min_observations`**: what is asserted is the absence, and there is no ratio that could be confused with noise.
+
+### 5.6. `routine` and precedence
+
+**`routine` has no condition of its own.** The emission queue's `exploration_share` reserve chooses it among the eligible nodes that meet no other condition (§3.12.1), in the order of §5.7.
+
+**When N meets several conditions, a single one travels** (§3.12.3), in this order of precedence:
+
+> `notice_provenance`, `no_demand`, `low_usage`, `memory_exhausted`, `low_score`, `outer_gradient`, `high_cost`, `high_latency`.
+
+* **`notice_provenance` before everything**, because it is an already confirmed fact and the `trigger_reason` stays in the archived entry's snapshot (§3.13.3): a contract violation has to stay recorded as such, and not as a lack of use.
+* **The usage axis before quality.** If N is surplus or its niche died, archiving it also resolves its quality; disqualification would provision a candidate to compete for a demand that does not exist or that others already serve (§3.13.4). `no_demand` goes before `low_usage` because, with the niche dead, the usage window describes a demand that is no longer there.
+* **`memory_exhausted` before quality.** A node that dies from memory fails the tasks that kill it, and those failures weigh on its `reopen_rate`. Replacing it by disqualification would bring another node; raising its reservation corrects the cause (§3.13.10).
+* **`low_score` before cost**, because a node that violates the constraint is not compared by cost (§3.13.4). It also goes before `outer_gradient`, because a node that violates the whole constraint needs a replacement and not a narrower floor.
+* **`outer_gradient` before the drifts.** When the edge explains a cost or duration drift, narrowing corrects it without provisioning an exploration candidate.
+* **Between `high_cost` and `high_latency`** the order only chooses the name: the Spawner applies the same rule to both.
+
+### 5.7. The emission queue
+
+§3.12.1 fixes the queue, its capped rate and the `exploration_share` reserve for `routine`. The default logic decides in which order what is waiting goes out:
+
+> **Outside the reserve**, by class: `notice_provenance`, then `memory_exhausted`, then `low_score`, then `outer_gradient`, then `high_cost` and `high_latency`, and finally `low_usage`. Within each class the one that has been waiting longest goes out first, except in `high_cost`, which is ordered by `spend_window`. **Within the reserve**, `no_demand` before `routine`, and each by waiting time.
+
+**The classes follow what waiting costs.** A `notice_provenance` is an already confirmed contract violation, with nothing to weigh. A `memory_exhausted` loses every task that needs more memory than it has. A `low_score` is a node that produces today results the network does not admit. An `outer_gradient` is a node that resolves part of its tasks worse, and sometimes reopens them too often. A cost or duration drift overspends while it waits. A `low_usage` is surplus capacity that costs only infrastructure. With the rate capped, a class can wait while a higher one has a queue, and that is the right order: the queue exists to choose what to review when there is not enough for everything.
+
+**`spend_window` orders only within `high_cost`**, because it is the class of the correlated burst of §3.12.1: if the price of a model goes up, the network first reviews the nodes that spend the most with it. There the comparison is valid, because all nodes of the class are measured in `cost_unit`. Outside that class, a node whose objective is duration (§4.1) has a zero `spend_window` without that saying anything about how much there is to gain.
+
+**`no_demand` goes to the reserve**, because it is maintenance on a healthy network, like exploration, and has no urgency. It goes out before `routine` because it is an observed fact and not a bet, and because it runs out on its own: each review ends up archiving the node (§3.13.4). **`routine` goes out by waiting time**, so exploration goes over the fleet evenly; when each node becomes eligible again is already spaced by the Spawner's backoff (§3.13.5).
+
+### 5.8. `memory_exhausted`: the engine's `oom` event
+
+> `memory_exhausted` triggers with the first `oom` event of N's Logic Container that the Network Monitor observes within `evidence_staleness`.
+
+**The event is the signal of §3.12.2 as is.** Docker emits it when the kernel kills a process of the container for its `--memory` (§1.2.4), with the container's labels, and the `node_id` comes from there. It arrives through the `/events` the Network Monitor already reads via `docker_reader` for the roster (§6), so there is no new route in the filter's list.
+
+* **Only the Logic Container's.** The Integration Sidecar has a fixed reservation from the platform; an `oom` of its own is a defect of the binary and not something a larger reservation from the blueprint corrects.
+* **Without `min_observations`**, like `notice_provenance`: what is asserted is a fact, and a single death is enough to know the reservation does not suffice.
+* **It almost never repeats on the same node.** The Spawner replaces N with another instance with a larger reservation (§3.13.10), and the next death, if there is one, is of another `node_id`. The exception is N waiting for the operator's answer, whose reviews the Spawner closes without action (§3.13.10).
