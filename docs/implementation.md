@@ -353,3 +353,264 @@ The change reaches the keys that already exist, just as in the Context Store (§
 **The Tracing Collector renews the budget of live traces.** The bucket counts the lifetime from the last write, and §3.4 counts retention from the trace's close. A live trace can go longer than `context_retention_grace` without cost or reopen—waiting for a person's answer, for example—, and if its accumulated count expired, its ceiling would go back to zero without anything signaling it. That is why the Tracing Collector rewrites `budget:<TraceID>` and `budget_limit:<TraceID>` unchanged for each live trace of its partition (§6, *The initial Global Configuration*), and one last time when the trace closes, so that they expire `context_retention_grace` after the close. Each rewrite is a CAS on the revision read, so as not to overwrite an accumulated count another instance wrote during a rebalancing (§3.15.7).
 
 **It has no process of its own** (thesis 7). This store's contract is purely key-value: presence, value, TTL and write-if-absent. Who can write each key is fixed by the split into partitions, not by an authorization the store evaluates, and the identity rule of §3.15.2 resolves idempotency with no deduplication state.
+
+#### 1.2.11. Specialty Catalog—Go process with embedded SQLite
+
+It is a store that is **tenant-wide by design** (§3.13.3): a single instance for all networks of the tenant, with a qualifier per network, not one store per network. **That scope is what forces the network interface** (thesis 7), because the readers do not share a host by construction:
+
+* The **Spawners** of all networks of the tenant, which also arbitrate over it with **write-if-absent** keys—the provisioning key per niche, the egress interface key, the slot-association key, the audience key, the irreparable-vector-space key (§3.13.3)—. A write that decides who provisions cannot be resolved against a local file of one of them.
+* The **Forge**, which reads from that store what the request references (§6.3)—the blueprint of the node under review or that of the base, and the metrics snapshot of the node under review—through its Evidence Collector (§7.4). §6.1 declares it **local to the tenant** and at no point co-resident.
+
+The process is one more role of the `zobik` binary and **SQLite stays inside**, so zero-ops stays whole: one file, with no database server to operate. The Spawner computes the neighborhood search in Go over a small catalog—no ANN or vector extension (`sqlite-vec`) is needed. The `artifact_ref` points to the Registry (row 16).
+
+**One instance per tenant, not per network.** It is a direct consequence, and it changes what the deployment does: a tenant's second network is pointed at the existing Catalog instead of instantiating its own. §2.4 declares it on the architecture side.
+
+**It is reached over HTTPS and authenticates with scoped per-network credentials** (§6, *The off-Bus interfaces*). Each credential is an opaque secret that names a network and a scope: `read` enables only the reads, which the Forge's Evidence Collector performs (§7.4); `register` also enables the act of registration, which the Forge's Publisher (§7.4) and the console in the seeding (§6.1) perform; and `spawner` also enables writing the records qualified by that network and the deletion mark, and registering what the Spawner brings in from the Shared Catalog (§3.13.6). So only the Publisher, the console and the Spawners register, and the Catalog tells by the credential who reads from who writes. The Catalog stores the hash with the network and the scope. The credentials live in the network's Secret Store: the Forge's members present them through the `credential_handle` of their egress entry, and the Spawner resolves them through `secrets` (§1.2.18). So all of the network's secrets live in the same store and the Catalog has a single scheme; the handshake against each network's account is of no use to the Publisher, which arrives through egress.
+
+**The console issues them with a Catalog administration credential**, which the `zobik init` that creates the tenant mints and which the console keeps encrypted with the password, like the root (§6). A network on the same host receives them from the same console, with no intervention. A network on another host obtains them with a single-use join code that the tenant's panel shows and that the person pastes into their `zobik init`, which redeems it at the Catalog (§6, *The tenant CA, the link and the join code*). Removing a network from the tenant is revoking its credentials.
+
+**The Catalog enforces the act of registration and attribution, and does not read the rest.** Registering requires the analysis, that the digest resolves and that the artifact fits in the capacity (§3.13.3); each network writes only its own rows. What each qualified row means is decided by the Spawner, which owns the Catalog (§3.13.3): the Catalog stores one document per key with its revision, and arbitrates with it.
+
+**The service** is JSON over HTTPS under the `/v1` prefix, with the credential in the `Authorization: Bearer` header. It has one resource per half of the entry (§3.13.3): the entries, which the act of registration writes, and the qualified records, which each network's Spawner writes.
+
+| Operation | Credential | What it does |
+| :--- | :--- | :--- |
+| `POST /v1/entries` | `register`, `spawner` | The act of registration of a blueprint (below). |
+| `POST /v1/bundles` | `register`, `spawner` | That of a bundle, with the body `{ purpose_text, members }`: `members` is the list of the digests of its members, already registered. The `bundle_id` is the hash of the content, so registering the same bundle twice returns the same one. |
+| `GET /v1/entries`, `GET /v1/entries/{digest}`, `GET /v1/bundles`, `GET /v1/bundles/{bundle_id}` | any | The half without a qualifier, with what the Catalog adds: the `scan_result`, the Node Runtime Interface version, the `artifact_size` and the deletion mark. |
+| `PUT` and `DELETE /v1/entries/{digest}/deletion_mark` | `spawner` | Stamps and removes the deletion mark (§3.13.8). |
+| `GET /v1/status` | any | The current `ruleset_version`, which is that of the role image that `catalog` and `scanner` share (§1.2.19), and the occupied space and the storage capacity (§3.13.3, §1.2.16). |
+| `GET /v1/records/{network}/{key}` | any | A qualified record. |
+| `GET /v1/records?prefix=…&network=…` | any | The records whose key starts with the prefix; without `network`, those of all networks. |
+| `PUT` and `DELETE /v1/records/{network}/{key}` | `spawner` of that network | Writes or deletes a record. |
+| `POST /v1/credentials`, `DELETE /v1/credentials/{network}` | the administration one | Issues a credential for a network and a scope, which is returned only once, or revokes all of a network's credentials. |
+| `POST /v1/join_codes` | the administration one | Registers a join code for a network: the hash of its secret and its expiry. |
+| `POST /v1/join` | the secret of a current join code | Issues the `read`, `register` and `spawner` credentials of the code's network, which are returned only once, and invalidates the code. |
+
+**The act of registration carries the half without a qualifier that whoever registers writes** (§6.5). The `scan_result` and the Node Runtime Interface version come from the analysis (§1.2.19), and the `artifact_size`, from the manifest (§1.2.16). The body of `POST /v1/entries` is a JSON object:
+
+| Key | Type | What it carries |
+| :--- | :--- | :--- |
+| `artifact_ref` | string | the digest of the image in the Registry (row 16) |
+| `capability_text` | string | what the blueprint knows how to do (§3.13.3) |
+| `author_id` | string | who built the artifact (§3.13.3) |
+| `attempt_window` | object, optional | which rounds it competes in (below); without it, all of them (§3.5.2) |
+| `topics_announced` | list, optional | the domain topics it announces (below); without it, none |
+| `requires` | object | the provisioning preconditions (below) |
+| `acquisition` | object, optional | the acquisition row of the registering network (below) |
+
+**`attempt_window` is `{ from, to, final_round }`**, over the announcement's `current_attempts`, with both limits included (§3.5.2). `from` and `to` are optional integers: without `from` there is no lower limit, and without `to`, no upper one. `final_round` is a boolean, and without it it is `true`, because an undeclared window also competes in the final round.
+
+**Each element of `topics_announced` is `{ topic, fixed_texts }`.** `fixed_texts` is the list of fixed texts with which the blueprint announces that topic, and it is absent when the blueprint writes them in each announcement (§3.13.6).
+
+**`requires` groups the preconditions the Spawner evaluates when provisioning** (§3.13.3):
+
+| Key | Type | What it carries |
+| :--- | :--- | :--- |
+| `egress_required` | list of slots, optional | the egress slots (§3.16.3) |
+| `ingress_required` | list of slots, optional | a channel's ingress slots (§3.16.7) |
+| `memory_required` | integer, optional | the Logic Container's memory, in MB; without it, `default_memory_required` (§3.13.10) |
+
+**A slot is `{ name, interface, operations }`.** `name` is the name the Logic Container calls it by, unique within its list; `interface`, the whole interface document, which is identified by its digest (§8.1); and `operations`, the list of the operations of that interface it uses.
+
+**A key of `requires` that the Spawner does not know prevents it from provisioning the entry** (§3.13.3), and it ignores an unknown one outside `requires`. The key's position makes the cut between the two classes, so a binary knows what to ignore without knowing what came after it, and adding an informational field leaves no Spawner out.
+
+**The same request can carry the acquisition row of the registering network**: `acquisition`, with `provenance`, the cost and its `as_of`, which the Catalog stores as the record `acquisition:<digest>` of the credential's network. The seeding carries it, with `seeded`, and so does what the Spawner brings in from the Shared Catalog, with `imported` or `purchased` (§3.13.6), so the entry and how it reached the network are written together. It is the only write of a qualified record that a `register` credential admits. The Publisher does not carry it: the cost of a derivation belongs to the network that requested it, whose Spawner writes its row on receiving the entry (§6.5).
+
+**Registering is idempotent by digest.** Registering the same half again returns the entry, and removes its deletion mark if it had one (§3.13.3); another half with the same digest returns `409`. A registration that fails returns `422` with its `reason`:
+
+* `scan_failed`, with the `ruleset_version` and the `findings`, which the Spawner reports to the Shared Catalog when an import fails (§3.13.6);
+* `unresolvable`, if the digest does not resolve in the Registry;
+* `storage_full`, if the `artifact_size` does not fit in the capacity (§3.13.3).
+
+**Each qualified record is a JSON document with its revision**, which the Catalog increments on each write and returns as `ETag`. The conditional write is HTTP's: `If-None-Match: *` writes only if the key does not exist—the write-if-absent the Spawners arbitrate with (§3.13.3)—, `If-Match` only if the revision is the one read, and an unmet condition returns `412`. A `PUT` with `expires_in` ceases to exist for every read when it expires, which is how the presence mark expires. What is rewritten the same way is written without a condition, like the snapshot on archiving (§3.13.3).
+
+**A network writes only the records of the network its credential names, and reads those of all networks**, because the qualifier is attribution and not isolation (§3.13.3). The listing without `network` is how deletion reads the presence marks and the `provenance` of the other networks (§3.13.8). The keys are these:
+
+| Key | What it stores |
+| :--- | :--- |
+| `embedding:<digest>` | The entry's competition triple in the network's space: the vector and its `model_id` (§3.7.3). |
+| `floor:<digest>:<floor>` | A row of the floor history, with its `trigger_reason`, its snapshot, when, and its `model_id`. |
+| `snapshot:<node_id>` | The snapshot that the `node_review` that derives writes, which the Forge reads by the request's `node_id` (§6.3). |
+| `acquisition:<digest>` | The acquisition cost with its `provenance` and its `as_of`, the egress constraint the entry was born with and the `TraceID` of its derivation. |
+| `memory:<digest>` | The effective reservation (§3.13.10). |
+| `memory_growth:<digest>` | The reservation-raise key (§3.13.10). |
+| `presence:<digest>` | The presence mark, written with `expires_in` = `catalog_presence_ttl`. |
+| `veto:<digest>` | The veto mark (§3.13.8). |
+| `niche:<topic>` | The counters of successive candidates, of successive reviews and of provider authorization requests, the `capped` mark with its `TaskID` and the handle of the pending derivation. |
+| `provision:<topic>` | The write-if-absent provisioning key (§3.19). |
+| `egress_interface:<interface>`, `egress_interface:<interface>:<topic>` | The key per egress interface, with the topic when the gap is one of scope (§3.16.5). |
+| `slot:<interface>:<slot>`, `slot:<interface>:<slot>:<topic>` | The slot-association key, with the topic when some option is a `topics` entry (§3.16.5). |
+| `ingress:<entry>` | The channels associated with an ingress entry (§3.16.7). |
+| `audience:<audience>` | Since when the audience has been without a channel (§3.13.2). |
+| `acquisition_denied:<entry>:<price>` | The denied-acquisition key (§3.13.6). |
+| `operator_request:<TaskID>` | The outcome of an operator's request over the fleet (§3.13.8). |
+| `topic:<topic>` | The Topic Registry row (§3.7.6). |
+| `vector_space`, `credit_exhausted`, `capacity_pressure`, `storage_pressure` | The network-scope keys: irreparable vector space, exhausted credit (§3.13.6), capacity pressure (§3.13.10) and storage pressure. |
+
+**The shape of each value is part of `/v1`.** Spawners and Forges of other networks read it, and they can run another version of the binary, so a key changes shape only with another prefix; adding a key does not change it.
+
+#### 1.2.12. Integration Sidecar—Go, gRPC over a Unix domain socket
+
+Consistent with the Go policy for the structural components and the codebase of the `zobik` CLI: a single static binary of ~10-20MB deployed as a sidecar next to each Logic Container. It speaks NATS, stamps `traceparent`, resolves `credential_handle` and `verify_handle`, applies `egress_registry` and `ingress_registry`, mediates the Context Store and emits metrics—all with the standard library + the official NATS client. No OTel export SDK (that belongs only to the Tracing Collector, §3.2). The contract with the Logic Container is the Node Runtime Interface over gRPC on a Unix domain socket in a shared volume (§2), with the service §3 fixes, independent of its language.
+
+**The egress `rules` are written in CEL** (Common Expression Language, `cel-go`). It meets what §3.16.2 asks of a condition without adding anything to it: it is not Turing-complete, it has no side effects, it terminates in a time bounded by the length of the expression, and it is compiled against declared types, so the Config Store verifies each condition against the interface's fields when validating the `config_change` (§3.14.4). The lists come in as a variable `egress_lists` and the time as `now`, and an evaluation error comes out as an error and not as `false`, which is what §3.16.2 turns into `deny`. The same AST is printed back as text, and that is the reason of the rule that names each outcome (§3.16.4).
+
+**The protocol adapters come in the binary.** The `https` one executes the declarative mapping the interface brings (§3.16.2, §8.3) with the standard library's HTTP client, which trusts the system CAs and the tenant's (§6, *The tenant CA, the link and the join code*), and it sends the body of the call and writes that of the response streaming between disk and connection, without loading them into memory; those of `git`, `smtp` and `fs` are specific to each protocol (§8.7). The set is the range of the `protocol` field in the Global Configuration schema, which comes with the deployment together with the binary (§2.3), so adding a protocol is a new version of the Integration Sidecar and not of any interface.
+
+**In a channel with ingress, the Integration Sidecar listens** on its own container's network, with the standard library's HTTP server, **or connects to the entry's `source`** through its protocol's adapter (§3.16.7). The ingress `rules` are CEL like the egress ones, with the message's fields instead of the call's, and each Integration Sidecar keeps the rate ceiling in memory, because it applies per channel. The ingress adapters come in the binary by the same criterion as the egress ones.
+
+**It is stateful.** §3.6.4 assigns it a durable local buffer for the outbox and the deduplication by the envelope's `id` on receipt, so the act of provisioning produces a **private volume** for it besides the one it shares with its Logic Container (§3.13.1, which fixes why they are separate). It is solved with BoltDB or a directory of files with `fsync`, without adding a piece to `zobik init`: the state is small, per node, and it is discarded as soon as the Bus's ACK confirms.
+
+#### 1.2.13. Logic Container—arbitrary OCI container
+
+It is not a platform language decision: the Logic Container is any image that meets §2.4—the blueprint chooses it. The stack decision is only about the official defaults: Python + LangGraph for semantic nodes (mature AI/LLM ecosystem, tools, retries) and a simple deterministic script for nodes with no reasoning engine. Content-addressed images, referenced by `artifact_ref` (row 16).
+
+**The substrate delivers an NRI client library in Python and a base image, and neither is mandatory.** They make it easier to meet §2.4; an image that meets it without them is equally valid. Whoever builds a Logic Container uses them, be it a person or a node of the Forge, and Python is the language because it is that of the official defaults: another language generates its stubs from the proto (§3).
+
+* **The library implements the Logic Container's side of the service of §3**: it opens the session with its `Hello`, confirms each delivery with `Received` and fills in the `task_id` of each request with the assignment received. It stays frozen inside each image that uses it, so its version is the NRI version it sends in the `Hello`, and it requires nothing outside the proto: an error of its own stays fixed in each image, and what is not in the proto cannot become a requirement.
+* **The base image is Python with the library installed and the label `io.zobik.nri.version` set to the version the library sends.** Both coming from the same artifact is what keeps the label and the `Hello` from diverging, which the Integration Sidecar rejects at startup (§3). `zobik init` seeds it in the tenant's Registry (§6) and it is referenced by digest: a new version is a new digest, and an image built on an earlier one keeps it.
+
+**A blueprint is written on a single structure, be it a worker or a channel.** It implements one handler per delivery class, and the library invokes it with what arrives through the session:
+
+| Handler | What it receives | Who implements it |
+| :--- | :--- | :--- |
+| `on_task` | each `assignment`: a worker's task, and in a channel each query from its audience and each delivery of an outcome (§3.5.4) | every blueprint |
+| `on_inbound` | each `Inbound` the ingress admitted (§3.16.7) | a channel with `ingress_required` |
+| `on_notice` | each `notice` of a broadcast topic the node watches | one that watches any |
+
+The requests hang off what the handler receives: on a task, `read_context`, `write_context`, `call`, `announce`, `ask`, `complete` and `fail`; on an ingress message, `open` and `reply`; on the root that `open` returns, `read_context`, `write_context`, `call` and `purge`. `node.root(trace_id)` names a root by its `TraceID`, which is how a channel that restarted reaches it.
+
+**The Integration Sidecar enforces the differences between a worker and a channel, not the library:** how many tasks the node holds at once, which deliveries reach it and whether `Open` is granted (§3.6.1, §3). The library runs each task separately, and a worker never receives a second one while the first is still in progress.
+
+**The terminal events of the subtasks have no handler: they are what `announce` and `ask` return.** With that, the library enforces the closing rule of §3.9.1: `complete` waits for the terminal events of all the subtasks the task opened. A terminal event that arrives with no one waiting for it—the Logic Container restarted since it opened the subtask—is acknowledged and discarded. The Integration Sidecar failed the tasks it had (§3.6.1), and for a channel's roots the Integration Sidecar handles the delivery of the outcome and the close (§3.5.4): the outcome comes back as a new task through `on_task`.
+
+**The model adapter is not in the library.** Its shape is given by the interface of the model slot (§3.16.2), which is Global Configuration and not NRI, so it is versioned with that interface and the blueprint that uses it brings it.
+
+#### 1.2.14. Active Node Registry—Docker labels
+
+Consistent with the Spawner (row 4): the orchestrator is the Docker Engine API, and the Registry *is* the metadata of what is deployed, which §3.11 enumerates in full—its fields go in as labels of the container. Reading it passively from the labels makes the orchestrator the source of truth, with no extra store in `zobik init`. The spec confirms "only the Spawner writes it"; the Network Monitor reads it for the roster and the census (§3.12.1), and the ingress proxy for forwarding (§2.3), both through a role that exposes only the reads that do not return a container's content (§6, *The roles of the binary*).
+
+#### 1.2.15. Embedding Model—an endpoint of the OpenAI embeddings API
+
+**The network speaks a protocol and not a runtime.** The Embedding Model is the destination of an `egress_registry` entry whose interface is the OpenAI embeddings API (`POST /v1/embeddings`), and `embedding_model` names that entry, the model and the prefix convention (§2.3). The distribution brings the interface together with the Integration Sidecar (row 12): the Integration Sidecar and the Spawner use it, reading the vector from the response, and its `billing_rule` reads the `usage` that accompanies it; against a local runtime, the entry carries no `rate_source` and costs nothing (§8.5). Hosted providers and local runtimes speak it—Ollama, llama.cpp, vLLM, LM Studio, Text Embeddings Inference—, so a local model is one more entry, with the `target` on the machine where the person brought it up and with no `credential_handle` when the runtime does not authenticate.
+
+**Neither the model nor the endpoint has a default value.** The operator chooses them from the panel, as the first act after `zobik init` (§6), and until then the network stays `frozen` (§2.3). The similarity floors of `v0` are calibrated against `nomic-embed-text` with its prefixes (§6, *The initial Global Configuration*); with another model, recalibrating them is up to the operator.
+
+**The prefix convention travels in the same key as the model**, because a model with another convention changes it without changing anything else, and because different binaries generate the two ends of the matching. That of `nomic-embed-text` is `search_document: ` on the `capability_text` and `search_query: ` on the task's text, which is the querying side of the matching (§3.7.5). A model without prefixes declares an empty convention.
+
+**The `model_id` is the hash of `embedding_model`**—entry, model and convention, in the canonical form of §8.1—, and the Integration Sidecar and the Spawner compute it the same way (§3.7.3). It identifies the space as firmly as the name identifies the model: a hosted provider exposes a name and no digest, so a change of the model served under that name is not detectable; with a local runtime that accepts the model by digest, naming it that way closes the gap.
+
+**With a hosted provider, the texts leave the machine.** The `capability_text` of each blueprint and the text of each announced task reach the provider, just like what a semantic node sends to its language model. Whoever needs them not to leave points the entry at a local runtime.
+
+#### 1.2.16. Image registry—zot
+
+It resolves the content-addressed `artifact_ref` (sha256 digest) of each blueprint. Since the Catalog is tenant-wide (§3.13.3), the `artifact_ref` a network imports has to resolve in the importing network: one instance **shared at tenant level**, not one per network (the Forge's Packager pushes to the same one, §7.4). zot is a single Apache-2.0 binary, a CNCF sandbox project, with no database, and it speaks the OCI Distribution Specification, which is what `crane` and the container engine speak. It deduplicates the shared layers with hard links, so the base image is stored once for all artifacts.
+
+**What decides the row is deleting without stopping the registry.** §3.13.8 deletes an artifact's image on the operator's request, and the space is freed only when a garbage collection removes the layers that nothing references anymore. zot runs it with the registry working: each `gcInterval` it collects what has gone unreferenced for more than `gcDelay`, and that margin is what protects an upload in progress. Both are left at their default value, one hour.
+
+**Retention follows §2.1 with tags.** The `artifact_ref` is a digest and not a tag (§3.13.3), so tags name nothing for the network and are free to mark what the registry retains:
+
+* **The Packager pushes with a `pending-<TaskID>` tag**, that of its packaging task (§7.4). `crane append` requires a tag, and a unique one per attempt keeps any attempt from taking the tag away from another.
+* **The act of registration adds an `entry-<digest>` tag**. The `catalog` role puts it on receiving the registration, be it from the Forge, from an import or from the seeding, so no member of the bundle needs to write to the registry for that. If the digest no longer resolves, the registration fails (§3.13.3).
+* **The retention policy** keeps every `entry-*` tag with no time limit, keeps a `pending-*` tag while it is less than 72 hours old (`pushedWithin`) and deletes the rest; with `deleteUntagged` at its default value, the next pass collects the image left without tags. The 72 hours are three times `hitl_response_window`: they are enough for a derivation that blocks asking a question between packaging and registration to get to register, and if it does not, it packages again (§6.8).
+* **`purge` deletes the manifest by digest** with the protocol's `DELETE`, which takes all its tags with it. The Spawner executes it, which is why it reaches the registry (§6).
+
+**`zobik init` declares the storage capacity to the `catalog` role: 2 GB on the reference machine**, a fifth of what thesis 8 leaves free after the installation. An artifact is a layer of code and wheels over the base image, on the order of tens of MB, so on the order of a hundred fit; the measurement of `zobik init` confirms the figure (§6), like those of thesis 8. The `catalog` role computes the `artifact_size` when registering, adding up from the manifest the layers that are not in the base image's, without consulting the registry's disk space: the occupied space of §3.13.3 is a sum over the Catalog. The `pending-*` images do not count, and their time limit bounds them.
+
+#### 1.2.17. Tracing / APM backend—Jaeger with Badger
+
+Jaeger for native OTLP and an integrated UI. What the row decides twice is the **storage engine**, and it is worth separating which criterion discriminates and which does not:
+
+* **Instance shared at tenant level.** It is the cross-network requirement (thesis 5, §3.2) and it is a property of the deployment: it is met by bringing up one instance for all networks of the tenant, with any engine inside. **It does not discriminate.**
+* **Persistence beyond the process.** What §6.6 reads is traffic already measured, not spans in flight. Both engines persist. **It does not discriminate.**
+* **Fitness for §6.6.** The Evidence Collector needs, by `node_id`, `topic` and window, the tasks a node resolved with their cost and their description—and it is the consumer the quality of the blue/green depends on (§3.13.4). Jaeger's query service serves it, and it is the same over either engine. **It does not discriminate, and it is the criterion the row has to declare anyway**, for what follows further down.
+* **Retention volume and horizontal scale.** An embedded engine lives in one process and does not scale out. **It discriminates in favor of Cassandra.**
+* **Cold-start footprint** (thesis 8). Cassandra is a JVM with a heap of several GB before the first trace; Badger is part of Jaeger's own process. **It discriminates in favor of Badger, by an order of magnitude.**
+
+With that, the default is **embedded Badger**, and **Cassandra** remains as the escape by volume—the same escape-by-volume pattern as row 11, and the one thesis 6 declares for the tenant-wide pieces. Paying for the heavy engine by default is paying for horizontal scale the reference deployment does not use, with the entire budget of thesis 8 as the price.
+
+**It retains 30 days, the `evidence_staleness` of `v0`.** Further back, the evidence is no longer evaluable (§3.12.1), so keeping it is disk nobody reads; Badger applies it as the spans' TTL. The two are calibrated together: raising `evidence_staleness` without raising the retention leaves the Evidence Collector (§7.4) asking for a window the backend has already deleted.
+
+**What §6.6 requires of it and what it does not give.** The query is HTTP with a filter by span attributes and time window, which is where the `node_id`, the `topic` and the `metrics` that the Tracing Collector attaches as attributes land (§3.10). What the backend does **not** do is aggregate: it returns traces with a cap on results, so summarizing the cost per task is the Evidence Collector's work and grouping the tasks is the Deriver's (§6.8)—which is exactly what §6.6 describes when it says the Forge builds the query its case needs and groups what comes back. The requested window and the backend's cap have to be compatible, and that is the real limit of the evidence, not the engine.
+
+**A single instance is a single point for the tenant, and the architecture already admits it.** §3.10 declares that with no instance to answer, the `trace_query` expires by timeout and whoever needed it proceeds without that history; and §3.15.2 persists budget enforcement in the Contention Registry precisely so as not to hang it from here. The tracing backend is the external dependency whose outage the architecture declares tolerable in advance, so high availability is not a criterion of this row.
+
+#### 1.2.18. Secret Store—SOPS + age, with escape to OpenBao
+
+**The load of this row is resolving each handle to its value and nothing more.** §2.1 classifies it as an external dependency with that single job, and §3.16.6 bounds it to the egress and ingress credentials; the root of trust is kept in the act of deployment and not here (row 3, §3.14.2). Nothing the network does with node credentials goes through this store: §3.14.2 fixes that a capability credential verifies provenance against the root, that no revocation list or expiry is needed, and that **revoking is taking down the workload**—so the rotation and revocation a vault offers answer to no clause.
+
+What remains is a handle→value map, and an **encrypted file with SOPS + age** fulfills it: no database to operate and **no startup to unseal**, which is one step less before the network admits anything (§5.1). Rotating a provider credential is rewriting the entry, and it takes effect on the next call because the handle is resolved on invocation (§3.16.4). At startup, the Integration Sidecar only checks that each handle of its grants resolves (§3.16.5).
+
+`zobik init` generates the `age` key and the operator console keeps it (§6), which is also what writes the file: one more custody in the same place, instead of a service whose own startup secret has to be kept anyway. It is stored apart from the root and without the password, because the root is decrypted only with a person present and the handles are resolved with no one (§3.16.4).
+
+**A single container mounts the file and the key, that of the `secrets` role, and the Integration Sidecars ask it for each value.** It is the trimming of §3.16.6: the role resolves a handle if the entry that names it is associated in the grants of the node asking and still reaches it in the current registry, which it reads from the Config Store (row 5), or if it is the one the current `embedding_model` names (§3.16.3). The Integration Sidecar arrives over a connection authenticated as its platform identity (§6, *The off-Bus interfaces*) and presents its capability credential, which carries its grants (§1.2.4) and whose subject has to be that identity. The role verifies the chain against the root and, with a `provision` grant, the proof it carries (§3.16.3). So a Spawner that lies about a node's grants does not reach a secret of a `provision` entry, whose proof it cannot fabricate. From the `ingress` role it accepts only the handles of the `listener` certificates (§2.3), and from the `spawner` role, only that of the entry `embedding_model` names and that of its Catalog credential (§1.2.11).
+
+**The value does not go through the Bus** (§3.16.5): the role serves through its own network interface, and uses the Bus only to read the configuration. It reads the file again when the console rewrites it, and the Integration Sidecar does not keep the values between calls. It is one more Go process in the per-network idle class of thesis 8.
+
+**The service** is the one the Integration Sidecars, `ingress` and `spawner` reach over gRPC (§6, *The off-Bus interfaces*):
+
+```proto
+syntax = "proto3";
+package zobik.secrets.v1;
+
+service Secrets {
+  rpc Resolve(SecretRequest) returns (Secret);
+  rpc Check(SecretRequest)   returns (CheckAck);
+}
+
+message SecretRequest {
+  string handle     = 1;
+  string credential = 2;  // capability credential, compact JWS; empty from a role
+}
+
+message Secret {
+  bytes value = 1;
+}
+
+message CheckAck {}
+```
+
+**A request names the handle, and the Integration Sidecar adds its capability credential**, from which the role reads the grants. The role looks among the entries those grants associate for one that names the handle and still reaches the node in the current registry, or compares the handle with that of the entry `embedding_model` names. A role presents no credential: the caller's role comes from the connection (§6), and with it the closed list above. The credential travels in each request because the service has no session; the role caches its verification per identity. An out-of-scope handle returns `PERMISSION_DENIED`, and one with no value in the file, `NOT_FOUND`.
+
+**`Check` is the startup check** (§3.16.5): it evaluates the same as `Resolve` and does not return the value, so the Integration Sidecar checks its handles without holding any in memory.
+
+**The handles no entry names carry the prefix `zobik/`**: `zobik/catalog` is the Spawner's Catalog credential, and `zobik/listener/<host>`, the certificate and key of that host's `listener`. The console writes them, and the role resolves them by the caller's role and not by grants, so the Global Configuration schema rejects a `credential_handle` or a `verify_handle` that starts with `zobik/`: with it, an entry associated with a node would reach a platform secret for it.
+
+**When to escape.** A deployment with several people operating, access auditing per secret or short-lived dynamic credentials wants a vault, and that is where **OpenBao** comes in, the MPL-2.0 fork of Vault under the Linux Foundation (thesis 4). OpenBao's policies are per identity and do not read the registry, so the `secrets` role stays in front as the one that evaluates the grants, and repointing is configuration of the role.
+
+#### 1.2.19. Admission Scanner—Trivy + own rules, behind the `scanner` role
+
+The component belongs to the tenant (§2.1) and the content of the analysis is two different things, so the row chooses twice. **Trivy resolves the embedded secrets and credentials** (Apache-2.0): it scans OCI image layers, brings secret detection out of the box and runs as a single binary with no daemon. **The injection patterns are own rules**, because no off-the-shelf piece rules on prompts embedded in an image—it is the case §3.13.6 names when it says the artifact is the same object whether the node is deterministic or semantic. Both stay behind the same interface, the `scanner` role of `zobik`, which invokes the Trivy binary the role image brings next to its own (§6), following the pattern of thesis 7: what the network queries is a service with its own contract, and what fulfills it inside is free.
+
+**The verdict is cached by digest, and that is what takes it off the hot path.** The `scan_result` is a field without a qualifier of the entry (§3.13.3) and its natural key is the digest of the `artifact_ref`, so provisioning does not scan: it reads a verdict and checks that it is `pass` and of the `ruleset_version` that the `catalog` role reports as current (§1.2.11). Scanning happens on registration, be it a derived, imported or seeded artifact, and when the ruleset has moved forward—never once per network and per instance.
+
+**Only the `catalog` role calls it, on registration** (§3.13.3), over gRPC on a Unix domain socket that the `scanner` role serves in a volume only `catalog` mounts, like `docker_reader` (§6):
+
+```proto
+syntax = "proto3";
+package zobik.scanner.v1;
+
+service Scanner {
+  rpc Scan(ScanRequest) returns (ScanResult);
+}
+
+message ScanRequest {
+  string artifact_ref = 1;  // digest in the tenant's Registry
+}
+
+message ScanResult {
+  string          verdict         = 1;  // pass | fail
+  string          ruleset_version = 2;
+  repeated string findings        = 3;  // rules violated, without the content that triggered them
+  string          nri_version     = 4;  // io.zobik.nri.version label of the manifest
+}
+```
+
+The `catalog` role stamps the `as_of` when storing the verdict. `findings` names rules and not what they found, because an embedded secret does not leave the analysis: it is what is reported to the Shared Catalog when an import fails (§3.13.6).
+
+**It goes in a container separate from the Catalog because it analyzes images nobody has reviewed yet.** An exploitable bug in a Trivy parser reaches what the `scanner` role mounts—read access to the Registry—, and not the Catalog's file. For the same reason it does not authenticate its caller: what it receives comes only from `catalog`, because only that role mounts its volume.
+
+**When an update brings a new ruleset, the `catalog` role analyzes again the entries it stores**, one at a time and off the registration path. Until it has done so, an entry's verdict is from an earlier `ruleset_version` and provisioning does not bring it up, so the entries running in some network are analyzed first, by their presence mark (§3.13.3).
+
+**It carries no vulnerability database, and that is why it introduces no recurring maintenance** (thesis 8). The analysis §3.14.1 asks for is about embedded secrets, credentials and injection patterns: none of that is a CVE, which is the only thing that database is for. Trivy runs with secret scanning alone, whose rules come compiled into the binary and consult no feed, and the injection rules are own rules, versioned with the `ruleset_version` the `scan_result` already carries. The row's cost then stays in disk and in the binary, never in idle or in a periodic download.
