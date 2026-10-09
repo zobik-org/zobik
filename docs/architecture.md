@@ -1767,3 +1767,107 @@ The Global Configuration (§2.3) is provisioned with the deployment, but it does
 * **Close.** Once all are passed, in `versioned` the Store publishes the new snapshot—complete, immutable, attributed—and responds with `task.completed` carrying the resulting `config_version`; in `mutable` it applies the operations, records the attribution without the value (§2.3) and responds with what was applied. Propagation requires notifying no one: traces in flight keep the version they have pinned, and everything current is read in its present state (§2.3).
 
 **Natural language, if desired, off the trust path.** Nothing prevents the operator from writing their intent in prose: it comes in through `intake` (§2.1) like any request, a semantic node drafts a candidate artifact, and it is returned to them as the result of the trace (§3.9.1) so they review it and emit it through the structured path. The LLM stays as a drafting assistant and never in the authorization chain—the person still emits the artifact, and the proof is still theirs. It is a convenience on a populated network, not an alternative path: the final step is the same.
+
+### 3.15. Anti-abuse budget and per-trace cost containment
+
+Nothing in each node's decision model (§3.3) prevents a trace from being reopened indefinitely; containing that pathological case is a later layer on top of the network, defined here. Each piece of this layer reuses a pattern that already governs in another context—no new component, only new topics (§3.8) and emergent roles (§2.1) competing under the same rules as always.
+
+#### 3.15.1. Budget unit and trigger criterion
+
+The budget is measured per complete root `TraceID`—the whole operation the user perceives as a single thing, the unit with which §3.9.1 defines its close. It is the layer bounded to that operation; the one bounded to each unit of work is the local control over the reopen lineage of a specific subtask (`current_attempts`, §3.3).
+
+The following signals count against the budget, already available with no new fields in the envelope (`metrics`, §3.8.1/§3.10):
+
+* **Accumulated `cost`** over the whole tree of the `TraceID`—the primary signal, because it directly reflects real spending. Each node's Integration Sidecar measures it and it covers every monetary cost whatever its origin (§3.10), so the ceiling is not dodged by underreporting or by spending outside the LLM.
+* **Total accumulated reopens** over the whole tree (the sum of the `current_attempts` of each subtask lineage that makes it up, which each requester's Integration Sidecar stamps, §3.3)—a safety net independent of cost: a pathological loop between nodes that spend no money (§3.6.3) can become abusive without ever reaching the spending ceiling.
+
+The thresholds (`trace_budget_cost`, `trace_budget_reopens`) are Global Configuration parameters (§2.3); crossing either of them triggers the mechanism.
+
+**The accumulated count is monotonic: it never resets, not even when a human authorizes continuing.** It is not a policy counter but the aggregation of facts already observed on the Bus, and the Tracing Collector is a passive aggregator (§2.1): lowering it would be writing a number that corresponds to nothing that happened. Authorizing more spending raises the ceiling; it does not erase the floor (§3.15.6): that way the final `task.aborted` carries the real cost of the whole trace, and each successive `trace_risk` trigger reaches the human with a higher total than the previous one.
+
+**The trigger comes after the spending**, because the accumulated count is facts already observed: a single task expensive enough to cross the ceiling in one go is paid in full before the freeze (§3.15.3) manages to stop anything. What the budget contains is accumulation, not the overflow of a single step; when that step also leaves the substrate, what gates it is §3.16.
+
+#### 3.15.2. Who enforces it: the Tracing Collector and the Contention Registry
+
+The Tracing Collector (§3.2) is already partitioned by `TraceID` (§3.10) and already observes `metrics` on every terminal event that crosses the Bus—it is the only component with an aggregated view of cost per trace. The dimension of this threshold is the one the Tracing Collector already maintains, so adding it extends an existing aggregate; the Network Monitor (§3.12.1) is another component because it aggregates over another dimension, per node and not per trace. It is also the reason the Tracing Collector is structural (§2.1): this function does not degrade observably.
+
+On crossing a trace's threshold, the Tracing Collector executes the following acts, and **the order is part of the mechanism**:
+
+1. **It marks the `TraceID` as frozen** in the **Contention Registry**, reserving in that write the place where the open question will live.
+2. **It opens the `hitl_contact_operator` subtask** (§3.5.2) as requester—the audience, in §3.15.5—with the structured payload of §3.15.6. The `TaskID` of that subtask is stored in the freeze key before announcing. Its `subject` is the `TaskID` of the subtask, not the `TraceID` (§3.8.1): a terminal event with `subject = TraceID` is, by contract, the close of the root request, and every generic consumer reads it as such (§3.9.1).
+3. **It broadcasts a `notice`** (§3.8.2) on `trace_risk`, with the same raw data and **carrying no decision on top**: it is the echo of a state already written, for the cooperative cancellation of §3.15.3 and for whoever wants to enrich it (§3.15.4). Containment and the question being already in force before broadcasting is what makes this act unable to be the source of truth of anything, as the invariant of §3.8.2 requires.
+
+**The producer opens the question.** §2.1 promises of the Operator Channel that every decision the network cannot make on its own ends up there, and the containment notice arrives through a structural component, just like the gate of §3.16, the audience authorization of §3.13.2 and the configuration edit of §3.14.4: in a containment mechanism, the **delivery** of the notice is part of the guarantee and admits no degradation. The Tracing Collector owns the rest of the circuit—it writes the freeze, watches the threshold, consumes the decision and unfreezes—so opening the question completes the purpose it already has. And it does so without ceasing to be deterministic (§3.6.3): it emits raw fields and a closed enumeration, without writing prose or judging values.
+
+**The Contention Registry is a declared interface.** It is a shared low-latency store (the same type as the one the Task Broker already uses internally, §3.1); its implementation is free, just like the Context Store's storage (§3.4), and its contract is binding, because each key is written by one instance and read by others that do not share memory with it—of another component, or of the same component after a rebalancing (§3.19):
+
+| Key | Written by | Read by | Lifetime |
+| :--- | :--- | :--- | :--- |
+| `freeze:trace:<TraceID>` | Tracing Collector that owns the partition | Task Broker, on each admission (§3.15.3), presence only; Tracing Collector, on taking the partition, also the value | `coverage_lease_ttl`, renewed by the Tracing Collector while the trace stays frozen |
+| `coverage:<p>`—with the **`TraceID` range it covers** as value (§3.15.7) | Tracing Collector of partition `p` | Task Broker (§3.15.3), Network Monitor (§3.12.1) | `coverage_lease_ttl`, renewed periodically while the instance is operational |
+| `budget:<TraceID>` | Tracing Collector that owns the partition | Tracing Collector | retention of the `TraceID` (§3.4) |
+| `budget_limit:<TraceID>` | Tracing Collector that owns the partition | Tracing Collector | retention of the `TraceID` (§3.4) |
+| `risk:coverage` | Network Monitor (§3.12.1) | Network Monitor | `coverage_lease_ttl`, renewed while any partition is without coverage |
+
+**The value of the freeze is the open question.** `freeze:trace:<TraceID>` carries the `TaskID` of the `hitl_contact_operator` the Tracing Collector opened, along with which threshold triggered and when: a trace is frozen *because* there is an open question about it, and the answer is what unfreezes it. They share a key and a lifetime, so they expire together—if the instance dies and nobody takes the partition, the question and the freeze lapse at once, never leaving an answer in flight against a trace that already ran again, or a perpetual freeze with no claimant. The Task Broker reads only presence from this key (§3.15.3), so the value is not interpreted on the critical path.
+
+`budget:<TraceID>` is the accumulated `cost` and reopens, and **it is persisted here, not in process memory or in the OTel backend**: the budget survives the restart of a Tracing Collector instance, and the tracing backend is a dependency only of export and `trace_query` (§3.10), which can degrade.
+
+`budget_limit:<TraceID>` is the **effective limit** of that trace when a human decision raised it above the global threshold (§3.15.6). Its absence—the normal case—means "use the Global Configuration thresholds", so the key exists only for the traces that actually reached `trace_risk` and were extended, not one per live trace. It is persisted for the same reason as the accumulated count, and with more force: the instance that reloads the partition after a rebalancing (§3.15.7) reads an accumulated count that **already exceeds the global threshold**, and the extended limit is what lets it tell a trace authorized to continue from one to freeze, without asking the operator again a decision they already made. It also carries `extensions_granted`, the count of extensions that trace has already received (§3.15.6).
+
+**The key holds the requester role, not the process.** The requester of this subtask is **a partitioned, rebalanceable instance**, and its identity lives in the registry: the instance that takes the partition loads the key, finds the open question, renews it and resumes the role without asking again. It is the same thing the coverage lease of §3.15.7 declares—effective enforcement and not a live process—: here too the role is not held by a process but by the partition, and the registry is what makes that identity survive the process that exercised it. That is why the precondition for claiming `coverage:<p>` includes the range's open questions besides the accumulated count (§3.15.7): a query nobody is going to apply is absent enforcement just like an unloaded accumulated count.
+
+**Idempotence by identity, with no deduplication state.** An answer whose `TaskID` does not match the one the key names **is discarded**. That single rule covers the case in which the instance dies, the freeze expires, the successor reloads, sees the threshold crossed and opens a new query: the old answer reaches the Bus, nobody claims it, and its subtask closes normally.
+
+**The write is the election.** These keys are written **write-if-absent**: whoever writes first stays as requester; whoever finds it written stays silent. It governs equally in the cases of §3.15.7, where several instances can detect the same condition at once, and it avoids naming an owner for each condition or inventing a parallel partitioning scheme. Embedding regeneration is resolved without this arbitration (§3.13.3) because the vector is a pure function and duplicating only costs model calls; here duplicating costs **a person's attention**, which is neither idempotent nor recoverable, and that is why the key arbitrates. In both cases, never a coordinator.
+
+#### 3.15.3. Freeze: what is stopped and what is not
+
+What is internal is not interruptible (§2.2), so the only thing stopped is the admission of *new* tasks: the Task Broker (§3.1), before granting any `task.assigned`, consults the Contention Registry (§3.15.2)—the same type of check it already does with the Spawner's capability signature (§3.14.2), one more predicate before assigning, not a new coupling. While the `TraceID` is frozen, no new reopen under its tree manages to win an auction, even though the task keeps being re-announced with backoff (§3.1) as usual. Nor does the delivery of the outcome (§3.5.4), which waits for the trace to be unfrozen or aborted.
+
+They are separate point reads: `freeze:trace:<TraceID>` (freeze for abuse) and the coverage of the partition that `TraceID` falls in, which the Task Broker resolves by asking whether **any live lease declares it covers** that `TraceID`, without deriving `p` (§3.15.7). The set is low-cardinality (one entry per Tracing Collector partition) and changes infrequently, so the Task Broker can cache it for a few seconds; the effective cost per admission is still one read.
+
+**The gate upholds predicates, not Registry reads.** The per-trace freeze and the partition coverage come from the Contention Registry and have trace and partition scope; the remaining one comes from the current Global Configuration and has whole-network scope: `network_admission` (§3.18), the global brake the operator pulls. It is not a new coupling or an additional read on the critical path—the Task Broker already consults current config in its own cycle for the re-announcement backoff (§3.1) and for `budget_coverage_policy` (§2.3, §3.15.7).
+
+**On rejection, they all behave the same:** no `task.assigned` is granted and the Task Broker **emits no event**. The task stays `UNASSIGNED` and is re-announced with backoff (§3.1) until the condition lifts. That is what keeps any of the brakes from inflating the reopen counter of §3.15.1: there is no reopen; there is an auction that does not award.
+
+The Tracing Collector clears the freeze mark when it **emits** the close of the circuit (§3.15.6)—the same component that wrote it is the one that removes it, in the same act in which it applies the decision it received and with no additional coordination. And if that instance dies before getting there, the mark **expires on its own** through `coverage_lease_ttl`: it is a renewed key, not a permanent write. Without that, a live trace would stay frozen forever with no one with authority to release it—perpetual freeze is a failure mode as real as the absence of containment.
+
+**What a node can stop on its own.** The `notice` the Tracing Collector broadcasts on `trace_risk` (§3.15.2) reaches every node subscribed to the topic: its delivery is **fan-out per node** (§3.6.5), so it competes with no one to consume it. A node with a task in progress under that `TraceID` can, if its blueprint implements it, watch that topic and interrupt its work early (publishing its own `task.failed`) instead of finishing a costly operation that will probably end up discarded. It is a cost optimization available to whoever builds the node, not a guarantee of the system: it falls under the cooperative cancellation corollary of §2.2 and adds no new requirement. And it is exactly the use case for which the invariant of §3.8.2 exists—the notice obliges no one to anything, and the containment it backs is already written in the registry the Task Broker reads, with or without `notice`.
+
+#### 3.15.4. Enriching the notice: optional and by *pull*
+
+The notice carries raw data and a closed enumeration (§3.5.2), and with that most `trace_risk` notices are dispatched at a glance. Reconstructing in natural language why this trace overflowed is semantic work, and the network admits it as an enrichment that **the Operator Channel requests**: the request comes in through `intake` like any domain request, or the channel calls `trace_query` (§3.10) and assembles it itself. It lives outside the contract—in the channel's Logic Container, or in a dedicated emergent role (§2.1)—and **its absence degrades the presentation of the notice, never its delivery** (§3.15.2).
+
+#### 3.15.5. The audience is `operator`
+
+**Authorizing more spending on a trace is a decision of the tenant that operates the network (§2.4)**, and that is why the query the Tracing Collector opens (§3.15.2) goes on `hitl_contact_operator`. Whoever originated the request is a human population that may be external to the tenant and without authority over its costs, and the network keeps them separate by audience topic (§3.5.3). Where tenant and requester coincide—the development case, §2.4—the same channel serves both audiences and the distinction is not noticeable; the mechanism does not change because of that.
+
+**No admission of this circuit depends on the current vector space.** The `hitl_contact_operator` is awarded among the channels of that audience by credential and membership, and only on a trace the Operator Channel opened—the only entry of `operator` (§3.13.8)—is round 1 its own, by the deterministic routing of the origin audience (§3.5.2). In both cases the `task_embedding` travels in the announcement without taking part in the award (§3.7.5, step 4). That is what keeps the complete path—detect, contain, notify, decide, act—working when what broke is precisely the embedding model (§3.13.3, §3.13.7).
+
+#### 3.15.6. Close: the Tracing Collector applies the decision it receives
+
+The Tracing Collector, requester of that query, receives the decision by Claim-Check in the subtask's `task.completed` (§3.5.2) and applies it. **There is no return trip through `trace_risk`**: whoever asked is whoever can act, so the answer reaches whoever is going to execute it with no intermediate leg that exists only to carry it.
+
+**The exchange is contract, because both ends are structural.** The Tracing Collector produces it and an Operator Channel renders it (§2.1), so the invariant of §3.5.2 governs, instantiated here:
+
+| Field | Value |
+| :--- | :--- |
+| `kind` | `budget_exceeded` |
+| `scope` | `trace` |
+| `options` | `continue` \| `accept_partial` \| `abandon` |
+| `outcome_if_silent` | `abandon` |
+| Decision data | accumulated `cost` and `reopens`, `threshold_crossed` (which of the two triggered, or both), `extensions_granted` |
+| `evidence` | the `TraceID` and its root request, the breakdown of the accumulated count by topic, and the current limit against which it was crossed |
+
+The breakdown of the accumulated count by topic is built with sums over events the Tracing Collector already observed, grouped by an identifier that already travels in the envelope (§3.8.1).
+
+The branches:
+
+* **Continue (`continue`):** the Tracing Collector **raises the limit and only then unfreezes**: it writes `budget_limit:<TraceID>` (§3.15.2) with the current accumulated count plus the increment the Global Configuration fixes and that does not travel in the answer (§2.3), increments `extensions_granted`, and then clears the freeze mark (§3.15.3), so that the trace admits tasks again with the new limit already written. It stays alive and **no terminal event is emitted**: the root request has not ended (§3.9.1).
+
+  * **Only the dimension that triggered is extended.** Cost and reopens are independent signals (§3.15.1). If cost crossed, the new ceiling is the accumulated `cost` plus `trace_budget_extension_cost`; if reopens crossed, the accumulated reopens plus `trace_budget_extension_reopens`; if both crossed, both are extended. The limit that was not crossed stays intact.
+  * **`extensions_granted` travels in each query.** Each extension requires a new human decision on an accumulated count that has already grown, and that count next to the accumulated total is what makes the decision informed. It lives next to the limit in the registry (§3.15.2) because writer and reader are the same component—the same criterion with which §3.13.5 stores its candidates counter in the Catalog.
+* **Accept partial (`accept_partial`) or abandon (`abandon`):** the Tracing Collector emits `task.aborted` on the entry subtask, without having it assigned and addressed to the channel that opened the trace, which is its requester (§3.5.1). It is the terminal event of that subtask: the channel delivers the outcome and closes the root as with any other (§3.5.4), so the notice reaches whoever originated the trace through the same path as an answer. `data.disposition` distinguishes `"partial_accepted"` from `"abandoned"`, and the User-Proxy does not treat both cases the same: `"partial_accepted"` was an informed decision of the user. In the same act it removes the freeze mark, and it does not freeze that trace again: what remains in it is delivery and close.
+
+**Without a human answer, the way out is the conservative one.** If the `hitl_contact_operator` exhausts its reopen rounds (§3.5.2)—channel down, operator absent—the Tracing Collector treats that `task.failed` as the absence of a human decision and closes with `abandon`. Silence does not extend the budget, and the terminal event arrives anyway: with the requester guaranteed, the user's circuit always closes. The machinery of rounds and reopens runs through the Task Broker (§3.5.2).
