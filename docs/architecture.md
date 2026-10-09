@@ -2288,3 +2288,78 @@ The form it takes is free, and it is generated from the schema (§2.3) instead o
 * **It does not become a bottleneck for the work.** Every circuit that involves it has its conservative way out in its absence (§2.1): the network takes the prudent option, it does not hang.
 
 The gates that limit it are configuration, and the operator can disable them: that is the definition of root of trust (§3.14.2). What bounds it is attribution—each version stays attributed and immutable, and each edit of `mutable`, attributed (§2.3).
+
+### 3.18. Network pause
+
+The network has an admission state of its own, `network_admission`, which the Task Broker evaluates before granting any `task.assigned`. It is the general-scope brake: the others are bounded to their own condition—§3.15.3 freezes a trace, §3.15.7 freezes a partition that lost enforcement—and the cases that follow fall under none of them.
+
+* **Vector space migration.** Changing the embedding model (§2.3, §3.7.3) redefines the space in which everything is compared; while the regeneration lasts there can be no new auctions mixing vectors from two models. The full procedure—which population migrates, how progress is detected and why this pause is mandatory and not recommended—is in §3.13.7; it is also the only case in which the configuration schema *requires* `frozen` instead of leaving it to the operator's judgment (§2.3, §3.14.4).
+* **Cost emergency.** The budget of §3.15 contains trace by trace; nothing cuts the network's aggregate spending all at once.
+* **Substrate maintenance.** Context Store migration, partition rebalancing: operations that go much better with no work coming in, and none of which requires it (§3.19).
+* **Compromised blueprint.** A revocation from the Shared Catalog (§3.13.6) can require stopping the network before knowing which nodes have to be replaced.
+
+It is one more instance of the admission predicate of §3.15.3 and §3.15.7, with the widest scope: instead of a trace or a partition, the whole network.
+
+**Only admission is stopped, never emission.** The Bus is pub/sub and §2.2 fixes that a node's internals cannot be interrupted: nobody can prevent a node from publishing, or stop the work it already has assigned. The only thing that can be stopped without violating that limit is the Task Broker granting `task.assigned`. The observable effect of a pause is that nodes keep announcing, the backoff keeps re-announcing (§3.1), and nothing progresses.
+
+The parameter is `network_admission`, from Global Configuration and of the current class (§2.3):
+
+| Value | What the Task Broker rejects | What for |
+| :--- | :--- | :--- |
+| `open` | nothing | the network operates normally; requires `embedding_model` to be assigned (§2.3) |
+| `drain` | only `intake` | no new requests come in and the traces in flight finish on their own—orderly maintenance |
+| `frozen` | `intake` + all emergent topics | nothing progresses; the case of the vector space migration, where the traces in flight cannot finish well, and the state the network is born in (§5.1) |
+
+`drain` is the mode almost all maintenance needs, and it costs one more value in the same predicate. It loses nothing along the way: the Entry Node keeps publishing on `intake` during the pause (§3.5.1), those announcements stay vacant with backoff like any task without candidates, and they are awarded on their own on resuming. A request made during a pause is served late, not discarded.
+
+**What is exempt: the table of §3.7.7 minus `intake`.** That section holds the whole list and the criterion by which it is drawn; what applies here is its consequence: administering the network, querying its history, inspecting what is running and what it has stored, promoting a blueprint outward, bringing up one the Catalog already stores (§3.13.8) and talking to a human keep working *during* the pause. It also follows that the containment circuits can close while it lasts, because the question and the decision travel over `hitl_contact_*` (§3.15.2, §3.15.7).
+
+Details on how it is evaluated:
+
+* The only value the Task Broker reads from the configuration for this is `network_admission` (§2.3). The topic it compares against is the constant `intake` (§3.7.7), so there are no two parameters that must travel consistent in the same snapshot version.
+* It is a predicate over **topic identifiers**, not over the content of the task. The Task Broker reads no payloads and interprets nothing, so its semantic blindness (§3.14.2) stays intact: it is still the same kind of check it already makes with the capability signature or with the freeze key.
+
+**Pausing and resuming is a `config_change`.** There is no emergency command or side channel: the operator emits the edit with their signed proof through the path of §3.14.4, like any other configuration change. They are the only one who can do it and the only one who decides when it resumes, because nobody else can emit a `config_change` that validates against the deployment root (§3.14.2).
+
+**No automatic unpause by timeout.** A timer would resume the network toward a state nobody verified, which is the opposite of why it was paused. The risk of a "forgotten pause" is low because of an asymmetry of the state itself: with the network paused nothing progresses and that is noticed immediately, unlike `fail_open` (§3.15.7), which is dangerous because it is silent. The state is also in view: §3.17.1 requires the administration channel to present the current snapshot before any edit. What the pause protects is also inspectable while it lasts—`node_query`, `node_catalog_query` and `topic_catalog_query` are exempt and do not depend on embeddings—so resuming can be a verified decision instead of a bet on whether the work that motivated the pause is already done.
+
+**The nodes do not find out.** There is no pause notification, for reasons already written in other sections:
+
+* Nobody subscribes to configuration changes (§2.3). Notifying would force inventing the architecture's first config propagation channel, for a case that does not need it.
+* It would be a second source of truth about admission. The only enforcement point is the Task Broker, just as with the freeze of §3.15.3.
+* Even if they found out, it would not be enforceable: every cancellation signal is cooperative (§2.2).
+
+A deployment that wants its nodes to stop early has available, without adding anything, the same pattern §3.15.3 offers for `trace_risk`.
+
+**What the pause does not stop:**
+
+* **Current leases expire** (§2.2). It is benign: the task goes back to `UNASSIGNED`, is re-announced, and is not admitted. It ends up in the same place as everything else.
+* **The liveness and waiting windows run.** `hitl_response_window`, `coverage_lease_ttl`, the task leases—wall-clock time does not stop for them, and that is correct: they do not measure quality but whether something is still alive or someone is still waiting. Freezing them would stop detecting a dead Tracing Collector or a human who does not answer precisely during the pause, which is when the least attention is being paid.
+* **The Network Monitor's measurement windows, on the other hand, do not move**, and not because something freezes them: they are not denominated in time (§3.12.1). During a pause there are no observations to close or assignments to grant, so no indicator moves and on resuming each node starts from where it was. The exception is `evidence_staleness`, which runs anyway and can leave a node not evaluable on resuming (§3.12.1).
+* **The lifecycle magnitudes that do measure time stop with admission.** The `grace_period`, the no-demand period of `no_demand` (§3.12.3) and the Spawner's exploration backoff are evaluated against the `admission_clock` (§3.12.1), stopped while `network_admission ≠ open`. It is the exception to the liveness windows above, and the reason for each one lives in §3.12.1.
+* **The budget accumulated counts stay where they are** (§3.15.1). They are monotonic and are not reset; a pause does not touch them.
+* **Nothing is purged ahead of time.** The Context Store's retention is tied to the close of the trace and not to wall-clock time (§3.4), so a trace stopped in the middle of the pause keeps its context.
+* **The Spawner's work on the vector space runs anyway**, and in one case it is what the pause exists to let run: the migration of the active fleet (§3.13.7) can only be done with the network stopped, so the window enables it instead of stopping it. The Catalog sweep runs for another reason—its predicate is per query and not against `network_admission`, so the Catalog converges even if the pause is lifted before the regeneration has finished, and even if it was decreed for a cause unrelated to the embedding model (§3.13.7).
+* **Reopens do not grow** (§3.15.1), because the Task Broker emits no event when rejecting (§3.15.3).
+
+**Relation to the other brakes.** The predicates are evaluated together and are independent: resuming the network does not lift a `freeze:trace:<TraceID>` nor stand in for a missing `coverage:<p>` under `fail_closed`. The pause is one more brake, at the same point and with the same rules, and never an override of cost containment.
+
+**The granularity closes in the enum.** There is no pause per topic or per partition. Per partition already exists in §3.15.7, for its own reason and tied to its own condition; and a pause per topic would be routing—deciding which work comes in and which does not—which is the kind of decision this architecture gives no one, not even the operator.
+
+### 3.19. Scaling the partitioning: rebalancing without coordination
+
+Partitioning is the network's scaling axis, and §2.1 declares it as an axis separate from being structural: the partitioned components come up with their ring from startup, each with its own membership criterion and its own section where that criterion is defined. The only thing they have in common is **the ring scheme and what happens when the number of partitions changes**—not the number itself, which is private to each component. The count grows and shrinks with load, without coordination between components and without any of them needing a procedure of its own.
+
+* **Each partitioned component has its own number of partitions.** The Task Broker partitions by `topic` (§3.1), the Tracing Collector by `TraceID` (§3.10), the Spawner and the Network Monitor by `topic` with their own membership criterion (§3.13.1, §3.12.1). The **scheme** is common—consistent hashing, so that adding or removing partitions moves `K/N` of the keyspace instead of reshuffling the whole map—and the **size of the ring is an agreement among the instances of a single component**, which no other needs to know. What allows it is that the Bus is pub/sub: the deterministic routing of `node_review`, `node_query` or `trace_query` is **self-selection**—every instance sees the event and each one evaluates a predicate against its own range—so the emitter never computes the partition of whoever answers.
+* **Membership is derived from the live membership of the substrate.** Scaling is deploying one more instance; shrinking is removing it. The orchestration substrate knows who is alive—the same one to which §3.14.1 delegates the identity and replacement of the structural components—so no new parameter or propagation channel is needed.
+
+  **Whoever operates the deployment is the one who executes that deploying or removing**, or the platform's autoscaler when there is one: no component of §2.1 sizes rings, and none needs to. That the count *"grows and shrinks with load"* describes what this scheme admits without coordination—which is why rebalancing needs no procedure of its own—and not a function the network executes on itself. A platform without an autoscaler leaves the number where the deployment put it, and that breaches nothing: the ring still covers the whole key space, which is the only thing any mechanism of this document depends on. The number therefore stays outside the Global Configuration (§2.3) and outside per-trace pinning, and what the latter preserves is the invariant that a single instance owns each topic (§3.13.1).
+* **An instance does not serve a range until it can read that range's state, and a range's state lives where a successor can read it.** It is the only requirement rebalancing adds, and it governs all the partitioned components. Each one declares how it meets it where it lives: the Tracing Collector in §3.15.7, the Spawner in §3.13.1, the Task Broker in §3.1 and the Network Monitor in §3.12.1.
+
+**Credentials do not move.** A topic that changes owner does not force re-provisioning the fleet the previous owner created, because every credential verifies against the deployment root and not against the instance that signed it (§3.14.2, §3.13.1).
+
+While the membership view converges, a range can momentarily have two owners or none, and neither of those conditions needs a new mechanism. With two owners, the writes at stake are idempotent or are arbitrated where it matters: the Task Broker's award is atomic by definition (§3.1) and the Spawner's only expensive decision—provisioning on a niche—closes with a write-if-absent write (§3.13.1). With no owner, it is a liveness condition of the substrate: the Task Broker treats the absence of Tracing Collector coverage with `budget_coverage_policy` (§3.15.7), and that of the Spawner shows up as a vacancy that persists (§3.13.2).
+
+What is lost when moving a partition is a derived accumulated count, never a decision: counts re-derivable from the stream, whose reset costs a bounded delay and nothing more. The inventory per component lives where each one lives (§3.13.1, §3.12.1).
+
+Rebalancing does not need the network paused: `drain` (§3.18) orders the movement and saves re-announcements, and nothing in the procedure depends on it.
