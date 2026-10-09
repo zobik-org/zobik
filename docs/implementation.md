@@ -1212,3 +1212,233 @@ Each part of the assertion of §3.12.3 is a part of the condition:
 * **Only the Logic Container's.** The Integration Sidecar has a fixed reservation from the platform; an `oom` of its own is a defect of the binary and not something a larger reservation from the blueprint corrects.
 * **Without `min_observations`**, like `notice_provenance`: what is asserted is a fact, and a single death is enough to know the reservation does not suffice.
 * **It almost never repeats on the same node.** The Spawner replaces N with another instance with a larger reservation (§3.13.10), and the next death, if there is one, is of another `node_id`. The exception is N waiting for the operator's answer, whose reviews the Spawner closes without action (§3.13.10).
+
+## 6. Deployment: the operator console and `zobik init`
+
+It answers to the deployment criterion of theses 3 and 8—one instruction, on one person's machine—and to what the architecture assigns to the act of deployment: minting and keeping the root (§3.14.2), bringing up what exists before the first request (§5.1), verifying the clauses of §3.14.1 and shutting down the network in order (§3.13.8).
+
+**Someone without technical knowledge brings up the network answering only a username and a password; someone with it performs the same act with more input.** The expert has no path of their own: they have a deployment file whose keys all come with a default value (below, *The deployment parameters*).
+
+### The operator console
+
+**`zobik console` runs on the host as a user service, outside the network.** It is the only process that:
+
+* talks to the orchestrator to bring up, update and shut down the structural components, with the same driver the Spawner uses for the nodes (row 4);
+* keeps the root and signs with it (below);
+* writes the Secret Store (row 18) and the rate tables (§8.5);
+* serves the panel at `http://localhost:<port>`.
+
+**Those capabilities cannot live in a node.** A node that redeploys the structural components can replace the Task Broker that verifies the root, and one that keeps the root puts it within the network's reach: that way the network mints for itself the authority that controls it (§3.14.2). Outside the network, regaining control remains possible through the deployment (§3.14.2). The console keeps running with the network shut down, so it is also what starts it up again.
+
+**The panel brings together the deployment's two channels at a single address, and each one keeps its credential.** The work area is the Entry Node's interface: opening requests and answering the `hitl_contact_user` queries. The operation area is the Operator Channel's: the administration affordance (§3.17.1), the queries of its audience and the view of the network—the fleet through `node_query`, the library through `node_catalog_query`, the topics through `topic_catalog_query`—, with the link to the tracing backend's UI (row 17). The configuration change goes out through an entry different from the one that opens traces, as §3.17.1 requires.
+
+**The work area keeps each conversation in the console**, and with each message it sends the Entry Node the previous ones and their attachments as context of the request (§3.5.1). It is the person's side, where §3.4 puts the history. The operation area's affordances come from forms that stand on their own, so the Operator Channel opens its traces without context.
+
+**Everything that has a topic goes through the Bus; outside it, only the acts of deployment**: the secrets, the rates (§8.5), the update, the startup and the shutdown, and the ingress tunnel (§2.3). The panel writes secrets and never shows them back, and the value goes through neither the Bus nor the Context Store (§3.16.5).
+
+**The command line is another client of the same console.** Panel and command line perform the same acts, so what the expert automates is what the person does from the panel.
+
+**The panel requires a session**, because the root is behind it: a process on the machine or a browser page that calls `localhost` signs nothing without the username and the password. The root's perimeter is the host, which is the person's machine.
+
+**The panel's two channels go first and last in their audience** (§3.5.2): their `attempt_window` is round 1 and the final one. In round 1 they take a query only with the console connected, and let it go if the session closes without an answer—`unanswered` if the panel showed it, `undelivered` if not—, so an absence escalates to the audience's other channels. In the final round they retain it until the console connects, and close the one that exceeds `hitl_response_window` like any channel. On sign-in, the panel shows those that expired while nobody was there.
+
+### The root and the split Operator Channel
+
+**`zobik init` generates the root on the host and stores it encrypted with the operator's password.** It is the Ed25519 pair of thesis 9, and the key that encrypts it is derived from the password with Argon2id. The username and the password are the only thing `zobik init` asks the person. On sign-in, the console decrypts the root in memory, and discards it on sign-out or after `session_idle_timeout` without activity (below, *The deployment parameters*). Changing the password re-encrypts the root, and the network does not find out.
+
+**Nothing that runs without a person uses the root.** The root signs in each operator act (§3.14.2) and in the acts of deployment that issue role material—`zobik init` and an update—, which the person triggers from the console with the session open. What the network needs with nobody present is signed with the account's scoped signing keys (row 1): the platform identity of each structural component, which the console renews, and that of each node, which the Spawner renews (row 4). A role that restarts keeps its key and its certificate in its volume. So the machine restarts and the network comes back up without anyone entering the panel.
+
+**A structural component's platform identity is valid for a year, and the console renews it at startup and once a day while it runs.** The year is the longest console absence the network tolerates: on Linux the engine relaunches the roles at boot, and the console, which is a user service, only runs on sign-in. With a node identity's short life (§1.2.4), a role that comes back after a few hours without the console would bring an expired identity and the NATS server would reject it. The short life answers to the fleet, which is large, ephemeral and runs emergent code; the structural components are few, fixed, run the image's code, and their key stays in a volume that, outside its container, only the Spawner reaches (below, *The roles of the binary*).
+
+**The role reads its JWT from the volume on each connection.** The NATS server cuts the connection when the JWT it was opened with expires, and the role reconnects with the one the console left.
+
+**An act of deployment that leaves a structural component's identity unused revokes it in the account's JWT**, so the extinction of §3.14.1 does not wait for the year.
+
+**The Operator Channel has two halves.** The one that signs lives in the console: it has the root, assembles each act with the person and attaches the proof to it (§3.14.2). The one that takes part in the network is the `channel` role with the `operator` audience (below, *The roles of the binary*): it connects to the Bus with its platform identity, proposes on `hitl_contact_operator` with a credential the root signs once in `zobik init`, and publishes the acts the console hands it already signed over a local connection. §3.14.2 fixes that only the deployment's channel signs; where the key is within that channel is decided by the implementation, and in the console the root stays outside every container.
+
+**The backup serves to move the network, not to recover the password.** The panel offers to download the encrypted root, which is useless without the password. With the password forgotten, the root is lost and has to be replaced. Replacing it is an act of deployment:
+
+* it mints a new root and issues again what hung from the old one: the Bus account, the role certificates and the credentials of the structural components;
+* it takes down the fleet, which comes back through vacancy with credentials signed under the new root (§3.14.2);
+* it leaves the delegated channels to be brought up, which come back with a new `node_provision` (§3.13.8).
+
+The Catalog, the blueprints and the configuration history are data and not authority, so they survive. A password recovery code is an option of the deployment file and not the default, because it shows the person a secret they have to keep.
+
+**A second user who signs is a second channel of the deployment** (§5.1): an act of deployment from the console adds it, never a request from inside the network.
+
+### The roles of the binary
+
+**`zobik` is a single binary with subcommands.** `zobik init` is the single instruction (below); `zobik console` is the user service the installer registers; `zobik run --role=<role>` is what each role container runs; and the rest of the subcommands are clients of the console.
+
+**Each structural component of the network is a role, and each role runs in its own container**, with the same image and another invocation. The image also brings the Trivy binary, which only the `scanner` role invokes (row 19). One container per role gives each one its platform identity (§3.14.1), its volume with its key (above) and its restart. What a role can do is fixed by its container's credential and access, not by the code the image brings: the Config Store's container brings the Spawner's code, but not its key or the Docker API.
+
+| Role | Component | Scope | Credential besides the platform identity | Access besides the Bus | Waits for |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `channel --audience=user` | Entry Node (row 2) | network | the channel's, minted in `zobik init` | the local port through which the panel's work area talks to it | `config` |
+| `channel --audience=operator` | Operator Channel, the network half (row 3) | network | the channel's, which the root signs in `zobik init` | the local connection through which the console hands it the signed acts | `config` |
+| `spawner` | Spawner (row 4) | network | `spawner` role certificate | the container engine's socket, Specialty Catalog, the destination of the embedding model's egress entry and its handle in the `secrets` role (§1.2.15, §1.2.18), image registry for deletion (§1.2.16) | `config`, `secrets`, `catalog`, image registry |
+| `config` | Config Store (row 5) | network | — | — | — |
+| `tracing_collector` | Tracing Collector (row 6) | network | — | tracing backend | `config`, tracing backend |
+| `task_broker` | Task Broker (row 7) | network | `task_broker` role certificate | — | `config` |
+| `network_monitor` | Network Monitor (row 8) | network | — | `docker_reader` socket, to read the Active Node Registry (row 14) | `config`, `docker_reader` |
+| `context` | Context Store (row 9) | network | — | the content volume (§1.2.9); the Integration Sidecars reach it through its network interface, without the Bus | `config` |
+| `scanner` | Admission Scanner (row 19) | tenant | — | image registry, to read the image it analyzes; it serves its socket in a volume only `catalog` mounts, without the Bus | image registry |
+| `ingress` | ingress proxy (§2.3) | network | — | host ports, `docker_reader` socket for the channels' events, `secrets` role when the `listener` certificate lives in the Secret Store, the tunnel state volume | `config`, `docker_reader`, `secrets` |
+| `secrets` | Secret Store resolver (row 18) | network | — | the Secret Store file and the `age` key, which the console writes; the Integration Sidecars, `ingress` and `spawner` reach it through its network interface, without the Bus | — |
+| `docker_reader` | bounded read of the container engine (below) | network | — | the container engine's socket; it serves its own in a volume only `network_monitor` and `ingress` mount, without the Bus | — |
+| `catalog` | Specialty Catalog (row 11) | tenant | — | the SQLite file volume; image registry, for the retention tag and the `artifact_size` (§1.2.16); `scanner` socket; the tenant's networks reach it through its network interface, without the Bus | image registry, `scanner` |
+| `tenant_link` | link to the tenant-wide pieces (*The tenant CA, the link and the join code*, below) | host | — | the aliases of the pieces on another host; a `127.0.0.1` port for the container engine; the tenant CA; the Tailscale account and its state volume, between hosts; without the Bus | — |
+
+**Every role that uses the Bus also waits for the NATS server**, and the *Waits for* column names the rest. What waiting is, *The health of the roles* fixes (below).
+
+**Only the Spawner mounts the container engine's socket in full.** The Docker API does not distinguish reading from writing: whoever mounts the socket creates, deletes and executes containers, and with that brings one up without confinement or reads the volume of any role, which is the authority §3.13.1 reserves for the Spawner. The Network Monitor and the ingress proxy only read—the Active Node Registry's labels (row 14) and its events—, but they process what comes from outside the structural components: the Monitor, the events the emergent nodes publish; the proxy, requests from the internet. With the socket mounted, an exploitable bug in either one compromises the whole host.
+
+**Both read through the `docker_reader` role**: a reverse proxy on `net/http/httputil`, like the ingress one (§2.3), which mounts the engine's socket and serves another one in a volume of its own. It lets `GET` through on a closed list of routes, which it compares literally after the version prefix, and answers 403 to everything else:
+
+* `/containers/json`, which brings the labels, the name and the network address of each container: the Monitor's roster and the destination of the proxy's forwarding;
+* `/events`, which brings the container's labels in each event;
+* `/_ping` and `/version`, with which the client negotiates the API version.
+
+**No read that returns a container's content passes the filter.** `GET /containers/{id}/archive` and `/export` return its filesystem—including the mounted volumes, like the one that keeps each role's key—, `/logs` what the process wrote, and `/containers/{id}/json` its environment and its mounts. That is why the filter is by route and not by method, and why no generic socket proxy like `docker-socket-proxy` is used, which enables by API section: enabling `containers` also opens those routes.
+
+**What `docker_reader` receives comes only from `network_monitor` and `ingress`**, because only they mount its volume, and the only thing it evaluates is the list of routes.
+
+**The Integration Sidecar is a separate binary from the same codebase, `zobik-sidecar`, with its own image** (row 12). It runs once per node, so what it weighs is multiplied by the fleet, and it brings only what is its own.
+
+### The off-Bus interfaces
+
+**The protocol of each interface is decided by who calls it:**
+
+| Interface | Who calls it | Protocol |
+| :--- | :--- | :--- |
+| `context` (row 9) | the Integration Sidecars | gRPC |
+| `secrets` (row 18) | the Integration Sidecars, `ingress` and `spawner` | gRPC |
+| `channel` | the console | gRPC, over a port published only on `127.0.0.1` |
+| `catalog` (row 11) | the tenant's Spawners, the Forge's Evidence Collector and Publisher (§7.4) and the console | HTTPS |
+| `scanner` (row 19) | `catalog` | gRPC, over a Unix domain socket in a volume only `catalog` mounts |
+| the Integration Sidecar of a channel with ingress | `ingress` (§2.3) | HTTP |
+
+**The Context Store and `secrets` are reached directly, outside the NATS server.** The heavy content does not go through the broker, which is the reason for §3.4. That is why they do not use NATS core's request-reply, which meets the letter of *"off the Bus"*—no envelope, no stream, no observers—and loads the server with the same megabytes. `secrets` uses the same protocol even though its requests are small, so that the network's internal services have just one.
+
+**The console reaches the channels through a `127.0.0.1` port**, because a Unix domain socket does not cross the edge of the engine's VM (§2.1). **`catalog` goes over HTTPS** because the Forge's members impose it, as they reach it through egress with the `https` adapter and its declarative mapping (§1.2.12, §3.16.2). **`ingress`'s forwarding is `httputil`'s HTTP** and does not authenticate whoever forwards, because the verification is over the message (§2.3).
+
+**No container of the network has `NET_RAW`.** The Spawner and the console remove it (`--cap-drop=NET_RAW`) in the Integration Sidecars, in the roles and in the NATS server; in the Logic Container `--cap-drop=ALL` already removes it (§2.2). Docker gives it by default, and with it a container on the bridge network reads another's traffic or impersonates it. Without it, only whoever creates the containers assigns each role's name, so the traffic within the host—the Bus, the Context Store, `secrets` and `ingress`'s forwarding, which can carry the secret a notification is verified with (§2.3)—goes without TLS, and the network has no CA or role certificates. The only CA is the tenant's, and it certifies only the tenant-wide pieces (*The tenant CA, the link and the join code*, below).
+
+**Whoever calls over gRPC authenticates with a handshake when opening the connection.** The role sends a nonce; the caller returns its user JWT and the nonce signed with its platform identity's key; the role verifies that this network's account signed the JWT, that it is current and that the signature is from the nkey the JWT names. Comparing the account leaves out a node of another network of the tenant—the dedicated Forge—without depending on the token or the credential it presents rejecting it later. The connection stays authenticated as that identity, with the same mechanism by which NATS authenticates on connecting and with no new material for the caller (thesis 9).
+
+**The caller's role comes from the scoped signing key that signed its JWT**, which is one per role (§1.2.10), and the console has its own. It is what lets `secrets` accept from each role only its handles (§1.2.18), and lets the channels recognize the console.
+
+**The connection lives as long as the JWT.** The role cuts it when the JWT it was opened with expires, like the NATS server (*The root and the split Operator Channel*, above), and the caller reconnects with the renewed one. So the extinction of §3.14.1 also applies outside the Bus: a decommissioned node loses access when its JWT stops being renewed, even if it keeps the connection open.
+
+**The console authenticates to the channels with a platform identity of its own**, whose key it keeps encrypted with the password, like the root, so the connection exists only with the session open. It is what prevents another process on the machine from opening traces through the Entry Node, reading what the two channels show the person or answering their queries: whoever handles the connection answers on behalf of the person, egress human gate included (§3.16.4).
+
+### The Docker network
+
+**Each network runs on its own Docker bridge network, `zobik-<network>`**, which `zobik init` creates. On it go the NATS server, the network-scope roles and the Integration Sidecars of all its nodes. Two networks on the same host—a network and its dedicated Forge—end up on different Docker networks and do not reach each other.
+
+**`tenant_link` connects to the Docker network of each network on the host**, and on the tenant's host so do the containers of the tenant-wide pieces, because their aliases live there (*The tenant CA, the link and the join code*, below).
+
+**Each role is reached by its role name.** `config`, `context`, `secrets` and the others are aliases on the Docker network, and the NATS server is `nats`; the container's name also carries the network (`zobik-<network>-config`), because Docker requires it to be unique on the host. Each service listens on a fixed port the binary brings, and the NATS server on its standard port, 4222. So the Integration Sidecar reaches the NATS server, `secrets` and the Context Store at the same address in every network. That only whoever creates the containers assigns those names is upheld by the absence of `NET_RAW` (*The off-Bus interfaces*, above).
+
+**The Integration Sidecar of a channel with ingress listens for `ingress`'s forwarding on a fixed port of `zobik-sidecar`**, the same in every channel, so `ingress` reaches it with the container's address it already reads from `/containers/json` (§2.3).
+
+### The service between the console and the channels
+
+**The console is to the `channel` role what a Logic Container is to its Integration Sidecar** (§3): it decides what to open and what to answer, and the role assembles the events, retains the tasks and takes the content to the Context Store. That is why the service reuses the NRI's messages. Console and roles come from the same version of the binary (*Updating, shutting down and starting up*, below), so sharing them does not tie different versions together. The service is the same in both of the panel's channels; what changes is the audience each one serves and the topics it opens.
+
+```proto
+syntax = "proto3";
+package zobik.channel.v1;
+
+import "zobik/nri/v1/nri.proto";
+
+service Channel {
+  rpc Attach(stream ConsoleMessage)         returns (stream ChannelMessage);
+  rpc Open(stream OpenTrace)                returns (zobik.nri.v1.OpenAck);
+  rpc Answer(Answer)                        returns (AnswerAck);
+  rpc ReadContext(zobik.nri.v1.ContextRead) returns (stream zobik.nri.v1.Chunk);
+  rpc Purge(zobik.nri.v1.PurgeRequest)      returns (zobik.nri.v1.PurgeAck);
+}
+
+// console → role, over Attach
+message ConsoleMessage {
+  oneof body {
+    Shown                 shown    = 1;  // the panel showed a query to the person
+    zobik.nri.v1.Received received = 2;  // confirms an expired by its delivery_id
+  }
+}
+
+message Shown {
+  string task_id = 1;  // the query
+}
+
+// role → console, over Attach
+message ChannelMessage {
+  oneof body {
+    zobik.nri.v1.Delivery consultation = 1;  // task.assigned of a query, without the scope token
+    Expired               expired      = 2;  // query the role closed without an answer
+  }
+}
+
+message Expired {
+  string delivery_id    = 1;
+  string task_id        = 2;  // the query
+  string failure_code   = 3;  // unanswered | undelivered
+}
+
+// Opening a trace: the payload and then the bodies
+message OpenTrace {
+  oneof body {
+    OpenHeader header = 1;  // first message
+    Body       body   = 2;  // opens a body; the chunks that follow it are its own
+    bytes      chunk  = 3;  // before the first Body, of the payload
+  }
+}
+
+message OpenHeader {
+  string topic     = 1;  // one of the channel's entries
+  string task_id   = 2;  // TaskID of the entry subtask in a signed act; empty otherwise
+  bytes  data      = 3;  // JSON of the entry subtask's data
+  string workspace = 4;  // empty if the request does not use it
+}
+
+message Body {
+  string name       = 1;
+  string media_type = 2;
+  bool   context    = 3;  // from the conversation's context, not from the request
+}
+
+message Answer {
+  string task_id = 1;  // a query the role retains
+  bytes  data    = 2;  // JSON of the answer
+}
+
+message AnswerAck {}
+```
+
+**`Attach` is the console's session**, and it is what decides whether the channel proposes in round 1 (*The operator console*, above). On opening it, the role sends it each query it retains, and afterwards each one it wins; the console replaces what it was showing with them. A query is not confirmed: the console recognizes it by its `TaskID` every time it arrives.
+
+**`Shown` is what separates `unanswered` from `undelivered`.** The console sends it when the panel has shown the query to the person. If the session closes or `hitl_response_window` expires without an answer, the role closes the query `unanswered` if it received `Shown` and `undelivered` if not (§3.5.2).
+
+**Every query the role closes without an answer reaches the console as `expired`**, which is confirmed with `Received`. The role retains the notice until the confirmation, so that of a query that expires without a session arrives with the next session: it is what the panel shows on sign-in.
+
+**`Open` opens a trace like the NRI's** (§3): the role generates the `TraceID`, mints the root's token with its credential (§3.14.3), writes the payload and the bodies in the `TraceID`'s section and announces the entry subtask on `topic`, with the references in `data.context_ref` and `data.bodies`. The work area sends the request's text in the `data`, its attachments as bodies, and the conversation's previous messages with their attachments as bodies with `context` (§3.5.1). The topic is one of the channel's entries—`intake` in the Entry Node, the topics of §3.17.1 in the Operator Channel—, and it rejects another with `INVALID_ARGUMENT`.
+
+**In a signed act, the console mints the `TaskID` of the entry subtask**, because the proof covers it (§3.14.2) and the console signs before sending. It puts it in the header and the proof in `data.operator_proof` (§9). Outside the signed acts the field goes empty and the role mints the `TaskID`.
+
+**`Answer` closes a query with `task.completed`** and the `data` the console assembles: the `decision` and, in the `reject` of an outcome delivery, its `failure_reason` (§3.5.2, §3.5.4). The role does not validate the `decision`, which the requester treats as silence if it is not in `options` (§3.5.2). It rejects a `task_id` the role does not retain with `FAILED_PRECONDITION`. **The console answers a delivery with `ack` on showing it**, with `received`: showing the outcome is delivering it.
+
+**`ReadContext` reads what the queries bring**—the result of an outcome, the listing of `node_catalog_query`—, with the token of the task it names: a query the role retains or a root it opened, as in the NRI (§3). **`Purge` deletes a trace the console opened** with its root's token (§3.4); it is what the work area executes when the person deletes a conversation.
+
+### The health of the roles
+
+It fulfills the clause of §3.14.1 that asks the platform to bring back up a structural component that stopped working.
+
+**Each role tolerates the absence of what is in its *Waits for* column.** It retries until it reaches it, and meanwhile it serves nothing but its health check. The console brings up the roles in that order, but no role depends on it: the engine relaunches the containers in no order at boot (below, *Updating, shutting down and starting up*), and the NATS server can restart with the network in operation.
+
+**Ready and alive are different signals, and each has its mechanism:**
+
+* **Ready** means the role has reached what is in its column and loaded what it reads: the Config Store, a current version of the Global Configuration; the Task Broker, its consumers (§1.2.1). The container's `HEALTHCHECK` reports it, running `zobik health` against a Unix domain socket of the process itself, without opening ports. The console waits for a role's `healthy` state before bringing up those that wait for it, and for that of all of them to accept an update.
+* **Alive** means the role makes progress. Each loop of the process marks progress between one operation and the next, each operation that can block carries a deadline, and an internal watchdog terminates the process when a loop goes past its deadline without marking. The `unless-stopped` restart policy brings it up again. A role waiting for a dependency keeps marking progress: it is alive and not ready, and it is not restarted.
+
+**Alive depends on nothing outside the container.** On Docker without Swarm, an `unhealthy` container is not restarted, so restarting on the check would require the console running, and the network also runs without it. For the same reason a heartbeat over the Bus is left out: with the NATS server down the signal would be lost, and it would watch a structural component from the network, which is what §3.13.1 and §3.12.1 exclude.
