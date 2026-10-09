@@ -1442,3 +1442,217 @@ It fulfills the clause of §3.14.1 that asks the platform to bring back up a str
 * **Alive** means the role makes progress. Each loop of the process marks progress between one operation and the next, each operation that can block carries a deadline, and an internal watchdog terminates the process when a loop goes past its deadline without marking. The `unless-stopped` restart policy brings it up again. A role waiting for a dependency keeps marking progress: it is alive and not ready, and it is not restarted.
 
 **Alive depends on nothing outside the container.** On Docker without Swarm, an `unhealthy` container is not restarted, so restarting on the check would require the console running, and the network also runs without it. For the same reason a heartbeat over the Bus is left out: with the NATS server down the signal would be lost, and it would watch a structural component from the network, which is what §3.13.1 and §3.12.1 exclude.
+
+### Installation and `zobik init`
+
+**It installs like any program.** A native package per operating system (below, *Distribution*) installs `zobik` and registers the console as a user service. `zobik init` does the rest, and it is the single instruction of theses 3 and 8.
+
+**Before touching anything, it verifies that the machine can**: RAM and free disk against the reference machine (thesis 8), virtualization enabled, administrator permissions where the installation asks for them and free ports. Whatever fails it explains in plain language, and it ends without having changed anything.
+
+**It installs what is missing with a single consent, and reuses what is already there:**
+
+* **The container engine:** Docker Engine on Linux, WSL2 with Docker Engine inside on Windows, Colima on macOS. Docker Desktop is out because of thesis 4: it is not open source and it is paid for medium and large companies. On Windows, WSL2 may ask for a restart, and `zobik init` resumes on its own when the machine comes back.
+* **The memory of the engine's VM**, on Windows and macOS: `memory_ceiling` minus what runs natively on the host, which is the console. That way the VM enforces the ceiling of thesis 8 on everything that runs in containers. On macOS the VM is a Colima profile of Zobik's own; on Windows the limit is for the whole of WSL2, and not only for Zobik's distribution, so `zobik init` writes it only if the person has not set one.
+
+**Then it mints, provisions and brings up, in this order:**
+
+1. The root (above), the Bus account with its scoped signing keys (row 1), the `spawner` and `task_broker` role certificates (rows 4 and 7), the credentials of the Entry Node and the Operator Channel, and the `age` key with the empty Secret Store file (row 18).
+2. The substrate: the NATS server at the version the binary pins (§1.2.1), the streams per family and the Task Broker's consumers (§1.2.1), the KV buckets of rows 5, 7, 8 and 10, and the rates bucket, empty (§8.5).
+3. The tenant CA and the tenant-wide pieces—Specialty Catalog with its Admission Scanner and its ruleset, image registry and tracing backend—, or the connection to the existing ones if the network joins a tenant (thesis 6); and the host's link (below, *The tenant CA, the link and the join code*).
+4. What the network brings without running it (§5.1): the `v0` of the Global Configuration with its schema, the Integration Sidecar image with its `runtime_interface_range`, and the Logic Container base image in the tenant's Registry (row 13).
+5. The structural roles, each one when what is in its *Waits for* column is ready (above, *The health of the roles*).
+6. The Forge, according to the mode the deployment file sets (below).
+7. The verification of what is verifiable in each clause of §3.14.1 that §1 assigns to it—confinement (§2.2) and the ingress proxy (§2.3)—, and the measurement of idle against thesis 8: the memory of each container according to the engine, plus that of the console. The panel shows a class that exceeds its figure, with the row that exceeds it, and the deployment goes on: what fails is the row, which declares its way out in thesis 8. `fleet_capacity` comes from the same measurement, and it is `memory_ceiling` minus the measured idle. At the end it opens the browser on the panel, with a single-use link that leaves the session signed in.
+
+**The vector space is assigned from the panel, and it is the first thing the console asks for.** The network is born `frozen` and without `embedding_model` (§5.1). The operator chooses the endpoint—a hosted provider, or a local runtime they brought up on their own—and the model with its prefix convention, and the console writes the key to the Secret Store when the endpoint asks for one, and the rate table when the endpoint charges (§8.5), registers the egress entry with the interface of row 15 and assigns `embedding_model`, all in one `config_change`. In the same step it offers to deploy the Forge (below), which asks for the language model's key, and at the end it opens admission in a later `config_change`. The Forge goes after the space because the closure of its bundle compares embeddings (§3.13.6).
+
+**The own Forge is deployed from the panel, as an act of the console after `zobik init`**, because its nodes need a language model and the key belongs to the operator. `zobik init` registers in the Catalog the seed bundle of each variant the distribution brings (§7.1)—it comes in through deployment and not through import (§6.1)—and brings up none of its members. In the panel, the operator chooses the variant and the console:
+
+1. reads the members' `egress_required` and `ingress_required` and, for each slot without an entry that implements it, offers the proposed entry the variant brings (§7.2, §7.4);
+2. asks for the API key, writes it to the Secret Store and registers the entries through `config_change`: the model's, the infrastructure ones—which ask for no key—, the ingress one of the derivation entry and the egress one with which the Spawner reaches it (§6.2);
+3. computes the bundle's closure against the current `task_similarity_floor` (§3.13.6), and does not go on if it does not close;
+4. emits one `node_provision` per member (§3.17.1, §3.13.8).
+
+The entries are registered before provisioning because a `node_provision` with an unassociated slot closes with the reason and does not open §3.16.5 (§3.13.8). With a dedicated Forge, the egress entry that is registered is that of the tenant's other network (§6.2); without a Forge, there is nothing to deploy.
+
+**Running it again converges.** It creates what is missing and leaves what exists, and it never mints the root again nor the material that hangs from it: replacing it is the explicit act above. That is why an interrupted installation—a power cut, the WSL2 restart—is resumed with the same instruction.
+
+**What it emits is the effective deployment file**: each parameter of the table below with the value it took, including those left at their default. It is the input the expert edits and hands back to `zobik init`, and the way they discover what they can adjust. A parameter is changed by editing the file and running the instruction again; one that requires a procedure of its own declares it in its row. The console brings up the structural components by talking to the driver, so there is no Compose file or separate manifest to keep in sync with it.
+
+### The tenant CA, the link and the join code
+
+**The tenant-wide pieces present themselves with certificates from a tenant CA.** The `zobik init` that creates the tenant mints it, together with the Catalog administration credential (§1.2.11), and the console keeps it encrypted with the password, like the root. Each piece has a fixed name, the same on every host: `catalog.zobik.internal` the Specialty Catalog, `registry.zobik.internal` the image registry and `tracing.zobik.internal` the tracing backend. `.internal` is the domain ICANN reserves for private use, so no public name matches them.
+
+**The CA only signs names under `zobik.internal`.** A *name constraint* in its certificate fixes it, and the TLS client enforces it. That is why whoever has it cannot impersonate a public destination, and the Integration Sidecar's `https` adapter adds it to the system CAs on every call (§1.2.12).
+
+**The CA and the pieces' certificates are valid for ten years**, and the console of the tenant's host issues those of the pieces again on each update (*Updating, shutting down and starting up*, below). Replacing the CA is an act of deployment, like replacing the root: the console mints another one, issues the certificates again, and each network on another host receives it with a new join code.
+
+**Everyone who reaches the pieces by their name receives it**: the Integration Sidecar in the startup configuration the Spawner hands it (§1.2.4), and the `spawner` and `tracing_collector` roles in the volume the console writes for them when bringing them up. The container engine does not need it, because it pulls the images through the link (below).
+
+**Each host of the tenant runs a link, the `tenant_link` role.** On the tenant's host, the names are aliases of the pieces' containers, and the link receives the connections of the other hosts and forwards them to the pieces. On another host, the names are aliases of the link, which forwards each connection to the link of the tenant's host. The aliases live in the Docker network of each network on the host (*The Docker network*, above). The link routes by the server name the connection asks for (SNI) and by the port, without terminating TLS: the client verifies the certificate of the piece itself, and the link does not see what travels.
+
+**Between hosts, the link uses the Tailscale account of the ingress tunnel** (§2.3), embedded with `tsnet` in the same way. The link of the tenant's host joins the account as the device `zobik-tenant-<tenant>` when the operator generates the first join code, and receives only from devices of the account; that of another host joins on applying the code. Tailscale gives a stable name even if the hosts are on different networks or change address, and connects directly when they share a LAN. A single-host tenant does not need the account.
+
+**What stays in Tailscale's hands is availability.** The connection is end-to-end TLS against the tenant CA, so whoever controls the account's coordination can cut the path, but cannot impersonate a piece or read the credentials that travel inside.
+
+**The container engine pulls the images through the link, on `127.0.0.1`.** Docker resolves names with the host's DNS, without seeing the aliases of its networks, and accepts a loopback registry without TLS. The link publishes the registry on a `127.0.0.1` port (`ports`, below) and opens toward it a TLS connection it verifies with the tenant CA. The engine verifies what it pulls by digest (row 16), so the cleartext stretch, which does not leave the host, cannot change the image. The `artifact_ref` resolves the same way on every host of the tenant.
+
+**A network on another host joins the tenant with a join code.** The operator generates it in the panel of the tenant's host for a named network, and the console registers the hash of its secret in the Catalog (§1.2.11). The code carries:
+
+* the name of the tenant host's link in the Tailscale account;
+* the SHA-256 fingerprint of the tenant CA;
+* a single-use secret, which expires after 24 hours.
+
+**The person pastes the code into the other host's `zobik init`**, as the value of `tenant` (below). `zobik init` brings up the link and shows the Tailscale sign-in link, so that the person signs in with the same account. Then it takes the CA from the chain the Catalog presents, accepts it if the fingerprint matches the code's, and redeems the secret at the Catalog for the network's credentials, which it stores in the Secret Store. The redemption does not go through the console of the tenant's host, so a network joins even if that console is off.
+
+### The deployment parameters
+
+They are the keys the network cannot change from inside. Everything else is Global Configuration: it is born in `v0` and is edited from the panel through `config_change` (§3.14.4).
+
+| Parameter | Default | What it fixes |
+| :--- | :--- | :--- |
+| `tenant` | a new one | Create the tenant-wide pieces, point at those of a tenant on the same host, or join one on another host with a join code (thesis 6, *The tenant CA, the link and the join code*). |
+| `forge` | `own` | `own`: the network is its own Forge. `dedicated`: the Forge is another network of the same tenant, dedicated to building nodes. `none`: the network derives no new nodes (§6.1). |
+| `ports` | free, chosen by `zobik init` | The ports of the panel, of the ingress proxy (§2.3) and of the registry on the link (*The tenant CA, the link and the join code*); they stay fixed in the effective file. |
+| `ingress_tunnel` | off | Receive from the internet through Tailscale Funnel (§2.3). |
+| `work_area_size` | `10G` per node | The ceiling of each node's shared volume, which hosts the work areas; it applies only on XFS with `pquota` (§2.1). |
+| `context_store_size` | `4G` | The ceiling of the Context Store's volume, against the host's disk (§1.2.9). |
+| `context_trace_size` | `1G` | The ceiling of what one trace stores in the Context Store, against the other traces (§1.2.9). |
+| `memory_ceiling` | a third of the host's RAM | The memory the whole of Zobik takes, idle and fleet (thesis 8); on Windows and macOS it sets that of the engine's VM (above). |
+| `fleet_capacity` | `memory_ceiling` minus the idle `zobik init` measures | The capacity the platform dedicates to the fleet (§3.13.10), against which the Spawner admits each node (§1.2.4). It is measured again on each update. |
+| `recovery_code` | off | The password recovery code (above). |
+| `session_idle_timeout` | `30m` | The time without activity after which the console closes the session and discards the root (above). It also decides when an absence escalates from the panel's channels to the others of their audience (*The operator console*). |
+
+### The initial Global Configuration
+
+**`v0` is the instance of the schema's `default` values** (§1.2.5). Its values are calibrated for the reference machine (thesis 8) and a one-person network: traffic of tens of tasks per day, tasks a language model resolves in seconds or minutes, and a person who answers their queries within the day. Every key is changed afterwards through `config_change` from the panel (§3.14.4).
+
+| Key | Value | Why |
+| :--- | :--- | :--- |
+| `auction_timeout` | 2 s | A node's self-selection is a local dot product and the Bus delivers in under a millisecond (row 1): two seconds reach every live node with margin. |
+| `reannounce_backoff_base` | 5 s | With `vacancy_rounds_threshold`, the Spawner intervenes some twenty seconds after the first announcement without a proposal. |
+| `max_reannounce_backoff` | 5 min | A task without a candidate that keeps waiting is re-announced several times an hour, and does not saturate the topic. |
+| `vacancy_rounds_threshold` | 3 | It gives a busy node two re-announcements to become free before the Spawner provisions another. |
+| `task_lease_ttl` | 30 s | A crash is noticed in half a minute, with two lost renewals of margin (below). |
+| `similarity_precision_decimals` | 3 | Two proposals less than a thousandth of cosine apart do not say which node is fitter for the task: at that resolution they tie, and the draw decides them (§3.7.5, step 4). |
+| `task_similarity_floor` | 0.6 | Calibrated against `nomic-embed-text` with its prefixes (§1.2.15), where a task related to a capability falls between 0.6 and 0.8. From there the lifecycle moves it, in steps of `similarity_floor_step` (§4.4). |
+| `agent_similarity_floor` | 0.85 | Two `capability_text` compared on the same side of the matching above 0.85 describe the same specialty in other words. |
+| `topic_similarity_floor` | 0.85 | The same cut as between capabilities: two topics above it name the same purpose. |
+| `embedding_model` | no value | The operator assigns it from the panel (above); while it is missing, the network stays `frozen` (§2.3, §1.2.15). |
+| `embedding_regeneration_backoff` | 5 s initial, doubling, 6 attempts | Some five minutes of retries cover a brief outage of the endpoint or a provider's rate limit; beyond that, the model is down and the Spawner escalates (§3.13.7). |
+| `quality_window` | 30 observations | The `reopen_rate` is read in steps of one thirtieth, and the window fills up in a low-traffic niche. |
+| `min_observations` | 6 | It meets the preconditions against `quality_window` and against `outer_share · quality_window` (§1.2.5), with an outer group of seven or eight tasks. |
+| `evidence_staleness` | 30 days | With `min_observations`, the minimum flow per niche is one task every five days (§2.3), which a one-person network exceeds in its live niches. |
+| `grace_period` | 25 h | The window in which the person rejects an outcome with `acceptance` is `hitl_response_window` (§3.5.4), and the classification has to wait for it to count that rejection as a reopen; the extra hour covers delivery. |
+| `score_floor` | 0.5 | With `w1` = 5, it admits up to one reopen in ten (§5.1). |
+| `w1` | 5 | It takes the score to zero with one reopen in five, and leaves the range that matters—between zero and 10 % reopens—in the upper half of the interval. |
+| `outer_share` | 0.25 | The quarter with the lowest similarity is the edge of the radius, and with `quality_window` it gathers `min_observations`. |
+| `cost_unit` | `USD` | The currency in which language model providers bill. |
+| `egress_registry` | empty | Every entry is an authorization from the operator (§3.16.5); that of the embedding model and those of the Forge are registered from the panel (above). |
+| `egress_lists` | empty | The operator creates them together with the rules that read them. |
+| `ingress_registry` | empty | The Entry Node and the Operator Channel receive through the console (above); the operator registers an audience channel's entry when bringing it up (§3.16.7), and the console registers that of the derivation entry when deploying the Forge (above). |
+| `review_emission_rate` | 12 per hour | It covers within the day the fleet that fits in the ceiling of thesis 8 without reviews occupying the Spawner while it serves vacancy. |
+| `exploration_share` | 0.25 | Three routine reviews per hour go over the fleet within the day, with the spacing `no_action_snooze` gives them. |
+| `max_concurrent_exploration` | 1 | One candidate at a time per partition: each one is one more container against the ceiling of thesis 8. |
+| `max_candidate_maturation` | 60 assignments | A candidate that does not win one in ten assignments of its topic does not gather `min_observations`, and the trial expires. |
+| `usage_window` | 20 assignments | It measures a niche's occupation without waiting for `quality_window` to fill up. |
+| `high_win_rate` | 0.7 | A node that wins seven of every ten proposals is good at the little its floor lets it see; widening it is the bet (§3.13.4). |
+| `node_review_snooze` | 6 observations | Those the candidate needs to mature, if it shares the flow evenly with N. |
+| `no_action_snooze` | 1 day | The first routine round on a healthy node. |
+| `max_exploration_backoff` | 30 days | A node nobody beats is explored again once a month, which is the pace at which models and prices change. |
+| `min_observations_publish` | 30 | One whole quality window. |
+| `score_floor_publish` | 0.75 | With `w1` = 5, one reopen in twenty at most: half the tolerance of `score_floor`. |
+| `trace_budget_cost` | 5 `USD` | It covers tens of calls to a frontier model; a trace that crosses it is a loop or a task the person has to see. |
+| `trace_budget_reopens` | 20 | A loop between nodes that do not spend crosses it in minutes; a healthy trace reopens a few times. |
+| `trace_budget_extension_cost` | 5 `USD` | Each extension doubles the original ceiling. |
+| `trace_budget_extension_reopens` | 10 | Half the original ceiling: a trace that has already reopened twenty times has to ask again sooner. |
+| `coverage_lease_ttl` | 30 s | The same scale as `task_lease_ttl`: a partition without a Tracing Collector is left without coverage in half a minute. |
+| `budget_coverage_policy` | `fail_closed` | The spending belongs to the person who operates the network, and without coverage there is no ceiling (§3.15.7). |
+| `max_successive_candidates` | 3 | Three failed replacements on a niche are a condition the person has to decide on (§3.13.5). |
+| `default_memory_required` | 256 MB | What a Python Logic Container with LangGraph on the base image (row 13) takes up while it works, with margin. |
+| `memory_growth_factor` | 2 | A reservation that falls short is usually far off: doubling it reaches the value in one or two deaths, instead of losing a task at each small step. |
+| `memory_auto_share` | 0.25 | A node that takes up more than a quarter of the fleet evicts several each time it runs; on the reference machine that is some 300 MB, and above that the person decides. |
+| `eviction_pressure_threshold` | 6 | One eviction every ten minutes is already a fleet that does not fit in the machine and takes turns all the time. |
+| `eviction_pressure_window` | 1 h | The scale at which a person notices the network is slow. |
+| `catalog_presence_ttl` | 5 min | Renewing every minute, a network has to fail five renewals in a row to stop showing as present; deletion has no urgency that asks for less. |
+| `artifact_storage_pressure_share` | 0.8 | With 2 GB of capacity (§1.2.16), it warns with some 400 MB free: room for several derivations while the person decides what to delete. |
+| `max_egress_requests_per_niche` | 3 | The counter counts the person's refusals (§3.16.5): three are enough for the niche to stop asking. |
+| `hitl_response_window` | 24 h | A person answers within the day. |
+| `result_delivery` | `acceptance` for `user`; `ack` by default | The rejection of the outcome by whoever requested it is the quality signal of the entry task (§3.5.4); the other audiences acknowledge receipt. |
+| `channel_drain_timeout` | 48 h | Two response windows: enough to deliver the outcome of a trace that closes during draining. |
+| `context_retention_grace` | 7 days | A week to review a closed trace; the person's code and data are not retained longer (§3.4). |
+| `network_admission` | `frozen` | The network has no vector space until the operator assigns `embedding_model`, and opens it afterwards (above, §2.3). |
+| `promotion_margin` | 0.1 | An improvement of less than 10 % over two medians of small windows cannot be told apart from noise (§4.2). |
+| `similarity_floor_step` | 0.05 | It moves the floor in steps that change which tasks the node reaches without jumping from one niche to the neighboring one. |
+| `max_cost_dispersion` | 4 | The cost of a task resolved by a language model has a heavy tail: a p90 of up to four times the median is normal (§4.5). |
+| `max_duration_dispersion` | 4 | The same cut on duration. |
+| `max_idle_share` | 0.8 | The node spends free four of every five assignments another wins. |
+| `no_demand_retention` | 7 days | A node without demand for a week of admission takes up memory another niche uses; archiving is reversible (§3.13.3). |
+| `cost_drift_threshold` | 0.3 | A 30 % rise in the cost median is a change of model or of price. |
+| `duration_drift_threshold` | 0.5 | A provider's latency fluctuates more than its price. |
+| `outer_reopen_threshold` | 0.05 | Five points of reopen between the edge and the center are half of what `score_floor` tolerates. |
+| `outer_cost_threshold` | 0.5 | The edge costs half as much again as the center. |
+| `outer_duration_threshold` | 0.5 | The same cut on duration. |
+
+`runtime_interface_range` carries no calibration value: it comes with the Integration Sidecar image (§2.3), and `zobik init` writes it from there.
+
+**Calibrated together:** `auction_timeout`, `reannounce_backoff_base` and `vacancy_rounds_threshold`, which fix how long vacancy takes (§2.3); `w1`, `score_floor` and `score_floor_publish`, which are read on the same scale (§5.1); `min_observations` and `evidence_staleness`, which fix the minimum flow per niche (§2.3); and `grace_period` with `hitl_response_window`. The similarity floors hold for `nomic-embed-text` with its prefixes: with any other model, recalibrating them is up to the operator (§1.2.15).
+
+**Renewed lifetimes are renewed at a third of their value.** The Integration Sidecar renews its task's lease every ten seconds with `task_lease_ttl`, and the Tracing Collector, in the same proportion, its contention keys on `coverage_lease_ttl` and the budget keys of its live traces on `context_retention_grace` (§1.2.10). So a lifetime survives two lost renewals and expires with the third.
+
+**The Shared Catalog entry is a proposed entry.** The integration is opt-in (§3.13.6), so `v0` does not register it. The binary brings the catalog's interface, its `billing_rule` and these `rules`, and the panel offers them when the operator activates the integration; the operator puts in the `target` and the credential. Prices are in `cost_unit`:
+
+| `when` | `then` |
+| :--- | :--- |
+| `operation == "acquire" && purpose == "exploration"` | `deny` |
+| `operation == "acquire" && price > 50` | `deny` |
+| `operation == "acquire" && purpose == "operator_request"` | `allow` |
+| `operation == "acquire" && price <= 5` | `allow` |
+| `operation == "acquire"` | `operator` |
+| — | `allow` |
+
+Exploration does not buy: an exploration candidate is a bet without evidence (§3.12.1), and the operator decides its spending through `node_catalog_import`. The operator's request is executed without asking, because the operator has already decided it, up to the same cap that governs the rest. Between the two thresholds the network asks (§3.13.6). Querying, promoting and reporting go through with no rule of their own: they move no money, and promoting and reporting already carry the operator's proof.
+
+### Updating, shutting down and starting up
+
+**Updating is an act distinct from `zobik init`**, because it changes the version and carries migrations: the Global Configuration schema comes with the deployment together with the binary that consumes it (§2.3). The console checks whether there is a new version and the panel offers it (below, *Distribution*). With the session open, the console:
+
+1. verifies the signature of the downloaded version;
+2. pauses admission (§3.18) and waits for the streams to be left with nothing pending;
+3. replaces the roles' binaries and, if the new version pins another one, the NATS server (§1.2.1); applies to the configuration what the new schema changes (§1.2.5) and issues again whatever role material is needed;
+4. verifies that each role is ready and reopens admission, or goes back to the previous version if any one is not ready.
+
+The console updates itself at the end. The download leaves from the host and not from the network, so it does not go through the `egress_registry`.
+
+**Shutting down follows the order of §3.13.8**: first the channels that open traces are drained, and at the end the Operator Channel is stopped. The console does not stop: the panel shows the network shut down and offers to start it up. **Starting up** brings up the structural components in the order of the *Waits for* column, without using the root.
+
+**The machine's boot starts the network up again if it was on**, because the engine relaunches the containers with `unless-stopped` (*The health of the roles*) that were not stopped, and shutting down stops them. It relaunches them in no order, and each role waits for what it is missing. On Linux this happens at boot, because the engine is a system service. On Windows and macOS it happens on sign-in, because the engine runs under the user's session (WSL2, Colima): without a session, the network stays off. It is the use thesis 8 fixes, a network that runs alongside what the person does on their machine.
+
+### Distribution
+
+**A version is a signed manifest that lists by digest everything it is made of**: the installation package and the `zobik` binary for each operating system, the roles' image, that of `zobik-sidecar`, the Logic Container base image (row 13), the seed bundle of each Forge variant (§7.1) and the payload schemas (§10.2). The console verifies the manifest's signature and compares the digest of each piece it downloads, so a single signature covers the whole version, and the images carry no signature of their own.
+
+**It is published on GitHub Releases and on the GitHub Container Registry, behind a fixed URL on the project's domain, `https://get.zobik.org`.** The files go to Releases and the images to `ghcr.io`, which are free for an open source project and require no infrastructure of its own. The console knows only `get.zobik.org`, which is a static site on GitHub Pages where the pipeline publishes `latest.json`, and each manifest names where each piece is: moving the storage changes the manifests published from then on, and no existing installation.
+
+**The images are downloaded; the installation package brings only `zobik`.** `zobik init` reads the manifest of its own version, pulls the images it names and pushes the base image to the tenant's Registry (*Installation and `zobik init`*, above). `zobik init` already needs the network to install the container engine, so a package of hundreds of MB would not buy an offline installation.
+
+**The signature is Ed25519 in minisign format, with a project key distinct from each deployment's root.** The `zobik` binary brings embedded the public keys it accepts, and a manifest is valid if one of them signs it. The private key lives in the secrets of the publishing pipeline, which is the only thing that signs. Rotating it is publishing a version signed with the current key that brings the new one in its list, and the next version is already signed with the new one. A leaked key is retired the same way, and each console keeps accepting it until it updates.
+
+**The installation packages also carry the operating system's code signature**: Developer ID with Apple notarization on macOS and Authenticode on Windows. Without it, Gatekeeper blocks the `.pkg` and SmartScreen warns about the MSI, and the person without technical knowledge of thesis 3 does not get past that. The operating system verifies that signature; the console, Zobik's.
+
+**The console discovers a new version by reading `https://get.zobik.org/latest.json`, at startup and once a day while it runs.** It is the manifest of the current version, with the fields that protect the update:
+
+* `version`: the console does not offer a version equal to or earlier than the installed one, so an old, legitimately signed `latest.json` does not make it go back to a version with a known flaw.
+* `expires`: the console rejects an expired `latest.json`, so whoever intercepts the query cannot hide a new version by serving the previous one. The pipeline signs `latest.json` again every week with 30 days of validity. With the file expired, the panel warns that it cannot confirm the network is up to date, and the network keeps working.
+
+There is a single release channel.
+
+**The installation package is a native file per operating system**, and it leaves the console registered to run with the user's session:
+
+| Operating system | Package | The console runs as |
+| :--- | :--- | :--- |
+| Windows | MSI | scheduled task at sign-in |
+| macOS | `.pkg` | LaunchAgent |
+| Linux | `.deb` and `.rpm` | `systemd --user` unit |
+
+**The console is the only thing that updates `zobik`.** At the end of an update (above) it downloads the package for its operating system that the manifest names, compares its digest and runs it; if the package asks for administrator permissions, the operating system asks the person for them, who has the session open. That is why the packages are published standalone and not in an apt, dnf, Homebrew or winget repository: the package manager would also update `zobik`, and would change the binary without pausing admission or migrating the configuration.
