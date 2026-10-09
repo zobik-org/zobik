@@ -1928,3 +1928,187 @@ A rule on `ref` and `force` is what distinguishes pushing to a working branch fr
 With `imap`, the credential is `user:password` and the `source`'s folder belongs to the channel: a message a person opens from another client stays read and the adapter does not fetch it. With `telegram`, the credential is the bot's token. The `offset` confirms everything before it, so what comes after an unresolved message arrives again after a restart, and the Integration Sidecar recognizes it by its `update_id` (§3.16.7). Telegram retains unconfirmed messages for 24 hours: a channel down for longer loses those that arrived in the meantime.
 
 With `slack`, the adapter opens the Socket Mode connection, and the credential is `app_token:bot_token`: the app token opens the connection, and the bot token fetches the thread and downloads the files. Slack distributes the events among the app's open connections, and retries one without acknowledgment before discarding it; the retry brings the same `event_id`, by which the Integration Sidecar recognizes it.
+
+## 9. The signed objects
+
+It answers to thesis 9, which fixes a single format—compact JWS over Ed25519—for everything §3.14 has verified, and to those objects being verified by binaries of a version other than the one that signed them: a credential lives as long as its node, and the proof embedded in it is verified months after it was signed (§3.14.2). This section fixes the header, the fields of each object and how they change.
+
+### 9.1. The header and the chain
+
+| Parameter | What it carries |
+| :--- | :--- |
+| `alg` | `EdDSA` (RFC 8037); the verifier rejects any other |
+| `typ` | the object type: `capability`, `role_certificate`, `operator_proof` or `scope_token` |
+| `kid` | the signer's public key, in the `nkeys` encoding |
+| `signer_credential` | the signed object that accredits the `kid` key, in compact JWS; absent when `kid` is the root |
+
+**The verifier compares `typ` with the one it expects before reading the fields.** The objects share format and root, so without that comparison a scope token presented where a credential is expected would still verify its signature.
+
+**The chain travels in the object.** `signer_credential` carries the object whose `sub` is `kid`, and that one carries its own in turn, up to one the root signs. The verifier has in hand everything it verifies, and no key comes from a store or from a live identity (§3.14.2). It goes in the header because it says who signs and not what the object asserts.
+
+**These are the admitted forms, and any other is rejected:**
+
+| `typ` | Signer | `signer_credential` |
+| :--- | :--- | :--- |
+| `role_certificate` | the root | — |
+| `operator_proof` | the root | — |
+| `capability` | the root: a structural node | — |
+| `capability` | a Spawner | its `role_certificate`, with `role` equal to `spawner` |
+| `scope_token` | a Task Broker | its `role_certificate`, with `role` equal to `task_broker` |
+| `scope_token` | the channel that opens the trace (§3.14.3) | its `capability`; if a Spawner signed it, with an `operator_proof` of `node_provision` that grants `entry_topic` |
+
+It is the depth of the chain of §3.14.2: a structural credential carries no `signer_credential` and an emergent one carries the Spawner's certificate. The `signer_id` the Spawner stamps in the Active Node Registry (§3.11) is the `kid` of the node's credential.
+
+### 9.2. The fields
+
+**From JWT, `sub` and `iat` are used, and no object carries `exp` or `nbf`.** No object expires (§3.14.2), and a library that finds `exp` enforces it on its own (thesis 9). `sub` is the public key, in `nkeys`, of the platform identity the object is bound to (§3.14.1). `iat` is the signing time in seconds since the epoch, and it stays for auditing: no verifier compares it with the clock. The rest of the fields are our own.
+
+**The capability credential, `capability`:**
+
+| Field | Type | What it carries |
+| :--- | :--- | :--- |
+| `sub` | string | the node's platform identity |
+| `iat` | number | the signing time |
+| `topic` | string | the topic the node claims |
+| `artifact_ref` | string | the artifact it runs |
+| `model_id` | string | that of the vector space under which the embedding was generated (§1.2.15) |
+| `capability_embedding` | string | the capability embedding, with the encoding of the `task_embedding` (§1.2.1) |
+| `similarity_floor` | number | the blueprint's floor (§3.13.3) |
+| `attempt_window` | object | the blueprint's, with the shape of the act of registration (§1.2.11) |
+| `egress_grants` | list of `{ slot, entry }` | for each slot of the `egress_required`, the `egress_registry` key it is associated with (§3.16.3) |
+| `ingress_grants` | list of `{ slot, entry }` | for each slot of the `ingress_required`, the `ingress_registry` key it is associated with (§3.16.7) |
+| `operator_proof` | string | the proof of the `node_provision` that brought up the node, in compact JWS as it arrived; only in an emergent `hitl_contact_*` channel or in a node with a `provision` grant |
+
+**A structural credential carries neither `model_id` nor `capability_embedding`.** `zobik init` signs it before the network has a vector space (§6, *Installation and `zobik init`*), and on `hitl_contact_*` the Task Broker does not compare it with any embedding (§3.14.2).
+
+**The proof goes once per credential and covers all its `provision` grants.** The grant and the proof are fields of the same credential, so the Spawner's signature binds them. Whoever verifies a `provision` grant—the Integration Sidecar (§3.16.4) and the `secrets` role (§1.2.18)—looks for its `{ slot, entry }` in the proof's `provision_grants` and compares the proof's `artifact_ref` with the credential's. The Task Broker makes the same `artifact_ref` comparison, and that of `audience` against the `topic` (§3.14.2).
+
+**The role certificate, `role_certificate`:**
+
+| Field | Type | What it carries |
+| :--- | :--- | :--- |
+| `sub` | string | the key the role signs with |
+| `iat` | number | the signing time |
+| `role` | string | `spawner` or `task_broker` |
+
+**The operator's proof, `operator_proof`.** It carries no `sub`, because it is bound to an act and not to an identity:
+
+| Field | Type | What it carries |
+| :--- | :--- | :--- |
+| `iat` | number | the signing time |
+| `act` | string | the act's topic: `config_change`, `node_catalog_publish`, `node_provision`, `node_create`, `node_catalog_import` or `node_retire` |
+| `task_id` | string | the request's `TaskID`, which the console mints (§6, *The service between the console and the channels*) |
+| `data_digest` | string | the digest of the request's `data` without `operator_proof`, `context_ref` or `bodies`, in the form of §8.1 |
+| `payload_digest` | string | `sha256:` followed by the hexadecimal SHA-256 of the bytes of the payload `data.context_ref` names; only if the request carries one |
+
+**All acts have this form.** Whoever executes the request verifies the proof against the event: `act` against the topic, `task_id` against the `TaskID` and the digests against the `data` and the payload. The `data_digest` leaves out the fields the `channel` role adds after the signature—the Context Store references—and the proof itself; `payload_digest` covers the payload, which the console computes over the bytes it sends through `Open`. The proof travels in `data.operator_proof`.
+
+**A `node_provision` also carries in the clear what is verified later and without the event:**
+
+| Field | Type | What it carries |
+| :--- | :--- | :--- |
+| `artifact_ref` | string | the artifact the request instantiates |
+| `audience` | string | in a channel, the audience that comes from the `topic` |
+| `entry_topic` | string | the entry topic, if the request grants it (§3.13.8) |
+| `provision_grants` | list of `{ slot, entry }` | the slots the request associates with `provision` entries (§3.16.3) |
+
+**The scope token, `scope_token`:**
+
+| Field | Type | What it carries |
+| :--- | :--- | :--- |
+| `sub` | string | the platform identity it is delivered to |
+| `iat` | number | the signing time |
+| `trace_id` | string | the trace it enables reading |
+| `section` | string | the `TaskID` of the section it enables writing; in a root's token, the `TraceID` (§3.14.3) |
+
+### 9.3. How they change
+
+**A verifier ignores the fields it does not know, and a version does not remove, rename or change the type of a field.** An object is verified with binaries of another version, and it is not rewritten without signing it again: a credential, without re-provisioning the node (§3.13.7); a proof, without the person. A new field an earlier verifier can ignore is simply added. One a verifier has to check to uphold a guarantee goes with a new `typ`, which the earlier verifier rejects instead of accepting it without checking.
+
+## 10. The payloads of the fixed-convention topics
+
+It answers to what the architecture describes about the `data` of each fixed-convention topic (§3.7.7) and of each `notice` (§3.8.2), and to those payloads crossing versions: one binary assembles them and another reads them, or a blueprint built long before—the channel that shows a `hitl_contact_*` query, the Logic Container that reads the outcome of a `topic_catalog_query`—. A field each side names differently fails at runtime. This section fixes what they are written in, where they live, who validates them and how they change.
+
+### 10.1. One schema per payload
+
+**Each payload whose shape the architecture fixes has a schema, in the JSON Schema subset of §8.2:**
+
+* the `data` of the `task.announced` and that of the `task.completed` of each fixed-convention topic with a structural claimant (§3.7.7);
+* in `hitl_contact_*`, the announcement and the answer of each `kind` that a structural requester or the Integration Sidecar opens (§3.5.2);
+* the `data` of each `notice`.
+
+`intake` has no schema: an emergent node claims it and its payload is domain content (§2.2). Nor does the query a Logic Container opens through `AskRequester`, whose shape the network does not fix (§3.5.2).
+
+**It is an interface's subset because both binaries already validate it** (§8.2): one more format would be one more parser and one more validator.
+
+**The validator chooses the schema by the topic and, where the topic distinguishes several, by `kind`**: `node_retire`, `hitl_contact_*` and the `network_risk` `notice` entries. No schema needs `oneOf`, which the subset excludes.
+
+**The fields §3.8.1 fixes for every event have a schema of their own**, together with `context_ref`, `bodies` and `operator_proof` (§3, §9), and the `data` is validated against both. No topic schema repeats them.
+
+**`failure_code` is one of those fields, and its values are the reasons the architecture fixes** (§3.3). Its `description` lists them:
+
+| `failure_code` | Stamped by | When |
+| :--- | :--- | :--- |
+| `unanswered` | the channel | the query arrived and nobody answered (§3.5.2) |
+| `undelivered` | the channel or the Spawner | the query or the outcome did not reach the person (§3.5.2, §3.5.4) |
+| `stale_vector_space` | the Spawner | the vacant task's `model_id` is not the current one (§3.13.2) |
+| `redundant_topic` | the Spawner | the topic is redundant with a covered one, which `suggested_topic` names (§3.13.2) |
+| `not_derivable` | the Spawner | the Forge rejected the derivation (§3.13.2, §3.13.8, §6.4) |
+| `logic_container_lost` | the Integration Sidecar | the NRI session was cut with the task assigned (§3.6.1) |
+| `channel_retired` | a channel's Integration Sidecar | decommissioning closed the root before delivering the outcome (§3.13.8) |
+| `proof_invalid` | the claimant of a signed act | the proof does not verify (§3.13.8, §3.14.4) |
+| `base_version_stale` | the Config Store | `base_version` is not the head (§3.14.4) |
+| `request_invalid` | the claimant of a fixed-convention topic | the request does not validate against its schema or against the state it names: a key, an entry, a `target_topic` or a precondition (§3.13.8, §3.14.4, §10.2) |
+| `artifact_vetoed` | the Spawner | the `artifact_ref` is vetoed (§3.13.8) |
+| `runtime_interface_unsupported` | the Spawner | the interface version falls outside `runtime_interface_range` (§3.13.8, §6.4) |
+| `egress_slot_unbound` | the Spawner | a slot of the `egress_required` is not associated (§3.13.8, §6.4) |
+| `ingress_slot_unbound` | the Spawner | a slot of the `ingress_required` is not associated (§3.13.8) |
+| `blueprint_muted` | the Spawner | the delivered blueprint fell outside the neighborhood of the task that requested it (§6.4) |
+| `capacity_exhausted` | the Spawner | the reservation does not fit in the fleet (§3.13.10) |
+| `embedding_unavailable` | the Spawner | the embedding generation keeps failing after `embedding_regeneration_backoff` (§3.13.8) |
+| `admission_failed` | the Spawner | the Admission Scanner gave `fail` (§3.13.8) |
+| `acquisition_denied` | the Spawner | a rule or the catalog did not allow acquiring the entry (§3.13.8) |
+| `no_forge` | the Spawner | the network has no Forge to ask for the derivation (§3.13.8) |
+
+In the Spawner's `reject` of a Forge delivery go the provisioning ones and `blueprint_muted` (§6.4).
+
+**The names are the architecture's identifiers.** A datum the architecture describes without an identifier receives one in the schema, with the section that describes it in its `description`, and that name stays fixed like any other (§10.3).
+
+**A structural `hitl_contact_*` query carries at the top level of the `data` the fields of the invariant of §3.5.2**—`kind`, `scope`, `since`, `options`, `outcome_if_silent` and `evidence`—**and the decision's data in `details`**, with the fields the table of each instance lists (§3.5.4, §3.15.6, §3.15.7, §3.16.4, §3.16.5). They go in an object of their own because one of them can be named like a common field: `niche_uncoverable` and `gate_approval` carry a `topic` that is not the query's. The answer carries `decision` and, in the `reject` of an outcome delivery, `failure_reason` and, if whoever rejects is the Spawner, `failure_code` (§3.5.4). A `notice` carries its `kind`, where it has one, and the condition's data in `details`.
+
+**The type comes from the class of the datum:**
+
+| Datum | Schema |
+| :--- | :--- |
+| an identifier: `TaskID`, `TraceID`, `node_id`, `topic`, `artifact_ref`, `model_id` | `string` |
+| a digest | `string`, in the form of §8.1 |
+| an embedding | `string`, with the encoding of the `task_embedding` (§1.2.1) |
+| an instant: `since`, `as_of` | `string` with `format: date-time` |
+| a cost, a ratio, a `score`, a percentile, a dispersion | `number` |
+| a count, a duration in milliseconds | `integer` |
+| a reference to the Context Store | object with the fields of `ContextRef` (§3) |
+| an enumeration value | `string`, with or without `enum` depending on who reads it (§10.3) |
+
+**An undefined signal is omitted** (§3.12.2), because the subset has no `null` (§8.2): an absent field is what the Spawner reads as not evaluable.
+
+**An outcome that travels by Claim-Check also has a schema.** That of `trace_query`, that of the `node_query` census and that of `node_catalog_query` describe the portion the claimant writes to the Context Store, and the `task.completed` carries its reference in `context_ref` (§3.10, §3.12.3, §3.13.3).
+
+### 10.2. Where they live and who validates
+
+**The schemas come in `zobik` and in `zobik-sidecar`**, like that of an interface's format (§8.1), and their version is the binary's, like that of the Global Configuration schema (§1.2.5). **They are published with each version, next to the binary** (§6, *Distribution*), for whoever builds a blueprint that reads or publishes on a fixed-convention topic: a `hitl_contact_*` channel, a node that watches `trace_risk` or that queries `topic_catalog_query`. The published copy comes from the same files the binary validates with.
+
+**Whoever publishes validates, before publishing.** A role validates what it assembles. The Integration Sidecar validates what its Logic Container publishes on a fixed-convention topic (§3, *The publication requests*) and what it opens itself: the egress gate and the delivery of the outcome (§3.16.4, §3.5.4). A malformed payload fails in the request that produces it, with the validator's error.
+
+**The claimant validates again on receiving.** It closes a request that does not validate with `task.failed`, `request_invalid` as `failure_code` and the validator's error as `failure_reason`, which is one more layer on top of those §3.13.8 and §3.14.4 apply over the event's data. No Integration Sidecar or role published such a request, because both validate beforehand.
+
+### 10.3. How they change
+
+**A reader ignores the fields it does not know, and a version does not remove, rename or change the type of a field, nor make an optional one mandatory.** It is the rule of the signed objects (§9.3), for the same reason: the payload is read by a binary of another version—the Integration Sidecar of a node that has been running since before an update (§3.13.3)—or by a blueprint from the Catalog. A new optional field is simply added.
+
+**The subset fulfills the first half when validating.** An object with `properties` cannot declare `additionalProperties` (§8.2), so an earlier schema accepts a payload with fields it does not declare.
+
+**An enumeration value a blueprint reads carries no `enum`**: `kind`, `scope` and the values of `options` and `decision` are declared `string`, with the known values in their `description`. A channel whose binary has no schema for a `kind` validates the query against the common part of §3.5.2 and shows it through those fields, and shows an option it does not know by its value. A node that watches a broadcast topic ignores a `kind` it does not know, and the invariant of §3.8.2 makes ignoring it cost nothing. `failure_code` is also declared `string`: a requester that does not know the value treats the failure as one without a code and reads its `failure_reason` (§3.3).
+
+**A value only the roles read carries `enum`**, like `trigger_reason` or the `kind` of `node_retire`: an update replaces all the roles in the same act (§1.2.5), so the writer and the reader always have the same schema.
+
+**A change that does not fit these rules takes another name**: a new topic or a new `kind`, never another version of the same one.
