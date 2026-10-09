@@ -614,3 +614,98 @@ The `catalog` role stamps the `as_of` when storing the verdict. `findings` names
 **When an update brings a new ruleset, the `catalog` role analyzes again the entries it stores**, one at a time and off the registration path. Until it has done so, an entry's verdict is from an earlier `ruleset_version` and provisioning does not bring it up, so the entries running in some network are analyzed first, by their presence mark (§3.13.3).
 
 **It carries no vulnerability database, and that is why it introduces no recurring maintenance** (thesis 8). The analysis §3.14.1 asks for is about embedded secrets, credentials and injection patterns: none of that is a CVE, which is the only thing that database is for. Trivy runs with secret scanning alone, whose rules come compiled into the binary and consult no feed, and the injection rules are own rules, versioned with the `ruleset_version` the `scan_result` already carries. The row's cost then stays in disk and in the binary, never in idle or in a periodic download.
+
+## 2. The node edge: Node Runtime Interface transport, Logic Container confinement and channel ingress
+
+It answers to the concrete transport the Node Runtime Interface version fixes (§3.6.1 requires it fixed, and does not name it) and to the confinement clause of the contract toward the deployment platform (§3.14.1), which is the one that requires the Logic Container's only channel to be declared, and that is why they go together: the choice of transport decides whether the clause can be provided. §2.3 provides the clause that exposes the channels' ingress (§3.14.1), which is the same edge seen from outside. §2.4 gathers what an image has to meet to be a Logic Container.
+
+### 2.1. Transport: gRPC over a Unix domain socket
+
+**The NRI runs over a Unix domain socket hosted in a volume the two halves of the node share**, with gRPC on top. Concretely:
+
+* **One named volume per node**, created by the Spawner in the act of provisioning and mounted in both containers. Named and not a *bind mount* of a host directory: on Docker Desktop's shared filesystems (Windows, macOS) a Unix socket does not work, and the named volume always lives on a real Linux filesystem. It is mounted at `/run/zobik` in both containers, and the socket is **`/run/zobik/nri.sock`**. The path is part of the transport, so the NRI major version fixes it (§3.6.1): the Logic Container brings it written in and does not receive it through configuration. The same volume hosts each task's work area (§3.6.1), at `/run/zobik/tasks/<task_id>/`, and in a channel with ingress, the area of each admitted message, at `/run/zobik/inbound/<delivery_id>/` (§3).
+* **The shared volume's ceiling is `work_area_size`** (§6), which the Spawner passes to the driver as the volume's `size` option. Docker's `local` driver enforces it only with its data directory on XFS mounted with project quotas (`pquota`), and the Spawner passes it only there. On ext4, which is what Docker Engine, WSL2 and Colima bring by default, the volume has no ceiling of its own and the host's disk bounds it; `zobik init` reports which of the two cases applies. The `max_body_size` of each egress entry (§3.16.2), and the `max_message_size` times the `max_pending` of each ingress entry (§3.16.7), bound what the Integration Sidecar writes there all the same.
+* **A named volume mounted only in the Integration Sidecar**, for the durable outbox and the deduplication of §3.6.4. The act of provisioning produces them together (§3.13.1), and on the Docker driver they are two `--mount` instead of one.
+* **The Logic Container dials, the Integration Sidecar listens.** A single socket file, no *readiness* race for the sidecar to probe, and the Logic Container does not need to serve anything. The two halves start in no particular order, so the Logic Container retries the dial until the socket exists. The delivery of a `task.assigned` travels over a bidirectional stream on that same connection, instead of over a call in the opposite direction.
+* **The Spawner sets the socket's owner and mode** and runs the Logic Container under a known UID, because the file's permission is the only thing that governs who connects.
+
+**The transport is part of what the NRI major version fixes** (§3.6.1): a Logic Container built against another transport does not start, and the version check covers it with no mechanism of its own: the Spawner does not provision a blueprint whose version falls outside `runtime_interface_range` (§2.3), and the Integration Sidecar rejects at startup one it does not support.
+
+### 2.2. Confinement as a provisioning spec
+
+With the transport off the network, the Logic Container **needs no network stack**, and that is where the clause of §3.14.1 becomes provided by the platform instead of stated. The Spawner's act of provisioning (row 4) emits a literal spec against the driver:
+
+| What is declared | What provides it (Docker driver) |
+| :--- | :--- |
+| No network channel of its own | `--network=none` |
+| Exactly one mount, that of the socket and the work areas | the shared named volume, and no other source mounted—the sidecar's private volume is not mounted here (§2.1) |
+| No privilege escalation | `--cap-drop=ALL`, `--security-opt=no-new-privileges`, non-root UID set by the Spawner |
+| Nothing writable that outlives the process | `--read-only` on the image's filesystem; `--tmpfs=/tmp`, which has no source, is born empty and is lost with the container; and the work areas, which the Integration Sidecar deletes when the session is cut (§3) |
+
+That spec **is** the declaration §3.6.1 requires: confinement is evaluated as a predicate over what the node has been granted, not over how the artifact behaves. And it stays readable from the same source the Active Node Registry already uses (row 14, the orchestrator's metadata), so auditing the active fleet introduces no new path.
+
+There is a consequence worth more than the clause: **a confinement violation is a startup failure, and not silent behavior.** §3.14.1 points out confinement as the only assumption whose violation the network cannot observe. A Logic Container that called the model provider directly instead of asking its Integration Sidecar (§3.16) would work perfectly if it had a way out—violating the architecture without leaving a trace. Without a network stack it does not get to the first DNS resolution.
+
+**Ingress does not touch this spec.** In a channel with `ingress_grants`, the Integration Sidecar listens or connects to the `source`, and its container already has a network (§1.2.12); the Logic Container stays on `--network=none` and receives the messages through the NRI (§3).
+
+**What `zobik init` verifies.** That the driver instantiates a container with no network and with a shared named volume, which is the verifiable form of the clause at deployment time. The per-node verification does not live there but in provisioning itself: the Spawner emits the spec in each act, and a node running with something other than what was declared is visible in the orchestrator's metadata.
+
+### 2.3. Exposing ingress
+
+**A role of the binary, `ingress`, provides the clause that exposes the `listener` of each ingress entry (§3.14.1)**: an HTTP reverse proxy on the standard library's `net/http/httputil`, one per network. It receives on the ports `zobik init` sets, resolves each request by host and path to an `ingress_registry` entry and forwards it over HTTP to the Integration Sidecar of a channel that has it associated (§6, *The off-Bus interfaces*). It weighs like any Go role, in the per-network idle class of thesis 8.
+
+**It reads the association from where it already is.** The `listener` of each entry comes from the Config Store's current `ingress_registry` (row 5), and which containers have it associated, from the `ingress_grants` label the Spawner stamps when provisioning (row 14), which the proxy follows through the Docker Engine API's events via the `docker_reader` role (§6). An edit of the `listener` takes effect on the next request without re-provisioning the channel, which is what the architecture requires of a current key (§2.3). It forwards only to containers whose label names the entry, and among several it distributes in turn. It neither evaluates rules nor verifies the sender: whatever it forwards wrongly, the Integration Sidecar rejects (§3.16.7).
+
+**It forwards the message intact**, because the sender's verification is over the message (§3.16.7): a signature over the body, or a secret the sender sends in the request, which the Integration Sidecar checks against the `verify_handle` (§8.6). It is the way the notifications of messaging services—WhatsApp, Slack, Telegram, Discord, Teams, Twilio—authenticate, and that of the client Spawner toward the Forge, which shares the tenant's Secret Store (row 18). A channel whose sender is a person, like a custom widget, authenticates the person inside its blueprint (§3.5.3), and its entry carries no `verify_handle`.
+
+**What this deployment does not support:** a sender that authenticates with a client certificate—financial or corporate integrations that require it—, because the proxy terminates the connection and the Integration Sidecar does not see that certificate; and a `listener` that is not HTTP, like inbound SMTP. A mail channel receives through an entry with a `source` over IMAP, or uses a provider that turns incoming mail into a signed HTTP notification.
+
+**The `listener` certificate is the proxy's.** Behind the tunnel, the tunnel itself obtains it for its address (below); for an own public host, the proxy obtains it through ACME (`golang.org/x/crypto/acme/autocert`); otherwise, it reads it from the Secret Store.
+
+**A home machine receives from the internet through a tunnel the proxy itself opens.** The router drops incoming connections, and many providers share the public address among customers, so an outside notification only arrives through a connection that goes out from the machine to a service that publishes an address and forwards through it. The proxy opens it with **Tailscale Funnel**, embedded as a library (`tailscale.com/tsnet`, BSD-3): the role joins the operator's Tailscale account as one more device, with the name `zobik-<network>`, and receives on `https://zobik-<network>.<tailnet>.ts.net`—where `<tailnet>` is the domain Tailscale assigns to the account—besides on its local ports. The tunnel is one more `net.Listener` of the same process: there is no separate daemon, no new piece in `zobik init` and nothing to touch on the router.
+
+**What the operator does is sign in, once.** The tunnel is enabled from the console's panel (§6), or from the start with `ingress_tunnel` in the deployment file; `zobik init` does not ask about it. On enabling it, the console shows the Tailscale sign-in link—a free personal account, with the Google, GitHub or Microsoft login the person already has—and the link to enable Funnel on that account, waits for both to be accepted and shows the public address. Without a tunnel there is no account. The device's state lives in a named volume of the role, so the address survives restarts and updates: it is configured once at the channel's provider and does not change.
+
+**A channel's address is the tunnel's plus its entry's path.** A `listener` that is only the root of a path (§3.16.7) applies to every address the proxy receives on, so the operator registers `/whatsapp` and pastes `https://zobik-<network>.<tailnet>.ts.net/whatsapp` into the provider's console. It is the same console the secret behind the `verify_handle` comes from, so pasting the address adds no visit.
+
+**What is entrusted to Tailscale.** Its relays forward the encrypted connection without decrypting it: TLS terminates at the proxy, with the certificate for the `ts.net` address. Nor can it fabricate a notification, because the verification is over the message and against a secret Tailscale does not have (§3.16.7). What stays in its hands is availability and the name: whoever controls the account's coordination can point the address at another device, and then a channel whose sender is a person, with no `verify_handle`, depends only on the authentication its blueprint does (§3.5.3). The library is open source; the coordination service is not, and it comes in with the status of an external service—like the messaging service that emits the notification—and not of a piece of the stack (thesis 4).
+
+**Cost and limits.** Funnel is in the free plan, only on ports 443, 8443 and 10000, and with a bandwidth ceiling Tailscale sets and does not detail. A messaging notification weighs kilobytes, so the ceiling does not reach the channels the tunnel exists for; a channel with sustained traffic—a heavily used widget—takes one of the ways out below. At idle the tunnel adds `tsnet`'s user-space network stack to the role, within the per-network class of thesis 8, and only if the operator asked for it.
+
+**The ways out when the tunnel does not serve.** An own public address—a host with an IP, or a forwarded port where the provider allows it—, with a certificate through ACME. Or **zrok** (Apache-2.0, with a Go SDK and a self-hostable server) behind the same `net.Listener`: its hosted service terminates TLS at its public frontend, and its own server gives the network back a path where every piece is open source, at the cost of a host with a public address.
+
+What does not leave the machine or the local network, like a Forge of the same tenant, needs no tunnel. Slack and Telegram also have a mode in which the Integration Sidecar connects to them, which is an entry with a `source` and does not need one either (§3.16.7); WhatsApp does not have it.
+
+**One proxy per network.** Each network takes its own ports and its own device in the account, so a network and its Forge on the same host are configured with different ports in `zobik init`, receive on different addresses, and neither depends on the other to receive. A Forge's client network needs no proxy: it only goes out toward the Forge (§6.2).
+
+**What the deployment verifies:** `zobik init`, that the role comes up and takes its ports; the console, on enabling the tunnel, that Funnel is enabled and the public address responds. The correspondence between entries and channels is not verified there: the Integration Sidecar upholds it on each message.
+
+### 2.4. What an image meets to be a Logic Container
+
+**This is the list whoever builds a Logic Container follows**, be it a person or a node of the Forge: an OCI image that meets it starts in any deployment that speaks its NRI version, and one that does not meet it never gets to compete. The language, the libraries and the internal shape of the image are free (row 13); how its dependencies are obtained is up to whoever builds it, and the image arrives with everything it needs inside.
+
+**What the image assumes of its environment is fixed by the NRI major version, just like the transport.** An image is revived long after it was built, next to a newer Integration Sidecar and Spawner (§3.6.1), so everything it assumes of the environment is contract.
+
+| The container finds | The container does |
+| :--- | :--- |
+| Its `artifact_ref`, which fixes the image's digest (row 16) | Declares the NRI version it was built against in the label `io.zobik.nri.version` (§3) |
+| No network and no mount except the shared volume (§2.2) | Asks through the NRI for everything it needs from outside: context, egress and publication (§3.6.1) |
+| Each task's work area at `/run/zobik/tasks/<task_id>/`, empty on receiving the assignment (§3) | Works there on what does not fit in memory, and leaves there the body of a `Call` |
+| In a channel with ingress, the bodies of each `Inbound` at `/run/zobik/inbound/<delivery_id>/` (§3) | Reads them if it needs them to decide; what it writes there does not reach the Context Store |
+| An Integration Sidecar that serves the `zobik.nri.v1` service (§3) | Implements the dialing side: opens `Attach` with a `Hello` of the label's version, confirms each delivery with `Received` and names its task in each request (§3) |
+| No arguments or environment variables of its own | Starts by its image's command |
+| A non-root UID set by the Spawner (§2.2) | Brings its files readable by any UID |
+| The image's filesystem read-only and `/tmp` in memory (§2.2) | Writes only to `/tmp` and to its tasks' work area, and nothing it writes outlives the process |
+| The socket at `/run/zobik/nri.sock`, perhaps not yet created (§2.1) | Dials and retries until it finds it; it is ready when it receives `Accepted` (§3) |
+| Relaunch on any exit | Nothing: exiting is equivalent to cutting the session |
+| The shutdown signal, with no guaranteed deadline | Nothing: what remains to be closed, the Integration Sidecar closes |
+
+**The Logic Container receives nothing at startup.** It does not need its `node_id`, its topic or its draining state: what it needs reaches it through the session, and what it cannot do the Integration Sidecar rejects when it asks (§3). A Logic Container that receives nothing from the environment cannot depend on it.
+
+**There is no health probe of the Logic Container.** Being alive is having the session open, which is what already upholds its tasks' lease (§3).
+
+**Exiting, with any code, is cutting the session**, with the consequences of §3.6.1: the Integration Sidecar fails the tasks in progress and the Logic Container comes back without them. The container runs with `--restart=always`, and the exit code is not read. **A Logic Container does not decide its own decommissioning:** the authority over which nodes exist belongs to the Spawner (§3.13.1), and a code that meant *"do not relaunch me"* would take the node out of the fleet while the Active Node Registry still counts it as coverage. The Integration Sidecar does exit with meaning, in a channel's decommissioning (§3), because whoever operates the substrate deploys it, not a blueprint.
+
+**Shutdown requires nothing of it.** The process can die at any instant, and the idempotency §3.6.4 asks of the Logic Container already covers that.
+
+**A Logic Container that crashes again and again needs no mechanism of its own.** If it crashes with assigned tasks, each crash fails a task with a reason that names it, and metering carries it to replacement (§3.12, §3.13.4). If it crashes before the `Accepted`, it never competes, and its tasks stay vacant like those of a niche without coverage (§3.13.2).
