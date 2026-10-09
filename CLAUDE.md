@@ -1,6 +1,6 @@
 # Zobik
 
-Implementation of the Zobik network. The design is specified in documents that live outside this repository; code implements them and does not restate them.
+Implementation of the Zobik network. The design is specified in [docs/architecture.md](docs/architecture.md) and [docs/implementation.md](docs/implementation.md), written by the rules of [docs/writing-guidelines.md](docs/writing-guidelines.md); code implements them and does not restate them.
 
 ## Conventions
 
