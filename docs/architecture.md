@@ -1986,3 +1986,236 @@ What the conservative state means in each case:
 * `vector_space_unrepairable` **clears by convergence**: the Catalog repair is convergent and demand-driven (§3.13.7), so the day the model responds again, the next query that stumbles on a stale entry regenerates it and the condition clears without anyone having decided anything, within the limit `failure_mode` already fixes. Meanwhile the abstention stays in force, which is the conservative state: the Spawner answers *"I don't know"* instead of treating a niche as uncovered, and archives or duplicates nothing on a comparison that is not valid.
 
 In all of them, the same criterion as §3.15.6: silence never authorizes, but it does not leave a cycle spinning either.
+
+### 3.16. The egress and ingress registries: the boundary of the substrate
+
+The network's substrate is the Bus (§3.6.5) and the Context Store (§3.4). Everything a node does in there is containable: it is scoped by `TraceID`, has a retention window, and is discarded whole without the world finding out. Leaving that substrate is **egress**, and it happens in a single place—the Integration Sidecar, which is the only thing the Logic Container has to reach anything (§3.6.1). Receiving a message from outside is **ingress**: it crosses the same boundary in the opposite direction, and only channels have it (§3.16.7).
+
+**Default deny** governs that boundary: every exit resolves to an `egress_registry` entry (§2.3) through the slot it names (§3.16.3), and what resolves to none is not executed. The network never judges what an action *means*—it could not, and §2.2 forbids it to look inside the node—but resolves where it goes and evaluates that entry's rules over the call's fields, which are literal predicates (§3.16.2).
+
+The non-discretionary human pause rests on it. A call whose rule ends in an audience is asked about before it runs, through the circuit of §3.5.2 and with no vocabulary of its own. **It is the only case in which the obligation to consult a human comes from the network's configuration and not from the judgment of whoever executes:** §3.9.2 still governs everything else—the verification level of a flow is emergent and no node can demand a particular degree of assurance from another—and a node that consults `requester` on its own (§3.5.2) binds itself and nobody else.
+
+**The Spawner itself leaves through this same boundary when the node-creation procedure (§6) needs to delegate building a blueprint outside the network.** The link is one more egress class, with its `target` and its `operations`, authorized by the operator exactly like any other—nothing in this section's mechanism distinguishes a deriving node from any other Logic Container that needs to reach outside. The link with the Shared Catalog is another entry of the same form (§3.13.6). Alongside them, reading the observability backend the Tracing Collector exports to (§3.2) is another entry of the same registry: querying already reconstructed spans is a read-only call like any other, and §3.16.2 rejects a wildcard in the operation position, so authorizing it does not grant writing or deleting.
+
+#### 3.16.1. What a node reaches without authorization
+
+With no entry granted, a node reaches exactly this: computing internally in whatever form its blueprint has (§2.2), speaking the Bus vocabulary over the topic it claims (§3.8), and reading and writing the Context Store under its trace's scope token (§3.14.3). The set is closed and does not grow.
+
+What makes it a safe default is that **everything it contains is reversible**: an entire `TraceID` tree can be discarded, and discarding it leaves nothing behind outside the network. A node enclosed in there can make mistakes, spend, and even act in bad faith without producing any fact that has to be undone outside.
+
+**The boundary is the call, not the meaning.** A change stops being reversible when it touches a resource whose state the network does not own, and that is decided by looking at where the call goes and with what fields—not at what its emitter intended. That is what lets a deterministic component (§3.6.3) evaluate it without interpreting domain content: the entry fixes the destination, and its interface types the fields (§3.16.2).
+
+#### 3.16.2. The registry entry
+
+Each `egress_registry` entry names an egress class the network has authorized and declares:
+
+| Field | What it fixes |
+| :--- | :--- |
+| `interface` | the operation interface the entry implements, copied whole |
+| `target` | the concrete destination: a host, or the root of a path |
+| `operations` | the operations of the interface the entry admits over that destination |
+| `grant_scope` / `grantee_topics` | which nodes reach the entry: all of them, those of the topics it lists, or only the one the operator brought up by naming it (§3.16.3) |
+| `credential_handle` | what the credential is resolved with, when the class needs one |
+| `credential_placement` | where the credential goes in the request, when the protocol admits more than one place |
+| `rules` | what happens to each invocation according to its operation and its fields: `allow`, `deny` or an audience that approves it |
+| `billing_rule` | where the billing data in the response comes from (§3.10) |
+| `rate_source` / `as_of` | where the rate comes from and what date that source is from |
+| `max_body_size` | the maximum size of a call's body and of its response's, when the interface declares any |
+
+**The operation interface fixes the shape of the call.** It declares the `protocol`—the nature of the exit: `https`, `git`, `smtp`, `fs`—its operations and, for each one, the typed fields the Logic Container sends and the shape of the response. It is identified by the digest of its content and carries no version number: two interfaces are the same if their digests match, and any change is another interface. The shape of the response serves to build a node against it, and the Integration Sidecar does not enforce it (§3.6.1).
+
+**An operation also declares whether the call carries a body, whether the response does, or both.** The body is opaque content that travels whole—what is uploaded to a storage, downloaded from a package repository or pushed to an image registry—and crosses between the node's two halves as a file in the task's work area (§3.6.1): the Logic Container leaves the call's body there, and the Integration Sidecar the response's. An entry whose interface declares a body declares `max_body_size`, and the schema rejects one that does not, because the destination decides the size of a download, not the node. The Integration Sidecar rejects a call body that exceeds it, and a response that exceeds it makes the call fail. The `billing_rule` reads the response outside its body.
+
+**The interface travels copied, in every entry that implements it and in every slot that requires it (§3.16.3).** With the copy in the entry, what the Integration Sidecar needs to execute a call and what the Config Store validates in an edit stay inside the snapshot (§3.14.4). Two entries with the same copy cannot diverge, because the interface's identity is its digest.
+
+**Whoever builds the blueprint writes it, and the operator adopts it.** A blueprint—derived, imported or seeded—brings the interfaces of its slots, and an interface enters the registry when the operator registers an entry that implements it (§3.16.5). There they see it next to the `target` they assign it, so authorizing the shape of the call and authorizing its destination are the same decision.
+
+**Each protocol has its adapter, and the substrate provides it.** The adapter is the part of the Integration Sidecar that translates an operation's fields into the outgoing request. For `https` the translation is a declarative mapping that travels in the interface, and the adapter executes it without knowing the API; for a protocol whose request a mapping does not describe, the adapter is specific to the protocol. The protocols the deployed Integration Sidecar supports are the range of the `protocol` field in the schema (§2.3), so an entry with another protocol is an invalid configuration.
+
+**The request an interface builds does not leave its entry's `target`.** Everything the adapter builds resolves under the root of the `target`, and the Integration Sidecar places the credential, never an interface field, in the place the entry fixes. An interface written by a third party controls how the call is formed, not where it goes or with what credential. Where the credential goes depends on the destination and not on the shape of the call: the same interface is served by destinations that authenticate differently, or that do not authenticate.
+
+**The unit of registration is the unit of decision.** An entry has to be narrow enough that authorizing it is a decision the operator can make by looking at it: `target` and `operations` are declared explicitly, and the schema (§2.3) rejects a wildcard in the operation position. Two destinations that different people must approve are two entries with two handles, by the same criterion with which §3.5.3 makes each audience a topic.
+
+**The rules decide each invocation.** `rules` is an ordered list, and each rule carries a condition, `when`, and an outcome, `then`; the first whose condition holds wins. The outcome is `allow`—it runs without asking, and the metering of §3.10 and the budget of §3.15 contain its spending—`deny`, or an audience—it runs only if that audience approves it (§3.16.4). **The last rule carries no `when`, and the schema rejects an entry without it**: every evaluation has an outcome.
+
+**A condition reads the call and nothing else.** It is a deterministic expression without side effects over the operation and the fields the interface declares for it, and over the size and digest of the body, which the Integration Sidecar computes; it does not read the content of the body. The only things it consults outside the call are the lists of `egress_lists` (§2.3), by name, and the evaluation time. A condition that does not compile against the interface's fields is an invalid configuration (§3.14.4). **An evaluation error is `deny`**, never passing to the next rule: a missing field, a mismatched type or a nonexistent list do not make the rule false, they make it not evaluable.
+
+**A difference in the destination means different entries; a difference in the operation or in the fields means rules of a single entry.**
+
+**The rules reach what is decided by looking at one call.** What requires judgment is what a rule asks an audience. What accumulates across calls stays outside: a rule over an amount holds per call, and splitting an amount across several calls or several tasks evades it; the budget of §3.15 does not contain it, because it measures what the network spends and not what the call moves. The accumulated cap on what an egress class moves belongs to the destination system.
+
+**The audience of an outcome is where a process rule is declared.** It names `requester`—the trace's origin audience—`operator`, or another population, and in the last case it is what makes the audience exist (§3.5.3). A rule like *"finance approves refunds above an amount"* is declared over the effect it protects because there the network enforces it on every invocation, regardless of which node won the task or what its blueprint says. What produces no effect needs no approval: it only costs, and the per-trace budget contains that (§3.15).
+
+**A `topic` appears in an entry only to narrow it.** The topic space is open and the network mints it on its own (§3.7.6); only the operator edits the registry (§3.14.4). The permission hangs from the destination, and `grantee_topics` only trims which niches reach it (§3.16.3): an emergent topic is born with no reach outside the substrate, and covering it with a node that does have it requires going through §3.16.5.
+
+#### 3.16.3. `egress_grants`: what each node reaches
+
+The registry declares which entries exist in the network; **`egress_grants` declares which ones a node reaches, and through which slot**. It is the association of each blueprint slot with a registry key, which the Spawner stamps on the node when provisioning it as one more field of the deployment metadata (§3.11). It adds no store and no act: it is one more field in an act that already happens.
+
+**It comes from the blueprint's `egress_required`, resolved against the current registry** (§3.13.3). The requirement is a list of slots, and each one carries a name, an interface (§3.16.2) and the operations it uses from it. A slot is associated with an entry that implements that interface—the same digest—and admits those operations. Requirement and grant are two different things, and that is why they are kept in different places: the requirement is durable, describes what the artifact's logic does not work without, travels with it wherever the blueprint goes (§3.13.6) and names nothing that exists only in one network, neither a `target` nor a registry key; the grant belongs to a running instance and can only name entries that exist in this network. Keeping the requirement is what makes "can I provision this here?" a predicate over identifiers (§3.13.2).
+
+It also separates what has to be separate—rotating a secret touches no node, because the handle does not change (§3.16.6); **expanding what a node reaches does mean re-provisioning**, because its boundary changes. Narrowing it from the registry does not: the Integration Sidecar stops serving the slot the entry no longer covers (§3.16.4). **With a protocol whose destination the deployment fixes for the node when provisioning it**, editing an entry's `target` to move or widen it is also expanding, and takes effect from the node's re-provisioning; narrowing it takes effect on the next call, like any registry edit (§2.3).
+
+**Each entry declares which nodes reach it, and the operator decides that when registering it.** `grant_scope` takes one of these values, and each one reaches a subset of the previous one:
+
+| `grant_scope` | Which nodes reach the entry | Who associates the slot |
+| :--- | :--- | :--- |
+| `open` | every node whose blueprint declares the interface | the Spawner |
+| `topics` | the nodes whose `topic` is in `grantee_topics` | the Spawner |
+| `provision` | the node a `node_provision` associated with it by naming it (§3.13.8) | only the operator |
+
+An entry that does not declare `grant_scope` is `open`, which is what suits a generic class—a model's API: restricting it would only turn every new niche that needs it into a query. The schema (§2.3) rejects `grantee_topics` in an entry that is not `topics`, and a `topics` entry without it.
+
+**The entry that `embedding_model` names is used by the platform, without a slot.** The Integration Sidecar of every node and the Spawner generate embeddings (§3.7.3), as their own responsibility and not at a Logic Container's request, so that entry is not associated through `egress_grants`: a blueprint does not declare it in its `egress_required`, and no Logic Container reaches it. Everything else about the boundary applies the same—the adapter, the `rules` and the metering (§3.10).
+
+**`topics` names nodes by their topic because the network fixes the topic, not the artifact.** A node claims the topic the Spawner provisioned it for (§2.1), and its replicas, the blue/green candidates and those of a split keep it (§3.13.4, §3.13.9): what is authorized is the niche's function, and the niche's self-improvement preserves it. The `artifact_ref` changes with each candidate, and whoever writes the blueprint chooses the name of a slot, so neither restricts anything.
+
+**`provision` does not name the node in the registry: the act that brings it up authorizes it.** The `node_id` does not exist before provisioning, so the registry has no way to list it. What authorizes is the proof of the `node_provision` that associated the slot (§3.14.2), which the Spawner stamps in the grant and the Integration Sidecar verifies (§3.16.4); the Spawner carries it and cannot fabricate it. It is the rule by which ingress is associated (§3.16.7), applied to egress. Re-provisioning the same node—re-signing it (§3.13.7), draining it (§3.13.8)—keeps the grant with its proof, because the `artifact_ref` it names did not change.
+
+**A slot that no `open` or `topics` entry reaches, and whose interface a `provision` entry implements, is associated only by the operator**, and the node that has it stays out of autonomous replacement: the Spawner does not provision candidates for it, replicate it or revive it (§3.13.2, §3.13.4). That is the cost of having a person decide which code reaches the entry, and that is why `provision` is for the classes whose abuse neither the metering nor the budget contains (§3.10, §3.15).
+
+**The Spawner associates only when there is nothing to choose.** It counts the entries that implement a slot's interface, admit its operations and reach the node; `provision` entries do not count, because it never associates them. If a single one remains, it associates it. If none remains, an entry is missing; if several remain, choosing among them is choosing which destination the node reaches. In both cases it does not provision and asks (§3.16.5), unless none remains and a `provision` entry implements the interface: that slot is associated only by the operator (above).
+
+**The Logic Container calls by slot name and never sees a `target`.** The association fixes the entry of each call, so the Integration Sidecar does not search among entries (§3.16.4), and the same artifact reaches in each network the destination that network associates with it: that is what makes the blueprint portable.
+
+That a node reaches a destination is then a property of its list and not of how it is written inside, which makes it readable without opening the artifact and enforceable without trusting it.
+
+#### 3.16.4. The Integration Sidecar's procedure
+
+For each request the Logic Container passes it through the Node Runtime Interface (§3.6.1), the Integration Sidecar evaluates a chain of literal predicates:
+
+1. **Is the destination the substrate?** A publication to the Bus or an access to the Context Store under the trace's scope token runs with no further check. The substrate is not registered.
+2. **Is the slot associated in the node's `egress_grants`, with an entry that still implements its interface and still reaches the node?** With `topics`, the `topic` the Spawner stamped on the node (§3.11) has to still be in `grantee_topics`; with `provision`, the grant has to carry the proof of a `node_provision` that names that association and the running `artifact_ref`, verified against the root (§3.14.2). If not, it rejects and returns the error to the Logic Container. An entry whose interface the operator changed or whose reach they narrowed stops serving the slots it no longer covers, without re-provisioning anything.
+3. **Does the entry admit the operation, and do the fields and the body validate against the interface?** The body has to be in the work area of the task the call runs on (§3.6.1), and the Integration Sidecar copies it to a space of its own the Logic Container does not reach: what it measures, approves and sends in the following steps is that copy. If it does not validate, it rejects. It does not complete or correct fields.
+4. **What outcome do the entry's `rules` give?** It evaluates them against the call, `egress_lists` in its current state and the time (§3.16.2). With `deny`, it rejects.
+5. **With `allow`**, the adapter builds the request from the fields and the body (§3.16.2), resolves the `credential_handle`, executes, leaves the response body in the task's work area and composes `metrics` with the `billing_rule` and the current rate (§3.10).
+6. **With an audience**, it computes the **digest** of the request—the entry, the operation, the fields and the body's digest—publishes a `task.announced` on `hitl_contact_<audience>` with the rendered call and that digest, and waits for its `task.completed`, renewing meanwhile the lease of the task the call runs on (§3.1).
+7. **Once approved, it evaluates the rules again before executing**, because the whole `hitl_response_window` can pass between the query and the answer and the rules belong to the current class (§2.3). If the outcome is `allow` or the same audience that approved, it executes as with `allow`, and only the request whose digest matches the approved one. A `deny` from the person or from the rules, another audience, silence, a different digest or an answer outside `options` are all the same: do not execute, and the error goes back to the Logic Container, which decides what to do with its task (§3.3).
+
+**Every outcome of the rules names the rule that produced it**, written by the same parser that evaluates it and with no identifier of its own, together with the evaluation time and the `config_version` of the version read. It goes in the error that returns to the Logic Container—which can then retry differently or fail its task with a reason—in the decision data of `gate_approval` and in the call's span (§3.2).
+
+**The digest binds the approval to a concrete request.** Without it, an approval obtained on a harmless call would enable any other—the same back door that §3.14.2 closes by requiring the proof to name the `audience` and the `artifact_ref` that were decided on. It is also what makes what the person sees the real call and not a summary written by the node being gated.
+
+**What is validated and approved is what is executed.** The Logic Container hands over fields and never the protocol request: the adapter builds it from the same fields that were validated and over which the digest was computed, taken in a canonical form in which two serializations of the same request give the same digest. There is no second reading of the call that could differ from the one that was validated or approved. The body comes from the copy of step 3, so what the Logic Container does with its file after requesting the call does not reach what is sent.
+
+**A call whose rule ends in an audience is always asked about.** No approval persists, not per trace, nor per node, nor per time window: any way of approving in advance would be approving requests that do not exist yet, which is exactly what the digest makes impossible. What does not need to be asked is taken out of the question with an `allow` rule over the fields that distinguish it. That a heavily used rule makes the node's work impractical is deployment calibration and not a condition the network has to prevent—it shows up on the first call, not silently (§2.3).
+
+**The gate produces a fixed-field payload**, not a free-form one: the one that builds it is the Integration Sidecar, which is deployed infrastructure, identical in every node, so `gate_approval` instantiates the invariant of §3.5.2 like any other `kind`.
+
+| Field | Value |
+| :--- | :--- |
+| `kind` | `gate_approval` |
+| `scope` | `call` |
+| `options` | `approve` \| `deny` |
+| `outcome_if_silent` | `deny` |
+| Decision data | the entry that gated and the rule that sent the call to that audience, the rendered call—`target`, operation, fields, and the size and digest of the body—its digest, and the `topic` and `node_id` of whoever requests it |
+| `evidence` | the `TraceID` and the `TaskID` under which it is requested, and that trace's accumulated `cost` (§3.15.1) |
+
+The `evidence` does not describe the call—the decision data already do that—but where it stands: who requested it and how much that tree has spent so far. The identifiers that go there are the ones that enable a second query (§3.10) without the Sidecar having to anticipate it, as in the rest of the family.
+
+#### 3.16.5. When a slot is not associated
+
+Registering an egress class has two initiators and a single writer. The operator does it on their own, editing the key through `config_change` (§3.14.4); and the Spawner requests it when a slot of the blueprint it is about to provision lacks an entry (§3.16.3). No part of the network writes the registry: **the Spawner requests and the operator writes**, which is what prevents the network from granting itself the boundary that contains it (§3.14.2).
+
+When the entry is missing, the Spawner does not provision and asks—it opens a `hitl_contact_operator` (§3.5.2) with `data.kind = egress_unavailable`. Meanwhile the niche stays uncovered, with its vacancy count running, which is the cheap fallback of §3.13.3: erring by not acting costs latency and never coverage.
+
+**This same question can reach the Spawner already written, instead of the Spawner detecting it.** A pending derivation request (§3.13.2) can come back blocked precisely because what it needs to complete is an interface no registered entry implements; the Spawner relays it without formulating it, the same way it relays any question that is not its own to decide (§3.5.2). It is not a new `kind` or a separate path: it is this same query, with the `evidence` assembled by whoever evaluated what it lacked to build, instead of by the Spawner reading its own registry. While the question stays open, the derivation request is not considered failed either, nor does it consume the niche's successive-candidates counter (§3.13.2)—no artifact was delivered, so there was no intervention to count.
+
+| Field | Value |
+| :--- | :--- |
+| `kind` | `egress_unavailable` |
+| `scope` | `egress` |
+| `options` | `registered` \| `deny` |
+| `outcome_if_silent` | `deny` |
+| Decision data | the requested interface with the operations the slot uses from it, the `topics` entries that already implement it with their `grantee_topics`, the `topic` values waiting for it, and `egress_requests_spent` of the niche that requested it |
+| `evidence` | what the requested interface adds over what is already registered, and the accumulated vacancy rounds of the blocked niches |
+
+**The scope is `egress` and not `niche`, and everything else hangs from that.** Registering an entry that implements the interface unblocks any niche that needs it, so asking per niche would send the operator the same query once for each one—it is the rule of one key per decision and not per fact (§3.15.7). The key that holds it lives in the Specialty Catalog with network scope and is per interface (§3.13.3), and **write-if-absent** arbitrates which Spawner instance asks when several stumble on the same gap from different niches.
+
+**When `topics` entries that do not include the slot's topic already implement the interface, the key is per interface and topic.** The question is then adding that topic to a list, and what is decided holds for that niche and not for the others: a per-topic `deny` does not block the interface in another niche, and a `deny` of the whole interface is not asked again for each one.
+
+**The answer does not carry the secret.** It comes back by Claim-Check through the Context Store (§3.5.2), which is scoped by `TraceID` and has a retention window (§3.4): a secret there would be exactly what keeping it outside the network avoids. What comes back is the disposition—the operator decides dispositions and never values (§3.17.1)—and the operator writes the entry themselves, with the `target` they choose for that interface, through `config_change`. That they actually provisioned the secret **does not need to be verified**: the Integration Sidecar tries to resolve the handle and the node does not start if it does not resolve.
+
+**The outcome is stamped and not deleted** (§3.15.7). Every Spawner reads a `deny` *before* asking, so that interface is not queried again from any niche, and it is also input for the next derivation: knowing it is denied, the Spawner derives against another registered interface or leaves the niche uncovered (§6). Silence converges to the same state by way of §3.15.7—nobody re-asks an operator who has already shown they are not there—and in both cases the key is cleared the day an entry that reaches the slot is registered by the other path, because that is the day the condition stops being true.
+
+**And the request has a ceiling per niche.** Since `deny` outcomes are durable, no interface is requested twice; nothing prevents, however, the same niche from requesting a different interface each time. `max_egress_requests_per_niche` (§2.3) bounds that chain with its own counter next to the niche (§3.13.3), and **once exhausted it silences that niche's requests instead of escalating**. That is the difference from the caps of §3.13.5, and it is not one of degree: this counter counts a person's refusals, so escalating on exhausting it would be re-asking them about what they just answered. What remains is the usual—derive against what is registered, or not cover. It is cleared when the fleet of entries is expanded by the other path, because the premise that made it grow has changed.
+
+**When several entries implement the interface, the Spawner does not choose either.** Associating the slot with one or another is deciding which destination the node reaches, and that decision belongs to the operator (§3.17.1). The Spawner does not provision and opens a `hitl_contact_operator` with `data.kind = egress_binding`, with the niche vacant meanwhile, as when the entry is missing.
+
+| Field | Value |
+| :--- | :--- |
+| `kind` | `egress_binding` |
+| `scope` | `egress` |
+| `options` | the key of each entry that implements the interface, admits the slot's operations and reaches the node \| `deny` |
+| `outcome_if_silent` | `deny` |
+| Decision data | the name of the slot, its interface and the operations it uses, each candidate entry with its `target`, and the `topic` values waiting for it |
+| `evidence` | the associations the network has already decided over that interface, with their slot and their entry |
+
+**The decision is per interface and slot name, not per blueprint.** The key lives in the Specialty Catalog with network scope (§3.13.3), write-if-absent like the missing-entry key, and every blueprint that declares a slot of the same name over the same interface is associated through it without asking again, including a blue/green candidate that keeps the slots of the node it starts from (§3.13.4). When any of the options is `topics`, the key also carries the topic, by the same criterion as the missing-entry key: the choice is valid only for the niches that entry reaches. A `deny` leaves the slot unassociated and the blueprint unprovisioned, and silence converges to the same state (§3.15.7). The key is cleared when the set of entries that implement the interface changes, or the reach of any of them, because from that moment the options the operator saw stop being the ones there are.
+
+#### 3.16.6. The secret lives outside the registry
+
+The registry keeps the `credential_handle`; the operator provisions the value behind it in the deployment's secret store (§2.1). Writing it in the configuration would make it unpublishable: snapshots are immutable and are not deleted (§2.3), so a secret put there stays preserved in every later version, and rotating it would publish the new one without withdrawing the old one. It is the criterion by which §2.3 leaves the root of trust outside, applied to other material that cannot be the object of an edit either.
+
+**An Integration Sidecar reaches only the value of the handles of the entries its grants associate with it, and that of the entry `embedding_model` names** (§3.16.3). The store resolves a handle for it if the entry that names it is associated in the node's `egress_grants` or `ingress_grants` and still reaches the node in the current registry, which is the predicate of step 2 of §3.16.4 and of step 1 of §3.16.7, or if it is the one the current `embedding_model` names. It does not take the grants it evaluates from what the Integration Sidecar declares. An Integration Sidecar processes what its Logic Container sends and what the destinations respond, so a compromised one exposes everything it can resolve, and this trimming limits that to what its boundary already lets it use. Narrowing an entry in the registry withdraws the secret in the same act in which it withdraws the slot.
+
+**Revoking is rotating.** A compromised credential is withdrawn at the destination and replaced behind the handle: no `artifact_ref` changes, no blueprint enters blue/green (§3.13.3), no capability credential is re-signed (§3.14.2) and no `egress_grants` is touched. It is the economy by which this section avoids revocation lists. What stays outside its reach is a key exfiltrated and used **outside** the network: it passes through no Integration Sidecar, so it is not metered (§3.10) and does not count against any ceiling (§3.15.1), and bounding it is a per-key cap on the destination's side.
+
+#### 3.16.7. Channel ingress
+
+**A channel receives messages from outside through its Integration Sidecar, and only through an entry the operator registered.** It is this section's boundary in the opposite direction: egress fixes where a node reaches, and ingress, what reaches a channel. The direction of the message defines ingress, not that of the connection: an entry carries a `listener`, which the sender connects to, or a `source`—a mailbox over IMAP, Slack over socket—which the Integration Sidecar connects to in order to fetch the messages. The Logic Container still has no channel of its own (§3.6.1): the Integration Sidecar listens or connects, and the Logic Container receives through the Node Runtime Interface what the Integration Sidecar admitted.
+
+**Only `hitl_contact_*` channels have ingress.** A worker receives its work by auction (§3.7.5). The Entry Node and the Operator Channel receive the connections of their interface through the deployment that brings them up (§2.1); an emergent channel, through the entries the `node_provision` that brings it up associates with it (§3.13.8). The Spawner does not provision a blueprint that declares `ingress_required` by any other path or on a topic outside the family. **Ingress and `entry_topic` are granted separately, and the second needs the first:** a channel that only answers queries can receive the person's answer through ingress without opening traces, and a channel with `entry_topic` opens traces only from the messages it admits (below).
+
+**The `ingress_registry` entry** (§2.3) has the form of the one in §3.16.2, with what the direction changes:
+
+| Field | What it fixes |
+| :--- | :--- |
+| `interface` | the ingress interface the entry implements, copied whole |
+| `listener` | where it listens: a host, or the root of a path |
+| `source` | where the Integration Sidecar connects to fetch the messages: a host, or the root of a path |
+| `operations` | the operations of the interface the entry admits |
+| `verify_handle` | with `listener`, what verifies that the message comes from the sender, when the class verifies it |
+| `credential_handle` | with `source`, what the Integration Sidecar enters the source with, as in egress (§3.16.2) |
+| `rules` | what happens to each message according to its operation and its fields: `allow` or `deny` |
+| `max_rate` / `max_message_size` / `max_pending` | how many messages each associated channel admits per unit of time, of what size—its fields and its bodies together—and how many admitted messages it holds unresolved |
+
+An entry carries `listener` or `source`, and the schema rejects one that carries both or neither. Each handle is valid only with its own, because they say opposite things: with `listener` the network verifies whoever connects, and with `source` the network is the one that connects and identifies itself to the service.
+
+**The ingress interface fixes the shape of the message.** It declares the `protocol`, its operations and, for each one, the typed fields the Logic Container receives and, if the protocol expects a response, the shape of the response. It is identified by its digest, travels copied, is written by whoever builds the blueprint and is adopted by the operator when registering the entry, like the egress one (§3.16.2). An operation also declares whether the message brings bodies: a list of opaque contents—the attachments of an email, the file uploaded to a chat—each with the name and media type the sender declares. The substrate provides the adapter of each protocol, which translates the incoming message into an operation's fields and bodies. With `source`, it also holds the connection with the source, declares whether the source stores or pushes (below), and marks in it the messages that are taken as consumed, or acknowledges them.
+
+**An operation also declares whether the message brings context** (§3.5.1), and with what window: how many previous messages of the conversation, at most. The context travels as bodies marked as context—the previous messages, in the form the interface declares, and their attachments—so the rules, the ceilings and the destination of any body govern it. With `listener`, the sender sends it in the message. With `source`, the adapter brings it from the thread the message belongs to, over the same connection with which it fetches the messages. In both cases the adapter trims it from the oldest messages until the message fits in the window and in `max_message_size`: the context gets shorter and never causes a message to be rejected, and the request is not trimmed. A protocol whose source does not expose the conversation, or an operation whose messages stand on their own, declares no context.
+
+**The rules decide each message, and their outcomes are `allow` and `deny`.** They read the message and nothing else, with the semantics of the egress rules: of the bodies, their number and the size and digest of each one, never their content; the first whose condition holds wins, the last carries no `when`, and an evaluation error is `deny` (§3.16.2). None ends in an audience: what a message triggers outside the substrate leaves later through egress, and that is where it is asked about (§3.16.4).
+
+**The rate, size and pending ceilings are mandatory**, and the schema rejects an entry without them. What arrives before the channel opens a trace has no budget to contain it (§3.15.1), so the ceilings are that entry's containment. `max_rate` bounds how many messages arrive and `max_pending`, how many wait for the Logic Container to resolve them: with the channel at `max_pending`, a `listener` message is rejected back to the sender; with a `source` that stores, the Integration Sidecar stops fetching until the channel resolves one, and with one that pushes, it does not acknowledge the message, which the source redelivers or discards according to its protocol. Holding the connection with a `source`, and bringing the context over it, is integration, like generating the `task_embedding` (§3.6.1), and does not go into any `metrics`: what is contained is what the connection lets through, and the ceilings bound that.
+
+**The blueprint declares `ingress_required`**, a list of slots with the form of those of `egress_required` (§3.16.3), and the Spawner stamps the association of each slot with an entry in the node's `ingress_grants`, in the deployment metadata (§3.11). **The `node_provision` names the association, and the Spawner never chooses it:** when it is missing or does not fit, the request fails with the reason and no query is opened, because whoever would decide it is the person waiting for the outcome (§3.13.8). Changing what a channel receives is re-provisioning it, like changing what a node reaches (§3.16.3).
+
+**The Integration Sidecar evaluates each message** in the reverse order of §3.16.4:
+
+1. **Is the entry it arrived through associated in the node's `ingress_grants`, and does it still implement the slot's interface?** If not, it rejects.
+2. **Does the message, with the context already trimmed, fit within the entry's ceilings?** If not, it rejects.
+3. **With `listener`, does the message verify against the `verify_handle`?** If not, it rejects. The verification is over the message and not over the connection, because the message is what reaches the Integration Sidecar. With `source` there is nothing to verify in the message: the Integration Sidecar opened the connection against the source's identity, so what arrives over it comes from the service, which has already authenticated the sender.
+4. **Does the entry admit the operation, and do the fields and the bodies validate against the interface?** If not, it rejects. It does not complete or correct fields.
+5. **What outcome do the `rules` give?** With `deny`, it rejects.
+6. **With `allow`**, it hands the fields to the Logic Container and leaves the bodies for it in the message area (§3.6.1).
+
+A rejection does not reach the Logic Container: with `listener` it goes back to the sender through the protocol, and with `source` the message is taken as consumed at the source, or acknowledged without storing it if the source pushes. **What is validated is what is delivered:** the Logic Container receives the operation's fields and bodies, never the protocol request nor what verified the sender. The Integration Sidecar keeps the bodies in a space of its own the Logic Container does not reach, and what it measures, evaluates and later carries to the Context Store is that copy, like the egress copy (§3.16.4).
+
+**The response travels over the connection that brought the message.** When the protocol expects a response, the Logic Container hands it over naming the message it answers, and the Integration Sidecar validates it against the shape the interface declares. Over a connection that stays open—a widget's session—the Logic Container responds as many times as it needs while the connection lives. The response reaches only whoever opened the connection, so it does not choose a destination and is not egress. A `source` protocol expects no response: answering the sender—with an acknowledgment, for example—is egress, which the Logic Container requests on the task the message belongs to: the root of the trace it opened from it (§3.5.1), or the query it answers.
+
+**An emergent channel opens traces only from the messages it admits** (§3.6.1). Each message opens at most one, and the Logic Container decides which one opens it: the others are answers to queries the channel holds (§3.5.2), or messages it discards. That way the entry's `max_rate` also bounds the traces the channel opens, and the only thing that happens before a trace is the arrival of the message it comes from.
+
+**A message is resolved only once, and the act that resolves it fixes where its bodies go.** On opening the trace that comes from it, the Integration Sidecar writes them to the Context Store under that trace, and the announcement of the entry subtask references them (§3.5.1). On closing the query it answers, it writes them under the query's trace, and its `task.completed` references them (§3.5.2). On discarding it, it deletes them. It does so in the same act and from its copy, so the content that reaches the trace is the content that was admitted and its retention is the trace's (§3.4). All the message's bodies go through: the channel introduces them into the network without evaluating their content (§3.5.1), and what to use from them belongs to the node working the task. Each reference carries the Claim-Check key, the size, the digest, the name and the media type the sender declared, and whether the body belongs to the request or to the context.
+
+**An admitted message stays stored until the Logic Container resolves it**, by any of those acts, so a crash between the arrival and the trace does not lose it. The source or the Integration Sidecar stores it, depending on how the protocol delivers:
+
+* **A source that stores** retains what was not consumed and delivers it when asked, like a mailbox over IMAP. The message is taken as consumed in it when the Logic Container resolves it, and until then it stays there.
+* **A source that pushes** delivers each message and waits for the acknowledgment within a short period, like Slack over socket. Every `listener` is of this class, and a `source` is when its adapter declares it. The Integration Sidecar writes the admitted message to its private volume, with the durability of the outbox (§3.6.4), and only then acknowledges it; on resolving it, it deletes it. If the operation expects a response, the acknowledgment is that response. After a crash, it delivers again to the Logic Container the messages it keeps unresolved.
+
+Without a connected Logic Container, the Integration Sidecar does not fetch messages or hold the connection through which a source pushes. It recognizes a message that arrives again by the identifier the service gives it, as it recognizes a repeated Bus event (§3.6.4).
+
+**An ingress entry is exclusive by default.** The channels associated with the same entry share out its messages, and sharing it requires the same audience, the same `entry_topic` and an explicit mark in the `node_provision` of the channel that joins. Without the mark, the Spawner rejects the request and names in the reason the `node_id` that already has it. With another audience it always rejects it: the same sender would open traces with a different `origin_audience` depending on which channel took their message. With `source` it also rejects it if the protocol's adapter does not distribute the messages among the channels' connections, because each one would fetch the same messages. Sharing serves to replace a channel without interruption—there is no blue/green over the family (§3.12.3)—and to have it replicated, and the channels that share are peers within their audience (§3.5.2). **A per-entry key in the Catalog, with network scope, sustains the exclusivity** (§3.13.3): it names the associated channels, is written write-if-absent when associating the first one, and the Spawner updates it when associating another and when removing one (§3.13.8). It has network scope because two channels of different audiences fall into different partitions of the Spawner.
+
+**Exposing the `listener` belongs to the platform** (§3.14.1). The Integration Sidecar rejects every message from an entry its `ingress_grants` do not associate, so a misdirected exposure fails on the first message and delivers nothing. A `source` is not exposed: the connection goes out from the Integration Sidecar, which already reaches outside for egress. The secret behind each handle lives outside the registry, by the criterion of §3.16.6.
