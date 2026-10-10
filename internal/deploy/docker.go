@@ -160,6 +160,38 @@ func (e *Engine) RunEphemeral(ctx context.Context, s Spec) ([]byte, error) {
 	return out, nil
 }
 
+// RunAttached runs a container and copies what it writes to out as it writes it,
+// until the process exits or ctx ends; either way it removes the container.
+func (e *Engine) RunAttached(ctx context.Context, s Spec, out io.Writer) error {
+	id, err := e.create(ctx, s)
+	if err != nil {
+		return err
+	}
+	defer e.c.ContainerRemove(context.WithoutCancel(ctx), id, client.ContainerRemoveOptions{Force: true})
+	if _, err := e.c.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
+		return err
+	}
+	logs, err := e.c.ContainerLogs(ctx, id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Follow: true})
+	if err != nil {
+		return err
+	}
+	defer logs.Close()
+	if _, err := stdcopy.StdCopy(out, out, logs); err != nil && ctx.Err() == nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
+	info, err := e.c.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return err
+	}
+	if info.Container.State != nil && info.Container.State.ExitCode != 0 {
+		return fmt.Errorf("deploy: %s exited with %d", s.Name, info.Container.State.ExitCode)
+	}
+	return nil
+}
+
 func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
 	host := &container.HostConfig{
 		Mounts: s.Mounts,

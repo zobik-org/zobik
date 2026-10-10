@@ -17,3 +17,12 @@ var TapScope = Scope{
 	Role:      "tap",
 	Subscribe: families,
 }
+
+// PublishScope is zobik publish's: it publishes events by hand on the stream
+// families, and subscribes only to the inbox of the stream's acknowledgment.
+// zobik init registers it only in a development binary.
+var PublishScope = Scope{
+	Role:      "publish",
+	Publish:   []string{"task.>", "prop.>", "notice.>"},
+	Subscribe: []string{"_INBOX.>"},
+}

@@ -73,15 +73,7 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 }
 
 func runAct(ctx context.Context, e *Engine, n names, image, act string, creds []byte, files ...File) error {
-	_, err := e.RunEphemeral(ctx, Spec{
-		Name:    n.container("act-" + act),
-		Network: n.dockerNetwork(),
-		NetName: n.network,
-		Image:   image,
-		Cmd:     []string{ActCommand, act},
-		Files:   append(files, File{Path: actCredsPath, Mode: 0o600, Data: creds}),
-	})
-	if err != nil {
+	if _, err := e.RunEphemeral(ctx, BusSpec(n.network, "act-"+act, image, []string{ActCommand, act}, creds, files...)); err != nil {
 		return fmt.Errorf("deploy: act %s: %w", act, err)
 	}
 	return nil

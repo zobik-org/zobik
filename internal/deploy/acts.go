@@ -16,7 +16,8 @@ import (
 // on the network's Docker network, because the NATS server publishes no port on
 // the host. The console copies the act's material into it before starting it.
 const (
-	actCredsPath   = "/run/zobik/bus.creds"
+	// CredsPath is where an ephemeral container finds the identity it connects with.
+	CredsPath      = "/run/zobik/bus.creds"
 	actAccountPath = "/run/zobik/account.jwt"
 	// ActCommand is the subcommand the ephemeral container runs: zobik bus-act <act>.
 	ActCommand = "bus-act"
@@ -32,7 +33,7 @@ const (
 func RunAct(ctx context.Context, act string) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	nc, err := bus.Connect(ctx, bus.URL, actCredsPath)
+	nc, err := bus.Connect(ctx, bus.URL, CredsPath)
 	if err != nil {
 		return fmt.Errorf("connecting to the Bus: %w", err)
 	}

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/envelope.schema.json",
+  "description": "The envelope of every event on the Bus: CloudEvents 1.0 in structured mode, JSON (architecture §3.8.1, implementation §1.2.1). The data is validated against data.schema.json and, on a fixed-convention topic, against its own schema.",
+  "type": "object",
+  "required": ["specversion", "id", "type", "source", "subject", "time", "datacontenttype", "data"],
+  "properties": {
+    "specversion": {
+      "description": "The CloudEvents version.",
+      "type": "string",
+      "enum": ["1.0"]
+    },
+    "id": {
+      "description": "Unique UUID of the event. It is also the Nats-Msg-Id the stream deduplicates by.",
+      "type": "string",
+      "minLength": 1
+    },
+    "type": {
+      "description": "One of the closed types of architecture §3.8.2.",
+      "type": "string",
+      "enum": ["task.announced", "task.proposed", "task.assigned", "task.rejected", "task.completed", "task.failed", "task.aborted", "notice"]
+    },
+    "source": {
+      "description": "Identifier of the emitting node, declared by whoever publishes; never read to decide an admission (architecture §3.8.1).",
+      "type": "string",
+      "minLength": 1
+    },
+    "subject": {
+      "description": "The TaskID the event belongs to; in a notice, the resource it talks about (architecture §3.8.1).",
+      "type": "string",
+      "minLength": 1
+    },
+    "time": {
+      "description": "Emission timestamp.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "traceparent": {
+      "description": "W3C Trace Context. Present in every task.* event and in trace-scope notices; absent in network-scope notices (architecture §3.8.1).",
+      "type": "string",
+      "minLength": 1
+    },
+    "configversion": {
+      "description": "config_version of architecture §3.8.1, spelled as a CloudEvents extension attribute (implementation §1.2.1). Present exactly when traceparent is.",
+      "type": "string",
+      "minLength": 1
+    },
+    "datacontenttype": {
+      "description": "The data is JSON.",
+      "type": "string",
+      "enum": ["application/json"]
+    },
+    "data": {
+      "description": "The type-specific payload (architecture §3.8.1).",
+      "opaque": true
+    }
+  }
+}

@@ -15,7 +15,7 @@ import (
 
 // harnessScope stands for the components that will publish on the families,
 // which this stage does not have yet.
-var harnessScope = Scope{Role: "harness", Publish: []string{"task.>"}}
+var harnessScope = Scope{Role: "harness", Publish: []string{"task.>", "prop.>", "notice.>"}, Subscribe: []string{"_INBOX.>"}}
 
 func newTestAccount(t *testing.T) *Account {
 	t.Helper()

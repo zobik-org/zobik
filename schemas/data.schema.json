@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/data.schema.json",
+  "description": "The fields of data that architecture §3.8.1 fixes for every event, with context_ref, bodies and operator_proof (implementation §10.1). Every event's data is validated against it; no topic schema repeats these fields.",
+  "type": "object",
+  "properties": {
+    "topic": {
+      "description": "The topic on which the task is announced, and only that; the topic a request is about travels in target_topic (architecture §3.7.7).",
+      "type": "string",
+      "minLength": 1
+    },
+    "task_embedding": {
+      "description": "The task's embedding: base64 over little-endian float32 (implementation §1.2.1). Only in task.announced (architecture §3.7.4).",
+      "type": "string"
+    },
+    "model_id": {
+      "description": "The vector space the task_embedding was generated under (architecture §3.7.3).",
+      "type": "string"
+    },
+    "workspace": {
+      "description": "Project or repository identifier, chosen by whoever opens the trace and inherited unchanged down the trace (architecture §3.5.1, §2.4).",
+      "type": "string"
+    },
+    "origin_audience": {
+      "description": "The audience of the channel that opened the trace, inherited like workspace (architecture §3.5.3).",
+      "type": "string"
+    },
+    "context_ref": {
+      "description": "The Claim-Check reference to the Context Store (architecture §3.4), with the field names of the NRI's ContextRef (implementation §3).",
+      "type": "object",
+      "required": ["trace_id", "task_id", "name"],
+      "properties": {
+        "trace_id": {"description": "The trace.", "type": "string"},
+        "task_id": {"description": "The section.", "type": "string"},
+        "name": {"description": "The portion.", "type": "string"}
+      }
+    },
+    "bodies": {
+      "description": "The references to the bodies of an ingress message, stamped by the channel's Integration Sidecar (architecture §3.16.7, implementation §3, Ingress).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ref", "size", "digest", "name", "media_type"],
+        "properties": {
+          "ref": {
+            "description": "Where the body is in the Context Store.",
+            "type": "object",
+            "required": ["trace_id", "task_id", "name"],
+            "properties": {
+              "trace_id": {"type": "string"},
+              "task_id": {"type": "string"},
+              "name": {"type": "string"}
+            }
+          },
+          "size": {"description": "Bytes.", "type": "integer", "minimum": 0},
+          "digest": {"description": "In the form of implementation §8.1.", "type": "string"},
+          "name": {"description": "The body's name.", "type": "string"},
+          "media_type": {"description": "The body's media type.", "type": "string"},
+          "context": {"description": "The body came as context of the conversation, not of the request (architecture §3.16.7).", "type": "boolean"}
+        }
+      }
+    },
+    "current_attempts": {
+      "description": "How many times the subtask was attempted, stamped by the requester's Integration Sidecar (architecture §3.3).",
+      "type": "integer",
+      "minimum": 1
+    },
+    "previous_attempt": {
+      "description": "The TaskID of the attempt a task.announced reopens (architecture §3.3).",
+      "type": "string"
+    },
+    "final_round": {
+      "description": "Marks the attempt that opens the final round of a human query (architecture §3.5.2).",
+      "type": "boolean"
+    },
+    "declared_similarity": {
+      "description": "In task.proposed, optional: a ceiling on the similarity the Task Broker recomputes (architecture §3.7.5).",
+      "type": "number"
+    },
+    "similarity": {
+      "description": "The similarity the Task Broker recomputed: in task.assigned the winner's, in task.rejected that of the candidate that lost (architecture §3.8.1, §3.7.5).",
+      "type": "number"
+    },
+    "requester_identity": {
+      "description": "The platform identity of the node that opened the task, to which its terminal event is addressed; declared in each announcement and copied into the task.assigned (architecture §3.6.1).",
+      "type": "string"
+    },
+    "scope_token": {
+      "description": "The Context Store scope token, only in task.assigned (architecture §3.14.3), in compact JWS (implementation §9).",
+      "type": "string"
+    },
+    "failure_reason": {
+      "description": "Mandatory in every task.failed (architecture §3.3).",
+      "type": "string",
+      "minLength": 1
+    },
+    "failure_code": {
+      "description": "In the task.failed whose cause the architecture fixes (architecture §3.3). Known values: unanswered, undelivered, stale_vector_space, redundant_topic, not_derivable, logic_container_lost, channel_retired, proof_invalid, base_version_stale, request_invalid, artifact_vetoed, runtime_interface_unsupported, egress_slot_unbound, ingress_slot_unbound, blueprint_muted, capacity_exhausted, embedding_unavailable, admission_failed, acquisition_denied, no_forge (implementation §10.1). A requester that does not know the value reads the failure_reason.",
+      "type": "string"
+    },
+    "suggested_topic": {
+      "description": "Optional in task.failed, when the reason is redundancy with a covered topic (architecture §3.13.2).",
+      "type": "string"
+    },
+    "metrics": {
+      "description": "Mandatory in every task.completed and task.failed (architecture §3.10).",
+      "type": "object",
+      "required": ["tokens_in", "tokens_out", "cost", "duration_ms"],
+      "properties": {
+        "tokens_in": {"type": "integer", "minimum": 0},
+        "tokens_out": {"type": "integer", "minimum": 0},
+        "cost": {"description": "Monetary cost of any origin.", "type": "number", "minimum": 0},
+        "duration_ms": {"type": "integer", "minimum": 0}
+      }
+    },
+    "operator_proof": {
+      "description": "The operator's proof of a signed act, in compact JWS (architecture §3.14.2, implementation §9).",
+      "type": "string"
+    }
+  }
+}
