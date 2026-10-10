@@ -14,10 +14,11 @@ const (
 )
 
 // ConsoleScope is the console's: it creates and updates the streams, consumers
-// and buckets in the acts of deployment (implementation §6, Installation and zobik init).
+// and buckets in the acts of deployment, and writes v0 (implementation §6,
+// Installation and zobik init).
 var ConsoleScope = Scope{
 	Role:      "console",
-	Publish:   []string{"$JS.API.>"},
+	Publish:   []string{"$JS.API.>", "$KV." + BucketConfig + ".>", SubjectHistory + ".>"},
 	Subscribe: []string{"_INBOX.>"},
 }
 

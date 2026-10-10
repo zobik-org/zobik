@@ -70,7 +70,12 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 	if err := e.EnsureImage(ctx, o.Image); err != nil {
 		return fmt.Errorf("deploy: zobik image %s: %w", o.Image, err)
 	}
-	if err := ensureRoles(ctx, e, n, m, o.Dir, o.Image); err != nil {
+	ids, err := ensureRoles(ctx, e, n, m, o.Dir, o.Image)
+	if err != nil {
+		return err
+	}
+	substrate, err := newSubstrate(ids)
+	if err != nil {
 		return err
 	}
 
@@ -87,7 +92,7 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 	if err != nil {
 		return err
 	}
-	return runAct(ctx, e, n, o.Image, actStreams, consoleCreds)
+	return runAct(ctx, e, n, o.Image, actSubstrate, consoleCreds, File{Path: actSubstratePath, Mode: 0o600, Data: substrate})
 }
 
 func runAct(ctx context.Context, e *Engine, n names, image, act string, creds []byte, files ...File) error {

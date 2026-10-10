@@ -51,16 +51,49 @@ type Role struct {
 	AttemptWindow *signing.AttemptWindow
 	// Certificate is the role a role_certificate accredits it as, for a role that signs.
 	Certificate string
+	// Consumers are the durable consumers it pulls from, named by its identity
+	// (implementation §1.2.1).
+	Consumers func(id string) []bus.Consumer
 }
 
 // Roles are the structural roles this version brings up.
 var Roles = []Role{
-	{Unit: "config", Scope: bus.ConfigScope, Topic: "config_change"},
-	{Unit: "task_broker", Scope: bus.TaskBrokerScope, Certificate: signing.RoleTaskBroker},
-	{Unit: "context", Scope: bus.ContextScope},
-	// The panel's channels go first and last in their audience (implementation §6, The operator console).
+	{Unit: "config", Scope: bus.ConfigScope, Topic: "config_change", Consumers: claimant("config_change")},
+	// The Task Broker receives the entire family: announcements and closes, and
+	// every proposal (implementation §1.2.1).
+	{Unit: "task_broker", Scope: bus.TaskBrokerScope, Certificate: signing.RoleTaskBroker,
+		Consumers: func(id string) []bus.Consumer {
+			return []bus.Consumer{
+				{Stream: "task", Name: id, Filters: []string{"task.announced.>", "task.completed.>", "task.failed.>", "task.aborted.>"}},
+				{Stream: "prop", Name: id, Filters: []string{"prop.>"}},
+			}
+		}},
+	// The Context Store observes the terminal events to purge on trace close (implementation §1.2.9).
+	{Unit: "context", Scope: bus.ContextScope,
+		Consumers: func(id string) []bus.Consumer {
+			return []bus.Consumer{{Stream: "task", Name: id, Filters: []string{"task.completed.>", "task.failed.>", "task.aborted.>"}}}
+		}},
+	// The panel's channels go first and last in their audience (implementation §6,
+	// The operator console). A channel also receives the closes of the tasks it opens.
 	{Unit: "channel_operator", Scope: bus.ChannelScope, Topic: "hitl_contact_operator",
-		AttemptWindow: &signing.AttemptWindow{From: ptr(1), To: ptr(1), FinalRound: ptr(true)}},
+		AttemptWindow: &signing.AttemptWindow{From: ptr(1), To: ptr(1), FinalRound: ptr(true)},
+		Consumers: func(id string) []bus.Consumer {
+			c := claimant("hitl_contact_operator")(id)
+			c[0].Filters = append(c[0].Filters, "task.completed."+id+".>", "task.failed."+id+".>", "task.aborted."+id+".>")
+			return c
+		}},
+}
+
+// claimant listens to a topic's announcements and to the award and rejection
+// addressed to its identity.
+func claimant(topic string) func(id string) []bus.Consumer {
+	return func(id string) []bus.Consumer {
+		return []bus.Consumer{{Stream: "task", Name: id, Filters: []string{
+			bus.SubjectAnnounced(topic),
+			bus.SubjectAddressed(bus.TypeAssigned, id),
+			bus.SubjectAddressed(bus.TypeRejected, id),
+		}}}
+	}
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -68,21 +101,22 @@ func ptr[T any](v T) *T { return &v }
 // ensureRoles gives each role its volume and its material. A role that already
 // has its identity keeps it and only receives a renewed JWT; one whose volume is
 // new receives a new identity, and the one it replaces is revoked in the account.
-func ensureRoles(ctx context.Context, e *Engine, n names, m *material, dir, image string) error {
+func ensureRoles(ctx context.Context, e *Engine, n names, m *material, dir, image string) (map[string]string, error) {
 	if err := os.MkdirAll(filepath.Join(dir, dirIdentities), 0o700); err != nil {
-		return err
+		return nil, err
 	}
+	ids := map[string]string{}
 	var revoked []string
 	for _, r := range Roles {
 		created, err := e.EnsureVolume(ctx, n.volume(r.Unit), n.labels())
 		if err != nil {
-			return fmt.Errorf("deploy: %s volume: %w", r.Unit, err)
+			return nil, fmt.Errorf("deploy: %s volume: %w", r.Unit, err)
 		}
 		pubFile := filepath.Join(dirIdentities, r.Unit+".pub")
 		old, err := os.ReadFile(filepath.Join(dir, pubFile))
 		hasOld := err == nil
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+			return nil, err
 		}
 
 		var files []File
@@ -91,7 +125,7 @@ func ensureRoles(ctx context.Context, e *Engine, n names, m *material, dir, imag
 			pub = string(old)
 			jwtFile, err := m.roleJWT(r, pub)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			files = []File{jwtFile}
 		} else {
@@ -99,25 +133,26 @@ func ensureRoles(ctx context.Context, e *Engine, n names, m *material, dir, imag
 				revoked = append(revoked, string(old))
 			}
 			if pub, files, err = m.mintRole(r, image); err != nil {
-				return fmt.Errorf("deploy: %s: %w", r.Unit, err)
+				return nil, fmt.Errorf("deploy: %s: %w", r.Unit, err)
 			}
 		}
 		if err := e.WriteVolume(ctx, n.volume(r.Unit), image, RoleDir, files); err != nil {
-			return fmt.Errorf("deploy: writing %s's material: %w", r.Unit, err)
+			return nil, fmt.Errorf("deploy: writing %s's material: %w", r.Unit, err)
 		}
 		if err := writeFile(dir, pubFile, []byte(pub)); err != nil {
-			return err
+			return nil, err
 		}
+		ids[r.Unit] = pub
 	}
 	if len(revoked) == 0 {
-		return nil
+		return ids, nil
 	}
 	updated, err := bus.Revoke(m.root, m.account.JWT, revoked...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	m.account.JWT = updated
-	return writeFile(dir, fileAccount, []byte(updated))
+	return ids, writeFile(dir, fileAccount, []byte(updated))
 }
 
 // mintRole mints a role's platform identity and what the root signs for it.
@@ -181,4 +216,20 @@ func (m *material) roleJWT(r Role, pub string) (File, error) {
 		return File{}, err
 	}
 	return File{Path: FileBusJWT, Mode: 0o600, Data: []byte(token)}, nil
+}
+
+// Identities reads the roles' public keys, by unit, from the console's directory.
+func Identities(dir string) (map[string]string, error) {
+	ids := map[string]string{}
+	for _, r := range Roles {
+		pub, err := os.ReadFile(filepath.Join(dir, dirIdentities, r.Unit+".pub"))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		ids[r.Unit] = string(pub)
+	}
+	return ids, nil
 }

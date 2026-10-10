@@ -17,16 +17,17 @@ import (
 // the host. The console copies the act's material into it before starting it.
 const (
 	// CredsPath is where an ephemeral container finds the identity it connects with.
-	CredsPath      = "/run/zobik/bus.creds"
-	actAccountPath = "/run/zobik/account.jwt"
+	CredsPath        = "/run/zobik/bus.creds"
+	actAccountPath   = "/run/zobik/account.jwt"
+	actSubstratePath = "/run/zobik/substrate.json"
 	// ActCommand is the subcommand the ephemeral container runs: zobik bus-act <act>.
 	ActCommand = "bus-act"
 )
 
 // The acts.
 const (
-	actStreams = "streams"
-	actAccount = "account"
+	actSubstrate = "substrate"
+	actAccount   = "account"
 )
 
 // RunAct executes an act inside the ephemeral container.
@@ -40,12 +41,20 @@ func RunAct(ctx context.Context, act string) error {
 	defer nc.Close()
 
 	switch act {
-	case actStreams:
+	case actSubstrate:
+		raw, err := os.ReadFile(actSubstratePath)
+		if err != nil {
+			return err
+		}
+		var s substrate
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return err
+		}
 		js, err := jetstream.New(nc)
 		if err != nil {
 			return err
 		}
-		return bus.EnsureStreams(ctx, js)
+		return s.ensure(ctx, js)
 	case actAccount:
 		account, err := os.ReadFile(actAccountPath)
 		if err != nil {
