@@ -18,6 +18,7 @@ import (
 // The console's directory on the host, readable only by the user
 // (implementation §6, The root and the split Operator Channel):
 //
+//	user             the operator's username
 //	root.sealed      the root, encrypted with the password
 //	system.sealed    the system account's key, which only acts of deployment use
 //	console.sealed   the console's own platform identity
@@ -27,6 +28,7 @@ import (
 //
 // root.sealed is written last: its presence means the rest is complete.
 const (
+	fileUser     = "user"
 	fileRoot     = "root.sealed"
 	fileSystem   = "system.sealed"
 	fileConsole  = "console.sealed"
@@ -43,16 +45,27 @@ type material struct {
 	console nkeys.KeyPair
 }
 
-// loadOrMint opens the material in dir with password, minting it the first time.
-// It never mints the root again (implementation §6, Installation and zobik init):
-// it only registers the scopes the account does not have yet.
-func loadOrMint(dir, network string, password []byte, scopes []bus.Scope) (*material, error) {
+// ErrUnknownUser is a username other than the operator's.
+var ErrUnknownUser = errors.New("deploy: unknown user")
+
+// loadOrMint opens the material in dir with the operator's username and
+// password, minting it the first time. It never mints the root again
+// (implementation §6, Installation and zobik init): it only registers the scopes
+// the account does not have yet.
+func loadOrMint(dir, network, user string, password []byte, scopes []bus.Scope) (*material, error) {
 	sealedRoot, err := os.ReadFile(filepath.Join(dir, fileRoot))
 	if errors.Is(err, fs.ErrNotExist) {
-		return mint(dir, network, password, scopes)
+		return mint(dir, network, user, password, scopes)
 	}
 	if err != nil {
 		return nil, err
+	}
+	known, err := os.ReadFile(filepath.Join(dir, fileUser))
+	if err != nil {
+		return nil, err
+	}
+	if string(known) != user {
+		return nil, ErrUnknownUser
 	}
 	m := &material{account: &bus.Account{SigningKeys: map[string]nkeys.KeyPair{}}}
 	if m.root, err = console.OpenKey(sealedRoot, password); err != nil {
@@ -99,8 +112,14 @@ func loadOrMint(dir, network string, password []byte, scopes []bus.Scope) (*mate
 	return m, nil
 }
 
-func mint(dir, network string, password []byte, scopes []bus.Scope) (*material, error) {
+func mint(dir, network, user string, password []byte, scopes []bus.Scope) (*material, error) {
+	if user == "" {
+		return nil, errors.New("deploy: empty username")
+	}
 	if err := os.MkdirAll(filepath.Join(dir, dirKeys), 0o700); err != nil {
+		return nil, err
+	}
+	if err := writeFile(dir, fileUser, []byte(user)); err != nil {
 		return nil, err
 	}
 	root, err := nkeys.CreateOperator()

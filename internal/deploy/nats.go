@@ -25,7 +25,7 @@ func natsSpec(n names, config []byte) Spec {
 		Name:    n.container("nats"),
 		Alias:   "nats",
 		Network: n.dockerNetwork(),
-		NetName: n.network,
+		Labels:  n.labels(),
 		Image:   NATSImage,
 		Cmd:     []string{"--config", natsConfigPath},
 		Mounts:  []mount.Mount{{Type: mount.TypeVolume, Source: n.volume("nats"), Target: natsDataDir}},

@@ -13,15 +13,23 @@ import (
 	"zobik.org/zobik/internal/bus"
 )
 
-// BusSpec is an ephemeral container of image on the network's Docker network,
-// with the identity it connects with copied in at CredsPath. The name carries a
-// random suffix, so several can run at once.
-func BusSpec(network, purpose, image string, cmd []string, creds []byte, files ...File) Spec {
-	n := names{network}
+// BusSpec is an ephemeral container of image on the Docker network of the
+// network whose console directory is dir, with the identity it connects with
+// copied in at CredsPath.
+func BusSpec(dir, network, purpose, image string, cmd []string, creds []byte, files ...File) (Spec, error) {
+	root, err := readRoot(dir)
+	if err != nil {
+		return Spec{}, err
+	}
+	return busSpec(names{network, root}, purpose, image, cmd, creds, files...), nil
+}
+
+// busSpec names the container with a random suffix, so several can run at once.
+func busSpec(n names, purpose, image string, cmd []string, creds []byte, files ...File) Spec {
 	return Spec{
 		Name:    n.container(purpose + "-" + uuid.NewString()[:8]),
 		Network: n.dockerNetwork(),
-		NetName: network,
+		Labels:  n.labels(),
 		Image:   image,
 		Cmd:     cmd,
 		Files:   append(files, File{Path: CredsPath, Mode: 0o600, Data: creds}),

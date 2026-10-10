@@ -239,7 +239,10 @@ func runOnBus(ctx context.Context, n networkFlags, role string, cmd []string, at
 		return err
 	}
 	defer e.Close()
-	spec := deploy.BusSpec(n.network, role, image, cmd, creds, files...)
+	spec, err := deploy.BusSpec(n.dir, n.network, role, image, cmd, creds, files...)
+	if err != nil {
+		return err
+	}
 	if attached {
 		return e.RunAttached(ctx, spec, os.Stdout)
 	}

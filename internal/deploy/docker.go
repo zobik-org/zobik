@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"strings"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -23,9 +24,6 @@ type Engine struct {
 	c *client.Client
 }
 
-// labelNetwork marks every resource of a network with its name.
-const labelNetwork = "org.zobik.network"
-
 // NewEngine connects to the engine named by the environment (DOCKER_HOST), or the default socket.
 func NewEngine(ctx context.Context) (*Engine, error) {
 	c, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
@@ -41,6 +39,45 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 
 func (e *Engine) Close() error { return e.c.Close() }
 
+// CheckOwner fails if the engine holds a resource of n's network that n's root
+// did not create: zobik init does not converge over another root's network, and
+// never removes it on its own. With no root yet, any resource is foreign.
+func (e *Engine) CheckOwner(ctx context.Context, n names) error {
+	foreign := func(labels map[string]string) bool {
+		return n.root == "" || labels[labelRoot] != n.root
+	}
+	fail := func(what string) error {
+		return fmt.Errorf("deploy: the network %q on this engine belongs to another root (%s): remove it or choose another network name", n.network, what)
+	}
+	if net, err := e.c.NetworkInspect(ctx, n.dockerNetwork(), client.NetworkInspectOptions{}); err == nil {
+		if foreign(net.Network.Labels) {
+			return fail("Docker network " + n.dockerNetwork())
+		}
+	} else if !cerrdefs.IsNotFound(err) {
+		return err
+	}
+	byNetwork := client.Filters{}.Add("label", labelNetwork+"="+n.network)
+	cs, err := e.c.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: byNetwork})
+	if err != nil {
+		return err
+	}
+	for _, c := range cs.Items {
+		if foreign(c.Labels) {
+			return fail("container " + strings.TrimPrefix(c.Names[0], "/"))
+		}
+	}
+	vs, err := e.c.VolumeList(ctx, client.VolumeListOptions{Filters: byNetwork})
+	if err != nil {
+		return err
+	}
+	for _, v := range vs.Items {
+		if foreign(v.Labels) {
+			return fail("volume " + v.Name)
+		}
+	}
+	return nil
+}
+
 // File is a file copied into a container before it starts. Copying it through
 // the engine needs no host path (implementation §1.2.4).
 type File struct {
@@ -50,7 +87,7 @@ type File struct {
 }
 
 // EnsureNetwork creates the network's Docker bridge network if it does not exist.
-func (e *Engine) EnsureNetwork(ctx context.Context, name, netName string) error {
+func (e *Engine) EnsureNetwork(ctx context.Context, name string, labels map[string]string) error {
 	if _, err := e.c.NetworkInspect(ctx, name, client.NetworkInspectOptions{}); err == nil {
 		return nil
 	} else if !cerrdefs.IsNotFound(err) {
@@ -58,19 +95,46 @@ func (e *Engine) EnsureNetwork(ctx context.Context, name, netName string) error 
 	}
 	_, err := e.c.NetworkCreate(ctx, name, client.NetworkCreateOptions{
 		Driver: "bridge",
-		Labels: map[string]string{labelNetwork: netName},
+		Labels: labels,
 	})
 	return err
 }
 
-// EnsureVolume creates a named volume if it does not exist.
-func (e *Engine) EnsureVolume(ctx context.Context, name, netName string) error {
+// EnsureVolume creates a named volume if it does not exist, and says whether it
+// created it.
+func (e *Engine) EnsureVolume(ctx context.Context, name string, labels map[string]string) (bool, error) {
 	if _, err := e.c.VolumeInspect(ctx, name, client.VolumeInspectOptions{}); err == nil {
-		return nil
+		return false, nil
 	} else if !cerrdefs.IsNotFound(err) {
+		return false, err
+	}
+	_, err := e.c.VolumeCreate(ctx, client.VolumeCreateOptions{Name: name, Labels: labels})
+	return err == nil, err
+}
+
+// WriteVolume copies files into a volume through a container of image that is
+// created with the volume mounted at dir and never started. Each file's path is
+// relative to dir.
+func (e *Engine) WriteVolume(ctx context.Context, volume, image, dir string, files []File) error {
+	res, err := e.c.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{Image: image},
+		HostConfig: &container.HostConfig{
+			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: volume, Target: dir}},
+		},
+	})
+	if err != nil {
 		return err
 	}
-	_, err := e.c.VolumeCreate(ctx, client.VolumeCreateOptions{Name: name, Labels: map[string]string{labelNetwork: netName}})
+	defer e.c.ContainerRemove(context.WithoutCancel(ctx), res.ID, client.ContainerRemoveOptions{Force: true})
+	rooted := make([]File, len(files))
+	for i, f := range files {
+		rooted[i] = File{Path: path.Join(dir, f.Path), Mode: f.Mode, Data: f.Data}
+	}
+	archive, err := tarFiles(rooted)
+	if err != nil {
+		return err
+	}
+	_, err = e.c.CopyToContainer(ctx, res.ID, client.CopyToContainerOptions{DestinationPath: "/", Content: archive})
 	return err
 }
 
@@ -95,7 +159,7 @@ type Spec struct {
 	Name    string
 	Alias   string
 	Network string // Docker network
-	NetName string // Zobik network
+	Labels  map[string]string
 	Image   string
 	Cmd     []string
 	Mounts  []mount.Mount
@@ -210,7 +274,7 @@ func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
 		Config: &container.Config{
 			Image:  s.Image,
 			Cmd:    s.Cmd,
-			Labels: map[string]string{labelNetwork: s.NetName},
+			Labels: s.Labels,
 		},
 		HostConfig:       host,
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{s.Network: endpoint}},

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"golang.org/x/term"
@@ -92,7 +93,7 @@ func initCmd(ctx context.Context, args []string) error {
 		return err
 	}
 	_, statErr := os.Stat(filepath.Join(n.dir, "root.sealed"))
-	password, err := readPassword(os.IsNotExist(statErr))
+	user, password, err := readCredentials(os.IsNotExist(statErr))
 	if err != nil {
 		return err
 	}
@@ -104,42 +105,58 @@ func initCmd(ctx context.Context, args []string) error {
 	return deploy.Init(ctx, e, deploy.Options{
 		Network:  n.network,
 		Dir:      n.dir,
+		User:     user,
 		Password: password,
 		Image:    image,
-		Scopes:   append([]bus.Scope{bus.ConsoleScope}, devScopes...),
+		Scopes:   append(append([]bus.Scope{bus.ConsoleScope}, bus.RoleScopes...), devScopes...),
 	})
 }
 
-// readPassword asks for the operator's password on the terminal, twice when it
-// is new. Without a terminal it reads one line from standard input.
-func readPassword(isNew bool) ([]byte, error) {
+// readCredentials asks for the operator's username and password on the
+// terminal, the password twice when it is new. Without a terminal it reads them
+// from standard input, one per line.
+func readCredentials(isNew bool) (string, []byte, error) {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
-		line, err := bufio.NewReader(os.Stdin).ReadBytes('\n')
-		if err != nil && len(line) == 0 {
-			return nil, errors.New("no password on standard input")
+		in := bufio.NewReader(os.Stdin)
+		user, err := in.ReadString('\n')
+		if err != nil {
+			return "", nil, errors.New("no username on standard input")
 		}
-		return bytes.TrimRight(line, "\r\n"), nil
+		pw, err := in.ReadBytes('\n')
+		if err != nil && len(pw) == 0 {
+			return "", nil, errors.New("no password on standard input")
+		}
+		return strings.TrimRight(user, "\r\n"), bytes.TrimRight(pw, "\r\n"), nil
+	}
+	fmt.Fprint(os.Stderr, "Username: ")
+	user, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return "", nil, err
+	}
+	user = strings.TrimSpace(user)
+	if user == "" {
+		return "", nil, errors.New("empty username")
 	}
 	fmt.Fprint(os.Stderr, "Password: ")
 	pw, err := term.ReadPassword(fd)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if len(pw) == 0 {
-		return nil, errors.New("empty password")
+		return "", nil, errors.New("empty password")
 	}
 	if isNew {
 		fmt.Fprint(os.Stderr, "Repeat it: ")
 		again, err := term.ReadPassword(fd)
 		fmt.Fprintln(os.Stderr)
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
 		if !bytes.Equal(pw, again) {
-			return nil, errors.New("the passwords do not match")
+			return "", nil, errors.New("the passwords do not match")
 		}
 	}
-	return pw, nil
+	return user, pw, nil
 }

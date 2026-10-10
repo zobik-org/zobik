@@ -128,6 +128,20 @@ func RegisterScopes(root nkeys.KeyPair, accountJWT string, scopes []Scope) (stri
 	return signed, keys, err
 }
 
+// Revoke returns the account's JWT, signed again by the root, with the
+// identities users revoked: an act of deployment that leaves an identity unused
+// revokes it (implementation §6, The root and the split Operator Channel).
+func Revoke(root nkeys.KeyPair, accountJWT string, users ...string) (string, error) {
+	acc, err := jwt.DecodeAccountClaims(accountJWT)
+	if err != nil {
+		return "", err
+	}
+	for _, u := range users {
+		acc.Revoke(u)
+	}
+	return acc.Encode(root)
+}
+
 // IssueUser mints a user JWT for the platform identity user, signed by a scoped
 // signing key of account. The user carries no permissions of its own: the scope's apply.
 func IssueUser(signingKey nkeys.KeyPair, account, user, name string, expires time.Time) (string, error) {

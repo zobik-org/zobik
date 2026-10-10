@@ -25,8 +25,8 @@ func TestBus(t *testing.T) {
 	defer cancel()
 	z := newNetwork(t, ctx)
 
-	z.run(t, ctx, "pw-e2e\n", "init")
-	z.run(t, ctx, "pw-e2e\n", "init") // converges
+	z.run(t, ctx, "operator\npw-e2e\n", "init")
+	z.run(t, ctx, "operator\npw-e2e\n", "init") // converges
 
 	lines := z.start(t, ctx, "tap")
 	waitFor(t, lines, regexp.MustCompile(`^tap: listening`))

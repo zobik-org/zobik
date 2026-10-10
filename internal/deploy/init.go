@@ -15,7 +15,10 @@ type Options struct {
 	// Network names the network; it prefixes every engine resource.
 	Network string
 	// Dir is the console's directory for this network on the host.
-	Dir      string
+	Dir string
+	// User and Password are the only thing zobik init asks the person
+	// (implementation §6, The root and the split Operator Channel).
+	User     string
 	Password []byte
 	// Image is the zobik image the roles and the ephemeral acts run.
 	Image string
@@ -30,19 +33,31 @@ const actIdentityLifetime = 10 * time.Minute
 // Init brings up what exists of the network, and converges: it creates what is
 // missing and leaves what exists (implementation §6, Installation and zobik init).
 func Init(ctx context.Context, e *Engine, o Options) error {
-	n := names{o.Network}
-	m, err := loadOrMint(o.Dir, o.Network, o.Password, o.Scopes)
+	// What the engine holds under this name has to be this root's before
+	// anything is minted or touched.
+	root, err := readRoot(o.Dir)
 	if err != nil {
 		return err
 	}
+	if err := e.CheckOwner(ctx, names{o.Network, root}); err != nil {
+		return err
+	}
+	m, err := loadOrMint(o.Dir, o.Network, o.User, o.Password, o.Scopes)
+	if err != nil {
+		return err
+	}
+	if root, err = m.root.PublicKey(); err != nil {
+		return err
+	}
+	n := names{o.Network, root}
 
-	if err := e.EnsureNetwork(ctx, n.dockerNetwork(), o.Network); err != nil {
+	if err := e.EnsureNetwork(ctx, n.dockerNetwork(), n.labels()); err != nil {
 		return fmt.Errorf("deploy: network: %w", err)
 	}
 	if err := e.EnsureImage(ctx, NATSImage); err != nil {
 		return fmt.Errorf("deploy: NATS image: %w", err)
 	}
-	if err := e.EnsureVolume(ctx, n.volume("nats"), o.Network); err != nil {
+	if _, err := e.EnsureVolume(ctx, n.volume("nats"), n.labels()); err != nil {
 		return fmt.Errorf("deploy: NATS volume: %w", err)
 	}
 	config, err := natsConfig(natsDataDir, m.account.Operator, m.account.System, m.account.JWT)
@@ -54,6 +69,9 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 	}
 	if err := e.EnsureImage(ctx, o.Image); err != nil {
 		return fmt.Errorf("deploy: zobik image %s: %w", o.Image, err)
+	}
+	if err := ensureRoles(ctx, e, n, m, o.Dir, o.Image); err != nil {
+		return err
 	}
 
 	// The server may hold an older account, from before a scope was registered.
@@ -73,7 +91,7 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 }
 
 func runAct(ctx context.Context, e *Engine, n names, image, act string, creds []byte, files ...File) error {
-	if _, err := e.RunEphemeral(ctx, BusSpec(n.network, "act-"+act, image, []string{ActCommand, act}, creds, files...)); err != nil {
+	if _, err := e.RunEphemeral(ctx, busSpec(n, "act-"+act, image, []string{ActCommand, act}, creds, files...)); err != nil {
 		return fmt.Errorf("deploy: act %s: %w", act, err)
 	}
 	return nil
