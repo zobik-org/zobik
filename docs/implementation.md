@@ -209,7 +209,7 @@ The substrate stays inside: **KV for the head**—writing the next revision is t
 
 **The `mutable` region goes in a separate KV bucket, with a history of one revision**, one key per list. The Store applies each `add` or `remove` by rewriting the list with a CAS on its revision, and with a single revision the replaced value ceases to exist: it is the property §2.3 requires, and the one the head's history cannot give. One key per element would save the rewrite, but it would put the value in the key's name, and KV keys do not admit the characters of an email or a bank account. The attribution of each edit goes to a stream of its own with who, when, key and operation, without the value.
 
-**The schema it validates against is a JSON Schema (2020-12) embedded in the `zobik` binary.** It is the same document the panel generates its form from (row 3), and it is assembled from one fragment per piece of logic that consumes parameters: those of §2.3, those of the Spawner's strategy (§4), those of the Network Monitor's trigger logic (§5) and the `protocol` range of the Integration Sidecar's adapters (§1.2.12). Each fragment lives next to the code that reads it. Type, range and shape are keywords of the standard—an open range is `exclusiveMinimum` or `exclusiveMaximum`—, and what §2.3 additionally requires is declared with custom annotations per key:
+**The schema it validates against is a JSON Schema (2020-12) embedded in the `zobik` binary.** It is the same document the panel generates its form from (row 3), and it is assembled from one fragment per piece of logic that consumes parameters: those of §2.3, those of the Spawner's strategy (§4), those of the Network Monitor's trigger logic (§5) and the `protocol` range of the Integration Sidecar's adapters (§1.2.12). Each fragment lives next to the code that reads it. Each key is written in the subset of §8.2, because the preconditions are compiled against its types, and a duration is an integer in milliseconds, as in the payloads (§10.1). Type, range and shape are keywords of the standard—an open range is `exclusiveMinimum` or `exclusiveMaximum`—, and what §2.3 additionally requires is declared with custom annotations per key:
 
 | Annotation | Values | What it fixes |
 | :--- | :--- | :--- |
@@ -224,7 +224,7 @@ The substrate stays inside: **KV for the head**—writing the next revision is t
 | `embedding_model` | `config.network_admission == "frozen"` |
 | `network_admission`, `embedding_model` | `config.network_admission == "frozen" \|\| has(config.embedding_model)` |
 | `min_observations`, `quality_window` | `config.min_observations <= config.quality_window` |
-| `min_observations`, `quality_window`, `outer_share` | `config.min_observations <= config.outer_share * config.quality_window` |
+| `min_observations`, `quality_window`, `outer_share` | `double(config.min_observations) <= config.outer_share * double(config.quality_window)` |
 | `auction_timeout`, `hitl_response_window` | `config.auction_timeout < config.hitl_response_window` |
 
 JSON Schema neither compares two keys with each other nor does arithmetic, and CEL is already in the binary, compiled against declared types: the Config Store evaluates the preconditions with the same engine it verifies the conditions of an egress entry with (§3.14.4), and the console, which is the same binary, evaluates them before signing, which is how the panel offers the two edits together (§2.3). It is the form Kubernetes gives to the validation of its custom resources: JSON Schema with CEL rules alongside.

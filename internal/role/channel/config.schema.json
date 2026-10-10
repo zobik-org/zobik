@@ -1,0 +1,36 @@
+{
+  "description": "The Global Configuration keys the channel role reads (architecture §2.3, implementation §1.2.5). Durations are integers in milliseconds.",
+  "properties": {
+    "hitl_response_window": {
+      "description": "How long a channel waits for a human answer before declaring a hitl_contact_* round expired, in milliseconds (architecture §3.5.2).",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "default": 86400000,
+      "query_class": "pinned",
+      "storage": "versioned",
+      "preconditions": [
+        {"rule": "config.auction_timeout < config.hitl_response_window", "message": "auction_timeout has to be less than hitl_response_window (architecture §3.5.2)"}
+      ]
+    },
+    "result_delivery": {
+      "description": "How the channel that opened a trace delivers its outcome: one value per audience and a default one (architecture §3.5.4).",
+      "type": "object",
+      "required": ["default"],
+      "properties": {
+        "default": {
+          "description": "The value of an audience audiences does not name.",
+          "type": "string",
+          "enum": ["none", "ack", "acceptance"]
+        },
+        "audiences": {
+          "description": "The value of each audience that does not take the default.",
+          "type": "object",
+          "additionalProperties": {"type": "string", "enum": ["none", "ack", "acceptance"]}
+        }
+      },
+      "default": {"default": "ack", "audiences": {"user": "acceptance"}},
+      "query_class": "current",
+      "storage": "versioned"
+    }
+  }
+}

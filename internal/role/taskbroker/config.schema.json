@@ -1,0 +1,60 @@
+{
+  "description": "The Global Configuration keys the Task Broker reads (architecture §2.3, implementation §1.2.5). Durations are integers in milliseconds.",
+  "properties": {
+    "auction_timeout": {
+      "description": "How long the Task Broker waits for proposals on a task.announced before declaring the task vacant, in milliseconds (architecture §3.7.5, step 5).",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "default": 2000,
+      "query_class": "current",
+      "storage": "versioned",
+      "preconditions": [
+        {"rule": "config.auction_timeout < config.hitl_response_window", "message": "auction_timeout has to be less than hitl_response_window (architecture §3.5.2)"}
+      ]
+    },
+    "reannounce_backoff_base": {
+      "description": "The initial interval between successive re-announcements of the same task, in milliseconds; it doubles on each one up to max_reannounce_backoff (architecture §3.1).",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "default": 5000,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "max_reannounce_backoff": {
+      "description": "The ceiling of the re-announcement interval, in milliseconds (architecture §3.1).",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "default": 300000,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "task_lease_ttl": {
+      "description": "How long the Task Broker tolerates receiving no renewal from the assignee before returning the task to UNASSIGNED, in milliseconds (architecture §3.1).",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "default": 30000,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "similarity_precision_decimals": {
+      "description": "The decimals a similarity is rounded to before comparing it against a floor and before deciding a tie (architecture §3.7.5, step 4).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 6,
+      "default": 3,
+      "query_class": "pinned",
+      "storage": "versioned"
+    },
+    "network_admission": {
+      "description": "The network's admission state, which the Task Broker reads before granting any assignment (architecture §3.18).",
+      "type": "string",
+      "enum": ["open", "drain", "frozen"],
+      "default": "frozen",
+      "query_class": "current",
+      "storage": "versioned",
+      "preconditions": [
+        {"rule": "config.network_admission == \"frozen\" || has(config.embedding_model)", "message": "the network opens only with embedding_model assigned (architecture §2.3, §3.18)"}
+      ]
+    }
+  }
+}

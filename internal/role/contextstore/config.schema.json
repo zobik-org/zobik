@@ -1,0 +1,13 @@
+{
+  "description": "The Global Configuration keys the Context Store reads (architecture §2.3, implementation §1.2.5). Durations are integers in milliseconds.",
+  "properties": {
+    "context_retention_grace": {
+      "description": "How long the context of a TraceID survives after its whole tree reaches a terminal state, in milliseconds (architecture §3.4).",
+      "type": "integer",
+      "minimum": 0,
+      "default": 604800000,
+      "query_class": "current",
+      "storage": "versioned"
+    }
+  }
+}

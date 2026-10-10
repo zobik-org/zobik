@@ -1,0 +1,21 @@
+{
+  "description": "The Global Configuration keys the Integration Sidecar reads (architecture §2.3, implementation §1.2.5).",
+  "properties": {
+    "embedding_model": {
+      "description": "The network's vector space: the egress_registry entry the Embedding Model is reached through, the model requested from it and its prefix convention. It has no default: the network is born without a vector space (architecture §2.3, implementation §1.2.15).",
+      "type": "object",
+      "required": ["entry", "model", "document_prefix", "query_prefix"],
+      "properties": {
+        "entry": {"description": "The egress_registry key of the Embedding Model.", "type": "string", "minLength": 1, "query_class": "current"},
+        "model": {"description": "The model requested from the entry.", "type": "string", "minLength": 1, "query_class": "current"},
+        "document_prefix": {"description": "The prefix of the capability_text side; empty in a model without prefixes.", "type": "string", "query_class": "current"},
+        "query_prefix": {"description": "The prefix of the task's text, the querying side (architecture §3.7.4); empty in a model without prefixes.", "type": "string", "query_class": "current"}
+      },
+      "storage": "versioned",
+      "preconditions": [
+        {"rule": "config.network_admission == \"frozen\"", "message": "editing embedding_model requires network_admission = frozen (architecture §3.13.7, §3.18)"},
+        {"rule": "config.network_admission == \"frozen\" || has(config.embedding_model)", "message": "the network opens only with embedding_model assigned (architecture §2.3, §3.18)"}
+      ]
+    }
+  }
+}
