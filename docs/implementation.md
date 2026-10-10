@@ -1346,6 +1346,8 @@ The Catalog, the blueprints and the configuration history are data and not autho
 
 **Each role is reached by its role name.** `config`, `context`, `secrets` and the others are aliases on the Docker network, and the NATS server is `nats`; the container's name also carries the network (`zobik-<network>-config`), because Docker requires it to be unique on the host. Each service listens on a fixed port the binary brings, and the NATS server on its standard port, 4222. So the Integration Sidecar reaches the NATS server, `secrets` and the Context Store at the same address in every network. That only whoever creates the containers assigns those names is upheld by the absence of `NET_RAW` (*The off-Bus interfaces*, above).
 
+**The NATS server publishes no port on the host, and the console acts on the Bus from inside the network.** Creating the streams, the consumers and the buckets, pushing the account's JWT through the system account (§1.2.1) and writing the rates bucket (§8.5) run in an ephemeral container of the roles' image on the network's Docker network. The console copies into it, before starting it, an identity that lives as long as the act, and removes it when the act ends. The path is the same on every operating system, whatever the edge of the engine's VM (§2.1).
+
 **The Integration Sidecar of a channel with ingress listens for `ingress`'s forwarding on a fixed port of `zobik-sidecar`**, the same in every channel, so `ingress` reaches it with the container's address it already reads from `/containers/json` (§2.3).
 
 ### The service between the console and the channels
