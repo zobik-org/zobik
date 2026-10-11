@@ -166,6 +166,8 @@ type Spec struct {
 	Files   []File
 	// Restart is unless-stopped for the long-lived components; an ephemeral one has none.
 	Restart bool
+	// Healthcheck reports whether a role is ready (implementation §6, The health of the roles).
+	Healthcheck *container.HealthConfig
 }
 
 // EnsureRunning creates and starts the container if it does not exist, and
@@ -188,6 +190,56 @@ func (e *Engine) EnsureRunning(ctx context.Context, s Spec) error {
 	}
 	_, err = e.c.ContainerStart(ctx, id, client.ContainerStartOptions{})
 	return err
+}
+
+// EnsureCurrent is EnsureRunning for a container whose image can change between
+// runs of zobik init: one created from another image than the one s.Image names
+// now is replaced.
+func (e *Engine) EnsureCurrent(ctx context.Context, s Spec) error {
+	info, err := e.c.ContainerInspect(ctx, s.Name, client.ContainerInspectOptions{})
+	if err == nil {
+		img, err := e.c.ImageInspect(ctx, s.Image)
+		if err != nil {
+			return err
+		}
+		if info.Container.Image != img.ID {
+			if _, err := e.c.ContainerRemove(ctx, s.Name, client.ContainerRemoveOptions{Force: true}); err != nil {
+				return err
+			}
+		}
+	} else if !cerrdefs.IsNotFound(err) {
+		return err
+	}
+	return e.EnsureRunning(ctx, s)
+}
+
+// WaitHealthy waits until the container's health check reports it ready, and
+// fails if the container stops or timeout passes.
+func (e *Engine) WaitHealthy(ctx context.Context, name string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		info, err := e.c.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+		if err != nil {
+			return err
+		}
+		st := info.Container.State
+		switch {
+		case st == nil:
+		case st.Health != nil && st.Health.Status == container.Healthy:
+			return nil
+		case !st.Running && !st.Restarting:
+			out, _ := e.output(ctx, info.Container.ID)
+			return fmt.Errorf("deploy: %s stopped with %d: %s", name, st.ExitCode, bytes.TrimSpace(out))
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("deploy: %s is not ready after %s", name, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 // RunEphemeral runs a container to completion, returns what it wrote and
@@ -272,9 +324,10 @@ func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
 	res, err := e.c.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: s.Name,
 		Config: &container.Config{
-			Image:  s.Image,
-			Cmd:    s.Cmd,
-			Labels: s.Labels,
+			Image:       s.Image,
+			Cmd:         s.Cmd,
+			Labels:      s.Labels,
+			Healthcheck: s.Healthcheck,
 		},
 		HostConfig:       host,
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{s.Network: endpoint}},

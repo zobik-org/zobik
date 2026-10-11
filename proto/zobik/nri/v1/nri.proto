@@ -1,0 +1,50 @@
+// The Node Runtime Interface (implementation §3). This file carries the messages
+// the Context Store and the channels already use; the service enters with the
+// Integration Sidecar.
+syntax = "proto3";
+package zobik.nri.v1;
+
+option go_package = "zobik.org/zobik/proto/zobik/nri/v1;nriv1";
+
+// Context Store: a portion is a name within a task's section
+message ContextRef {
+  string trace_id = 1;
+  string task_id  = 2;  // the section
+  string name     = 3;  // the portion
+}
+
+message ContextRead {
+  string     task_id = 1;  // task whose token authorizes the read
+  ContextRef ref     = 2;  // from that task's trace
+}
+
+message ContextWrite {
+  oneof body {
+    ContextWriteHeader header = 1;  // first message
+    bytes              chunk  = 2;
+  }
+}
+
+message ContextWriteHeader {
+  string task_id = 1;  // task in whose section the write goes
+  string name    = 2;  // up to 120 bytes
+}
+
+message ContextList {
+  string task_id = 1;  // task whose token authorizes the listing
+  string section = 2;  // TaskID of a section of its trace
+}
+
+message ContextListing {
+  repeated ContextRef refs = 1;
+}
+
+message Chunk {
+  bytes data = 1;  // up to 1 MiB
+}
+
+message PurgeRequest {
+  string task_id = 1;  // one of the roots the node opened
+}
+
+message PurgeAck {}

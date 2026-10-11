@@ -144,3 +144,12 @@ func Publish(ctx context.Context, js jetstream.JetStream, subject string, e *Eve
 	_, err = js.Publish(ctx, subject, payload, jetstream.WithMsgID(e.ID))
 	return err
 }
+
+// TraceID returns the trace a W3C traceparent names, or "" if it is not one.
+func TraceID(traceparent string) string {
+	parts := strings.Split(traceparent, "-")
+	if len(parts) != 4 || len(parts[1]) != 32 {
+		return ""
+	}
+	return parts[1]
+}

@@ -106,7 +106,8 @@ func TestRejectedForms(t *testing.T) {
 	brokerCert := f.roleCert(broker, RoleTaskBroker)
 	scope := ScopeToken{Sub: pub(t, node), TraceID: "tr", Section: "tk"}
 	noEntry := f.sign(f.root, TypeOperatorProof, OperatorProof{Act: ActNodeProvision, Audience: "hitl_contact_client"}, "")
-	channelNoEntry := f.sign(spawner, TypeCapability, Capability{Sub: pub(t, node), OperatorProof: noEntry}, spawnerCert)
+	channelNoEntry := f.sign(spawner, TypeCapability, Capability{Sub: pub(t, node), Topic: "hitl_contact_client", OperatorProof: noEntry}, spawnerCert)
+	structuralNode := f.sign(f.root, TypeCapability, Capability{Sub: pub(t, node), Topic: "config_change"}, "")
 
 	cases := []struct {
 		name   string
@@ -139,6 +140,10 @@ func TestRejectedForms(t *testing.T) {
 		}, ErrForm},
 		{"scope token signed by the root", func() error {
 			_, err := VerifyScopeToken(f.sign(f.root, TypeScopeToken, scope, ""), f.pub)
+			return err
+		}, ErrForm},
+		{"scope token from a structural node that is not a channel", func() error {
+			_, err := VerifyScopeToken(f.sign(node, TypeScopeToken, scope, structuralNode), f.pub)
 			return err
 		}, ErrForm},
 		{"scope token from emergent channel without entry_topic", func() error {

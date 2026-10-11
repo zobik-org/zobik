@@ -7,6 +7,7 @@ import (
 	"github.com/nats-io/nkeys"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/role"
 	"zobik.org/zobik/internal/signing"
 )
 
@@ -42,10 +43,10 @@ func TestMintRole(t *testing.T) {
 			t.Fatalf("%s: %v", r.Unit, err)
 		}
 		got := files(fs)
-		if got[FileRootPub] != rootPub {
-			t.Errorf("%s: root.pub is %q", r.Unit, got[FileRootPub])
+		if got[role.FileRootPub] != rootPub {
+			t.Errorf("%s: root.pub is %q", r.Unit, got[role.FileRootPub])
 		}
-		seed, err := nkeys.FromSeed([]byte(got[FileIdentity]))
+		seed, err := nkeys.FromSeed([]byte(got[role.FileIdentity]))
 		if err != nil {
 			t.Fatalf("%s: identity: %v", r.Unit, err)
 		}
@@ -53,7 +54,7 @@ func TestMintRole(t *testing.T) {
 			t.Errorf("%s: the seed is not the identity's", r.Unit)
 		}
 
-		uc, err := jwt.DecodeUserClaims(got[FileBusJWT])
+		uc, err := jwt.DecodeUserClaims(got[role.FileBusJWT])
 		if err != nil {
 			t.Fatalf("%s: bus.jwt: %v", r.Unit, err)
 		}
@@ -62,7 +63,7 @@ func TestMintRole(t *testing.T) {
 			t.Errorf("%s: the JWT is not the identity's under its scope", r.Unit)
 		}
 
-		cred, hasCred := got[FileCredential]
+		cred, hasCred := got[role.FileCredential]
 		if hasCred != (r.Topic != "") {
 			t.Errorf("%s: credential present = %v", r.Unit, hasCred)
 		}
@@ -79,7 +80,7 @@ func TestMintRole(t *testing.T) {
 			}
 		}
 
-		cert, hasCert := got[FileRoleCertificate]
+		cert, hasCert := got[role.FileRoleCertificate]
 		if hasCert != (r.Certificate != "") {
 			t.Errorf("%s: certificate present = %v", r.Unit, hasCert)
 		}
@@ -107,7 +108,7 @@ func TestOperatorChannelWindow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		v, err := signing.VerifyCapability(files(fs)[FileCredential], rootPub)
+		v, err := signing.VerifyCapability(files(fs)[role.FileCredential], rootPub)
 		if err != nil {
 			t.Fatal(err)
 		}

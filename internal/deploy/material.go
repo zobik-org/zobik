@@ -214,3 +214,16 @@ func writeFile(dir, name string, data []byte) error {
 	}
 	return os.Rename(tmp, path)
 }
+
+// OpenRoot opens the root with the operator's username and password: the session
+// a command opens for one act (implementation §6, The root and the split Operator Channel).
+func OpenRoot(dir, user string, password []byte) (nkeys.KeyPair, error) {
+	known, err := os.ReadFile(filepath.Join(dir, fileUser))
+	if err != nil {
+		return nil, err
+	}
+	if string(known) != user {
+		return nil, ErrUnknownUser
+	}
+	return openSealed(dir, fileRoot, password)
+}

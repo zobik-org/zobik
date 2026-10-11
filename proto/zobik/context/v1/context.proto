@@ -1,0 +1,41 @@
+// The Context Store's service, which the Integration Sidecars and the channels
+// reach over gRPC (implementation §1.2.9, §6, The off-Bus interfaces).
+syntax = "proto3";
+package zobik.context.v1;
+
+option go_package = "zobik.org/zobik/proto/zobik/context/v1;contextv1";
+
+import "zobik/nri/v1/nri.proto";
+
+service ContextStore {
+  rpc Read(StoreRead)          returns (stream zobik.nri.v1.Chunk);
+  rpc Write(stream StoreWrite) returns (zobik.nri.v1.ContextRef);
+  rpc List(StoreList)          returns (zobik.nri.v1.ContextListing);
+  rpc Purge(StorePurge)        returns (zobik.nri.v1.PurgeAck);
+}
+
+message StoreRead {
+  string                  token = 1;  // scope token, compact JWS
+  zobik.nri.v1.ContextRef ref   = 2;
+}
+
+message StoreWrite {
+  oneof body {
+    StoreWriteHeader header = 1;  // first message
+    bytes            chunk  = 2;
+  }
+}
+
+message StoreWriteHeader {
+  string token = 1;
+  string name  = 2;  // the section is the token's TaskID
+}
+
+message StoreList {
+  string token   = 1;
+  string task_id = 2;  // the section, within the token's trace
+}
+
+message StorePurge {
+  string token = 1;  // a root's token
+}

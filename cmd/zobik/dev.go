@@ -234,6 +234,11 @@ func runOnBus(ctx context.Context, n networkFlags, role string, cmd []string, at
 	if err != nil {
 		return err
 	}
+	return runOnBusAs(ctx, n, role, creds, cmd, attached, files...)
+}
+
+// runOnBusAs is runOnBus with an identity the caller already issued.
+func runOnBusAs(ctx context.Context, n networkFlags, role string, creds []byte, cmd []string, attached bool, files ...deploy.File) error {
 	e, err := deploy.NewEngine(ctx)
 	if err != nil {
 		return err

@@ -101,6 +101,10 @@ func requireRoleCertificate(p *parsed, root, role string) error {
 	return nil
 }
 
+// HITLPrefix is the prefix of the topics of the hitl_contact_* family, the one a
+// channel claims (architecture §3.5.3).
+const HITLPrefix = "hitl_contact_"
+
 func requireChannel(p *parsed, root string) error {
 	cred, err := VerifyCapability(p.header.SignerCredential, root)
 	if err != nil {
@@ -108,6 +112,12 @@ func requireChannel(p *parsed, root string) error {
 	}
 	if cred.Claims.Sub != p.header.Kid {
 		return fmt.Errorf("%w: capability sub is not kid", ErrUntrustedKey)
+	}
+	// Only a channel opens a trace: the provenance of a channel credential is what
+	// separates opening a trace from minting oneself scope over someone else's
+	// (architecture §3.14.3).
+	if !strings.HasPrefix(cred.Claims.Topic, HITLPrefix) {
+		return fmt.Errorf("%w: scope_token signed by a node that is not a channel", ErrForm)
 	}
 	if cred.Header.SignerCredential == "" {
 		return nil // a structural channel, accredited by the root
