@@ -13,6 +13,11 @@
       "description": "The task's embedding: base64 over little-endian float32 (implementation §1.2.1). Only in task.announced (architecture §3.7.4).",
       "type": "string"
     },
+    "task_text": {
+      "description": "The announcement's text, from which the task_embedding is generated. Only in task.announced (architecture §3.7.4, §3.8.1).",
+      "type": "string",
+      "minLength": 1
+    },
     "model_id": {
       "description": "The vector space the task_embedding was generated under (architecture §3.7.3).",
       "type": "string"

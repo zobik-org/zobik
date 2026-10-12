@@ -120,6 +120,7 @@ const hitlPrefix = "hitl_contact_"
 type commonData struct {
 	Topic         *string         `json:"topic"`
 	TaskEmbedding *string         `json:"task_embedding"`
+	TaskText      *string         `json:"task_text"`
 	FailureReason *string         `json:"failure_reason"`
 	Metrics       json.RawMessage `json:"metrics"`
 }
@@ -154,9 +155,12 @@ func (e *Event) Validate() error {
 		return errors.New("envelope: a task event carries traceparent")
 	case (e.TraceParent == "") != (e.ConfigVersion == ""):
 		return errors.New("envelope: configversion goes exactly where traceparent goes")
-	// architecture §3.7.4: only the task.announced carries the task_embedding.
+	// architecture §3.7.4: only the task.announced carries the task_embedding and
+	// the text it comes from.
 	case d.TaskEmbedding != nil && e.Type != TypeAnnounced:
 		return errors.New("data: only task.announced carries task_embedding")
+	case d.TaskText != nil && e.Type != TypeAnnounced:
+		return errors.New("data: only task.announced carries task_text")
 	// architecture §3.3, §3.10.
 	case e.Type == TypeFailed && d.FailureReason == nil:
 		return errors.New("data.failure_reason: required in task.failed")
