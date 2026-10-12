@@ -74,7 +74,7 @@ func (b *broker) serve(ctx context.Context, rt *role.Runtime, l *role.Loop, nc *
 	if err != nil {
 		return err
 	}
-	defer sub.Unsubscribe()
+	defer func() { _ = sub.Unsubscribe() }() // closing the connection ends it too
 
 	go role.Consume(ctx, rt.Loop("announcements", time.Minute), announcements, func(m jetstream.Msg) {
 		tokens := strings.Split(m.Subject(), ".")

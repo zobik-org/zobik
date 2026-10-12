@@ -90,7 +90,7 @@ type store struct {
 
 func leaseTTL(head *globalconfig.Record) time.Duration {
 	var ms int64
-	json.Unmarshal(head.Values["task_lease_ttl"], &ms)
+	_ = json.Unmarshal(head.Values["task_lease_ttl"], &ms) // the head passed its schema when it was published
 	return time.Duration(ms) * time.Millisecond
 }
 
@@ -110,17 +110,17 @@ func (s *store) handle(ctx context.Context, m jetstream.Msg) {
 	}
 	opCtx, cancel := context.WithTimeout(ctx, opTimeout)
 	defer cancel()
-	switch {
-	case e.Type == bus.TypeAnnounced:
+	switch e.Type {
+	case bus.TypeAnnounced:
 		// Deterministic routing: the only instance always proposes (architecture §3.7.7).
 		if err := s.claimant.Propose(opCtx, &e); err != nil {
 			log.Printf("config: proposing on %s: %v", e.Subject, err)
 			m.NakWithDelay(time.Second)
 			return
 		}
-	case e.Type == bus.TypeRejected:
+	case bus.TypeRejected:
 		s.claimant.Rejected(&e)
-	case e.Type == bus.TypeAssigned:
+	case bus.TypeAssigned:
 		if a, ok := s.claimant.Assigned(&e); ok {
 			s.apply(ctx, a)
 		}
@@ -288,7 +288,7 @@ func (s *store) read(ctx context.Context, token string, ref *nriv1.ContextRef) (
 	var out []byte
 	for {
 		chunk, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return out, nil
 		}
 		if err != nil {

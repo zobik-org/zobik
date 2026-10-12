@@ -226,7 +226,7 @@ func (c *channel) deliveryMode() string {
 		Default   string            `json:"default"`
 		Audiences map[string]string `json:"audiences"`
 	}
-	json.Unmarshal(c.head.Load().Values["result_delivery"], &rd)
+	_ = json.Unmarshal(c.head.Load().Values["result_delivery"], &rd) // the head passed its schema when it was published
 	if m, ok := rd.Audiences[c.audience]; ok {
 		return m
 	}
@@ -249,7 +249,7 @@ var deliveryOptions = map[string]struct {
 func (c *channel) deliver(ctx context.Context, r *root) error {
 	out := r.Outcome
 	var od map[string]any
-	json.Unmarshal(out.Data, &od)
+	_ = json.Unmarshal(out.Data, &od) // a field of another type reads as absent
 	details := map[string]any{"type": out.Type}
 	rest := map[string]any{}
 	for k, v := range od {
@@ -317,7 +317,7 @@ func (c *channel) delivered(ctx context.Context, r *root, e *bus.Event) error {
 		FailureCode   string `json:"failure_code"`
 		FailureReason string `json:"failure_reason"`
 	}
-	json.Unmarshal(e.Data, &d)
+	_ = json.Unmarshal(e.Data, &d) // a field of another type reads as absent
 	switch {
 	case d.FailureCode == codeUnanswered:
 		return c.closeRoot(ctx, r, bus.TypeCompleted, "", "")

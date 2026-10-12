@@ -20,7 +20,7 @@ import (
 // Operator Channel (architecture §3.17.1, implementation §6, The operator console).
 func configCmd(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: zobik config get | set <key>=<value>...")
+		return errors.New("usage: zobik config get | set <key>=<value> [<key>=<value> ...]")
 	}
 	fs := flag.NewFlagSet("config "+args[0], flag.ContinueOnError)
 	var n networkFlags
@@ -59,11 +59,11 @@ func configCmd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	client, closeConn, err := console.Dial(addr, session.ConsoleJWT, session.Console)
+	client, conn, err := console.Dial(addr, session.ConsoleJWT, session.Console)
 	if err != nil {
 		return err
 	}
-	defer closeConn()
+	defer conn.Close()
 	op := &console.Operator{Root: session.Root, ChannelID: id, Client: client}
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -84,7 +84,7 @@ func configCmd(ctx context.Context, args []string) error {
 	out, err := op.ConfigSet(ctx, snap, assignments)
 	var invalid *globalconfig.InvalidError
 	if errors.As(err, &invalid) {
-		return fmt.Errorf("not sent: %v", invalid)
+		return fmt.Errorf("not sent: %w", invalid)
 	}
 	if err != nil {
 		return err
@@ -101,7 +101,7 @@ func configCmd(ctx context.Context, args []string) error {
 // is taken as a string: network_admission=open.
 func parseAssignments(args []string) (map[string]json.RawMessage, error) {
 	if len(args) == 0 {
-		return nil, errors.New("usage: zobik config set <key>=<value>...")
+		return nil, errors.New("usage: zobik config set <key>=<value> [<key>=<value> ...]")
 	}
 	out := map[string]json.RawMessage{}
 	for _, a := range args {

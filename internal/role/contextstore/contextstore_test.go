@@ -3,6 +3,7 @@ package contextstore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -135,7 +136,7 @@ func read(ctx context.Context, n *node, token string, ref *nriv1.ContextRef) ([]
 	var out bytes.Buffer
 	for {
 		c, err := s.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return out.Bytes(), nil
 		}
 		if err != nil {

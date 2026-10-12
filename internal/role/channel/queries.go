@@ -61,7 +61,7 @@ type round struct {
 // the TraceID proposes (architecture §3.5.2, implementation §6, The operator console).
 func (c *channel) onAnnounced(ctx context.Context, e *bus.Event) error {
 	var r round
-	json.Unmarshal(e.Data, &r)
+	_ = json.Unmarshal(e.Data, &r) // a field of another type reads as absent
 	attempts := 1
 	if r.CurrentAttempts != nil {
 		attempts = *r.CurrentAttempts
@@ -96,7 +96,7 @@ func (c *channel) onAssigned(ctx context.Context, e *bus.Event) error {
 		return nil
 	}
 	var r round
-	json.Unmarshal(a.Announcement.Data, &r)
+	_ = json.Unmarshal(a.Announcement.Data, &r) // a field of another type reads as absent
 	window, err := c.responseWindow(ctx, a.Announcement.ConfigVersion)
 	if err != nil {
 		// Without the window, the query cannot be bounded: the lease is let
@@ -121,7 +121,7 @@ func (c *channel) onAssigned(ctx context.Context, e *bus.Event) error {
 // the query's data and without the scope token.
 func consultation(q *query) *channelv1.ChannelMessage {
 	var data map[string]json.RawMessage
-	json.Unmarshal(q.a.Announcement.Data, &data)
+	_ = json.Unmarshal(q.a.Announcement.Data, &data) // onAssigned read it already
 	data = maps.Clone(data)
 	delete(data, "scope_token")
 	raw, _ := json.Marshal(data)

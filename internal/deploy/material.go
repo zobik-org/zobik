@@ -209,7 +209,7 @@ func openSealed(dir, name string, password []byte) (nkeys.KeyPair, error) {
 func writeFile(dir, name string, data []byte) error {
 	path := filepath.Join(dir, name)
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil { //nolint:gosec // dir and name are the console's own, never input
 		return err
 	}
 	return os.Rename(tmp, path)

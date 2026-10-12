@@ -24,7 +24,7 @@ const (
 // ServeHealth answers each connection to path with whether the role is ready,
 // until ctx ends.
 func (rt *Runtime) ServeHealth(ctx context.Context, path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 	os.Remove(path) // one a previous process left
@@ -46,8 +46,9 @@ func (rt *Runtime) ServeHealth(ctx context.Context, path string) error {
 			if rt.Ready() {
 				answer = answerReady
 			}
-			c.SetDeadline(time.Now().Add(time.Second))
-			c.Write([]byte(answer + "\n"))
+			// A checker that does not read in time reads nothing: it is not ready.
+			_ = c.SetDeadline(time.Now().Add(time.Second))
+			_, _ = c.Write([]byte(answer + "\n"))
 			c.Close()
 		}
 	}()
@@ -64,7 +65,9 @@ func CheckHealth(path string, timeout time.Duration) error {
 		return err
 	}
 	defer c.Close()
-	c.SetDeadline(time.Now().Add(timeout))
+	if err := c.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
 	line, err := bufio.NewReader(c).ReadString('\n')
 	if err != nil {
 		return err

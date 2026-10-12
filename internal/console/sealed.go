@@ -78,7 +78,7 @@ func OpenKey(sealed, password []byte) (nkeys.KeyPair, error) {
 	if s.Format != sealedFormat {
 		return nil, fmt.Errorf("console: sealed key format %q", s.Format)
 	}
-	aead, ad, err := s.kdfParams.aead(password)
+	aead, ad, err := s.aead(password)
 	if err != nil {
 		return nil, err
 	}

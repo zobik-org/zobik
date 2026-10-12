@@ -135,8 +135,14 @@ func contextProbeInside(ctx context.Context, keep bool) error {
 	if err != nil {
 		return err
 	}
-	w.Send(&contextv1.StoreWrite{Body: &contextv1.StoreWrite_Header{Header: &contextv1.StoreWriteHeader{Token: tok, Name: "probe"}}})
-	w.Send(&contextv1.StoreWrite{Body: &contextv1.StoreWrite_Chunk{Chunk: []byte("hola desde la red")}})
+	for _, part := range []*contextv1.StoreWrite{
+		{Body: &contextv1.StoreWrite_Header{Header: &contextv1.StoreWriteHeader{Token: tok, Name: "probe"}}},
+		{Body: &contextv1.StoreWrite_Chunk{Chunk: []byte("hola desde la red")}},
+	} {
+		if err := w.Send(part); err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("write: %w", err)
+		}
+	}
 	if _, err := w.CloseAndRecv(); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}

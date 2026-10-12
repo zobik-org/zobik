@@ -124,12 +124,17 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	if err != nil {
 		return err
 	}
-	go g.Serve(ln)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	role.ServeRPC(cancel, g, ln)
 	defer g.Stop()
 
 	go c.followHead(ctx, rt.Loop("head", time.Minute))
 	rt.SetReady(true)
-	return c.serve(ctx, l, consumer)
+	if err := c.serve(ctx, l, consumer); err != nil {
+		return err
+	}
+	return role.ServeFailure(ctx)
 }
 
 // channel is the role's state: the roots it opened, the queries it retains and
@@ -179,7 +184,7 @@ func (c *channel) followHead(ctx context.Context, l *role.Loop) {
 
 func (c *channel) leaseTTL() time.Duration {
 	var ms int64
-	json.Unmarshal(c.head.Load().Values["task_lease_ttl"], &ms)
+	_ = json.Unmarshal(c.head.Load().Values["task_lease_ttl"], &ms) // the head passed its schema when it was published
 	return time.Duration(ms) * time.Millisecond
 }
 

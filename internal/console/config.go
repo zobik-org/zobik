@@ -26,14 +26,14 @@ import (
 
 // Dial connects to a channel's service as the console's platform identity
 // (implementation §6, The service between the console and the channels).
-func Dial(addr, consoleJWT string, key nkeys.KeyPair) (channelv1.ChannelClient, func() error, error) {
+func Dial(addr, consoleJWT string, key nkeys.KeyPair) (channelv1.ChannelClient, io.Closer, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(&rpcauth.Client{
 		JWT: func() (string, error) { return consoleJWT, nil }, Key: key,
 	}))
 	if err != nil {
 		return nil, nil, err
 	}
-	return channelv1.NewChannelClient(conn), conn.Close, nil
+	return channelv1.NewChannelClient(conn), conn, nil
 }
 
 // Operator is the console's half of the Operator Channel: it signs with the
@@ -130,8 +130,15 @@ func (o *Operator) ConfigSet(ctx context.Context, base *Snapshot, assignments ma
 	if err != nil {
 		return nil, err
 	}
-	open.Send(&channelv1.OpenTrace{Part: &channelv1.OpenTrace_Header{Header: &channelv1.OpenHeader{Topic: topicConfigChange, TaskId: taskID, Data: raw}}})
-	open.Send(&channelv1.OpenTrace{Part: &channelv1.OpenTrace_Chunk{Chunk: edit}})
+	// A Send the channel ended returns io.EOF, and CloseAndRecv carries its status.
+	for _, part := range []*channelv1.OpenTrace{
+		{Part: &channelv1.OpenTrace_Header{Header: &channelv1.OpenHeader{Topic: topicConfigChange, TaskId: taskID, Data: raw}}},
+		{Part: &channelv1.OpenTrace_Chunk{Chunk: edit}},
+	} {
+		if err := open.Send(part); err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+	}
 	ack, err := open.CloseAndRecv()
 	if err != nil {
 		return nil, err
@@ -149,7 +156,8 @@ func (o *Operator) ConfigSet(ctx context.Context, base *Snapshot, assignments ma
 			}
 			// Showing the outcome is delivering it (implementation §6, The service
 			// between the console and the channels).
-			session.Send(&channelv1.ConsoleMessage{Body: &channelv1.ConsoleMessage_Shown{Shown: &channelv1.Shown{TaskId: d.taskID}}})
+			// Answer confirms the delivery; a broken session loses only the mark.
+			_ = session.Send(&channelv1.ConsoleMessage{Body: &channelv1.ConsoleMessage_Shown{Shown: &channelv1.Shown{TaskId: d.taskID}}})
 			if _, err := o.Client.Answer(ctx, &channelv1.AnswerRequest{TaskId: d.taskID, Data: []byte(`{"decision":"received"}`)}); err != nil {
 				return nil, fmt.Errorf("console: confirming the delivery: %w", err)
 			}
@@ -185,7 +193,7 @@ func receiveDeliveries(session channelv1.Channel_AttachClient, out chan<- delive
 	defer close(out)
 	for {
 		m, err := session.Recv()
-		if err == io.EOF || err != nil {
+		if err != nil {
 			return
 		}
 		c := m.GetConsultation()

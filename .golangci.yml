@@ -1,0 +1,33 @@
+version: "2"
+
+run:
+  build-tags: [dev, e2e]
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+  settings:
+    errcheck:
+      exclude-functions:
+        # A message whose ack is lost is redelivered: the consumers are idempotent.
+        - (github.com/nats-io/nats.go/jetstream.Msg).Ack
+        - (github.com/nats-io/nats.go/jetstream.Msg).Nak
+        - (github.com/nats-io/nats.go/jetstream.Msg).NakWithDelay
+    gosec:
+      excludes:
+        - G101 # every match is a file path; secret scanning covers real secrets
+        - G104 # errcheck reports the same
+        - G304 # paths come from the role's own material, not from input
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      - path: (_test\.go|^internal/testnet/|^test/)
+        linters: [errcheck, gosec]
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

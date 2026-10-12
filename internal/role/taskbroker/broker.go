@@ -168,7 +168,7 @@ func (w *worker) onAnnounced(ctx context.Context, m jetstream.Msg) {
 // openAuction collects proposals for auction_timeout (architecture §3.7.5, step 5).
 func (w *worker) openAuction(ctx context.Context, taskID string, e *bus.Event, now time.Time) {
 	var d announcementData
-	json.Unmarshal(e.Data, &d)
+	_ = json.Unmarshal(e.Data, &d) // a field of another type reads as absent
 	a := &auction{
 		task:      announced{topic: w.topic, taskID: taskID, modelID: d.ModelID},
 		deadline:  now.Add(w.b.params.Load().auctionTimeout),
@@ -304,7 +304,7 @@ type rejectedData struct {
 // winner: read under the TraceID, write under the TaskID (architecture §3.14.3).
 func (w *worker) assign(ctx context.Context, ann *bus.Event, won verdict) error {
 	var d announcementData
-	json.Unmarshal(ann.Data, &d)
+	_ = json.Unmarshal(ann.Data, &d) // a field of another type reads as absent
 	token, err := w.b.sign(signing.TypeScopeToken, signing.ScopeToken{
 		Sub: won.identity, Iat: time.Now().Unix(), TraceID: bus.TraceID(ann.TraceParent), Section: ann.Subject,
 	})

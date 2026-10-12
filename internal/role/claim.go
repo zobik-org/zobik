@@ -94,7 +94,7 @@ func (c *Claimant) Assigned(e *bus.Event) (*Assignment, bool) {
 		ScopeToken        string `json:"scope_token"`
 		RequesterIdentity string `json:"requester_identity"`
 	}
-	json.Unmarshal(e.Data, &d)
+	_ = json.Unmarshal(e.Data, &d) // a field of another type reads as absent
 	return &Assignment{Announcement: p.ann, TaskID: e.Subject, Token: d.ScopeToken,
 		Requester: d.RequesterIdentity, Started: time.Now(), assigned: e}, true
 }
@@ -114,7 +114,7 @@ func (c *Claimant) KeepLease(a *Assignment, ttl func() time.Duration) (stop func
 	subject := "lease." + c.rt.ID + "." + c.topic + "." + a.TaskID
 	go func() {
 		for {
-			c.nc.Publish(subject, nil)
+			_ = c.nc.Publish(subject, nil) // a lost renewal is made up by the next one
 			select {
 			case <-done:
 				return

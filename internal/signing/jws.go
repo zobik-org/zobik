@@ -103,7 +103,7 @@ func parse(token string, want Type) (*parsed, error) {
 	}
 	signer, err := nkeys.FromPublicKey(h.Kid)
 	if err != nil {
-		return nil, fmt.Errorf("%w: kid: %v", ErrMalformed, err)
+		return nil, fmt.Errorf("%w: kid: %w", ErrMalformed, err)
 	}
 	sig, err := b64.DecodeString(parts[2])
 	if err != nil {
@@ -121,7 +121,7 @@ func parse(token string, want Type) (*parsed, error) {
 
 func (p *parsed) claims(v any) error {
 	if err := json.Unmarshal(p.payload, v); err != nil {
-		return fmt.Errorf("%w: claims: %v", ErrMalformed, err)
+		return fmt.Errorf("%w: claims: %w", ErrMalformed, err)
 	}
 	return nil
 }
