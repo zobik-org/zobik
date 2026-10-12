@@ -758,7 +758,7 @@ message Accepted {}
 message SidecarMessage {
   oneof body {
     Accepted accepted   = 1;
-    Delivery assignment = 2;  // task.assigned, without the scope token
+    Delivery assignment = 2;  // task.assigned, without the scope token, with its announcement
     Delivery result     = 3;  // terminal event directed to the node, without source
     Delivery notice     = 4;  // notice of a watched broadcast topic
     Inbound  inbound    = 5;  // message admitted by an ingress entry
@@ -782,8 +782,9 @@ message InboundBody {
 }
 
 message Delivery {
-  string delivery_id = 1;
-  bytes  event       = 2;     // structured CloudEvent in JSON (§1.2.1)
+  string delivery_id  = 1;
+  bytes  event        = 2;  // structured CloudEvent in JSON (§1.2.1)
+  bytes  announcement = 3;  // on an assignment, the task's task.announced in the same form; empty otherwise
 }
 
 // Publication requests: only what the Logic Container decides
@@ -913,6 +914,8 @@ message ReplyAck {}
 **`Attach` is the node's session, and the Logic Container opens it**, because it is the one that dials (§2.1). Its first message is `Hello`; the Integration Sidecar answers `Accepted` and only then binds to its durable consumer (§1.2.1). If the version does not serve it, it exits with an error without having bound, through the check detailed further down.
 
 **Everything the Logic Container receives arrives through the session**: the assignments that give it its tasks, the terminal events of the tasks it opened, the `notice` of the broadcast topics the node watches and, in a channel with ingress, the messages it admitted (below). The announcements of its topic do not arrive, because proposing belongs to the Integration Sidecar (§3.6.1). A terminal event arrives without `source`: the Integration Sidecar removes it when assembling the delivery, because the requester does not know who resolved its subtask (§3.3).
+
+**An assignment carries the task's `task.announced` next to its `task.assigned`.** The assigned event names the task, the similarity and the requester (§3.8.1); what there is to do—the text, the `context_ref` and, in a query, the `kind` and the `options`—is in the announcement's `data`. The Integration Sidecar retains the announcement of each task it proposes on and delivers both events as they travel on the Bus, without the scope token, which it keeps to present it on the task's behalf (§3.14.3).
 
 **A delivery is confirmed from the Logic Container.** The Integration Sidecar acks to the Bus and marks the `id` as processed (§3.6.4) when it receives the `Received` of that delivery, not when it forwards it. The stretch between the two halves is thus *at-least-once* just like the Bus, and the idempotency of the effect stays where §3.6.4 puts it: in the Logic Container.
 
@@ -1388,7 +1391,7 @@ message Shown {
 // role → console, over Attach
 message ChannelMessage {
   oneof body {
-    zobik.nri.v1.Delivery consultation = 1;  // task.assigned of a query, without the scope token
+    zobik.nri.v1.Delivery consultation = 1;  // task.assigned of a query, without the scope token, with its announcement
     Expired               expired      = 2;  // query the role closed without an answer
   }
 }

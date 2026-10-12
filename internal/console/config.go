@@ -200,18 +200,20 @@ func receiveDeliveries(session channelv1.Channel_AttachClient, out chan<- delive
 		if c == nil {
 			continue
 		}
-		var e struct {
-			Subject string          `json:"subject"`
-			Data    json.RawMessage `json:"data"`
+		var assigned struct {
+			Subject string `json:"subject"`
 		}
-		if json.Unmarshal(c.GetEvent(), &e) != nil {
+		var announced struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if json.Unmarshal(c.GetEvent(), &assigned) != nil || json.Unmarshal(c.GetAnnouncement(), &announced) != nil {
 			continue
 		}
 		var d delivery
-		if json.Unmarshal(e.Data, &d) != nil || d.Kind != "result_delivery" {
+		if json.Unmarshal(announced.Data, &d) != nil || d.Kind != "result_delivery" {
 			continue
 		}
-		d.taskID = e.Subject
+		d.taskID = assigned.Subject
 		out <- d
 	}
 }
