@@ -23,6 +23,7 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/rpcauth"
+	"zobik.org/zobik/internal/signing"
 )
 
 // A role's material, in the volume mounted at Dir (implementation §6, The root and
@@ -216,6 +217,12 @@ func Retry(ctx context.Context, l *Loop, timeout time.Duration, op func(ctx cont
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// Sign issues a signed object with the role's key, accredited by
+// signerCredential (implementation §9.1).
+func (rt *Runtime) Sign(typ signing.Type, claims any, signerCredential string) (string, error) {
+	return signing.Sign(rt.key, typ, claims, signerCredential)
 }
 
 // Account reads the network's account JWT from the volume and verifies it

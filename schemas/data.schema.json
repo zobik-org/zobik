@@ -77,6 +77,10 @@
       "description": "In task.proposed, optional: a ceiling on the similarity the Task Broker recomputes (architecture §3.7.5).",
       "type": "number"
     },
+    "credential": {
+      "description": "In task.proposed: the proposer's capability credential, by value and in compact JWS, which the Task Broker verifies against the root (architecture §3.14.2, implementation §1.2.4, §9).",
+      "type": "string"
+    },
     "similarity": {
       "description": "The similarity the Task Broker recomputed: in task.assigned the winner's, in task.rejected that of the candidate that lost (architecture §3.8.1, §3.7.5).",
       "type": "number"

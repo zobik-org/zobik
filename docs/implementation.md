@@ -255,6 +255,8 @@ Full consistency with the NATS substrate (rows 1, 5, 10): the state of §3.1 liv
 
 **Each transition is a CAS on the revision read.** The announcement creates the key only if it does not exist; the award, the renewal, the expiry and the close write only if the key is still at the revision the Task Broker read. The CAS is what leaves a single winner, also with two momentary owners of a range (§3.19); one goroutine per topic keeps it from failing within a single instance. If a renewal and an expiry compete, the expiry loses, reads again and finds the lease extended.
 
+**The tie-break draw is SHA-256 over the `TaskID`, a zero byte and the `node_id`**, which is the platform identity of whoever proposed, and the highest digest wins (§3.7.5, step 4). Whoever recomputes an award from the trace needs the same function the Task Broker applied.
+
 **Only the Task Broker writes to the bucket.** No node has permission on it: the lease renewal reaches the Task Broker through the Bus (§1.2.1), and the Task Broker writes it to the key only if the task is in `CLAIMED` and the subject's identity is that of the assignee the key stores (§3.1).
 
 **The lease expiry is a date in the value.** The Task Broker keeps the timers in memory, and whoever takes the range rearms them from those dates, with at least one `task_lease_ttl` counted from when it takes it. The renewals that arrived while the range had no owner were lost (§1.2.1), and expiring a live assignee because of them would re-announce a task in progress. The lease does not use the KV's TTL, which deletes the whole key, with the embedding and the backoff point.
