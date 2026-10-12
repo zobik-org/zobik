@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/netip"
 	"path"
 	"strings"
 	"time"
@@ -168,6 +169,26 @@ type Spec struct {
 	Restart bool
 	// Healthcheck reports whether a role is ready (implementation §6, The health of the roles).
 	Healthcheck *container.HealthConfig
+	// Publish maps a container port, like 7002/tcp, to a host port on
+	// 127.0.0.1 (implementation §6, The off-Bus interfaces).
+	Publish map[string]string
+}
+
+// bindings is s.Publish as the engine takes it.
+func (s Spec) bindings() (network.PortSet, network.PortMap, error) {
+	if len(s.Publish) == 0 {
+		return nil, nil, nil
+	}
+	exposed, bound := network.PortSet{}, network.PortMap{}
+	for in, host := range s.Publish {
+		p, err := network.ParsePort(in)
+		if err != nil {
+			return nil, nil, err
+		}
+		exposed[p] = struct{}{}
+		bound[p] = []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: host}}
+	}
+	return exposed, bound, nil
 }
 
 // EnsureRunning creates and starts the container if it does not exist, and
@@ -202,7 +223,11 @@ func (e *Engine) EnsureCurrent(ctx context.Context, s Spec) error {
 		if err != nil {
 			return err
 		}
-		if info.Container.Image != img.ID {
+		_, want, err := s.bindings()
+		if err != nil {
+			return err
+		}
+		if info.Container.Image != img.ID || !samePorts(info.Container.HostConfig, want) {
 			if _, err := e.c.ContainerRemove(ctx, s.Name, client.ContainerRemoveOptions{Force: true}); err != nil {
 				return err
 			}
@@ -309,8 +334,13 @@ func (e *Engine) RunAttached(ctx context.Context, s Spec, out io.Writer) error {
 }
 
 func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
+	exposed, bound, err := s.bindings()
+	if err != nil {
+		return "", err
+	}
 	host := &container.HostConfig{
-		Mounts: s.Mounts,
+		Mounts:       s.Mounts,
+		PortBindings: bound,
 		// implementation §6, The off-Bus interfaces: no container of the network has NET_RAW.
 		CapDrop: []string{"NET_RAW"},
 	}
@@ -324,10 +354,11 @@ func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
 	res, err := e.c.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: s.Name,
 		Config: &container.Config{
-			Image:       s.Image,
-			Cmd:         s.Cmd,
-			Labels:      s.Labels,
-			Healthcheck: s.Healthcheck,
+			Image:        s.Image,
+			Cmd:          s.Cmd,
+			Labels:       s.Labels,
+			Healthcheck:  s.Healthcheck,
+			ExposedPorts: exposed,
 		},
 		HostConfig:       host,
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{s.Network: endpoint}},
@@ -346,6 +377,24 @@ func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
 		}
 	}
 	return res.ID, nil
+}
+
+// samePorts says whether a container publishes exactly the ports in want.
+func samePorts(host *container.HostConfig, want network.PortMap) bool {
+	var got network.PortMap
+	if host != nil {
+		got = host.PortBindings
+	}
+	if len(got) != len(want) {
+		return false
+	}
+	for p, w := range want {
+		g := got[p]
+		if len(g) != 1 || g[0].HostPort != w[0].HostPort || g[0].HostIP != w[0].HostIP {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *Engine) output(ctx context.Context, id string) ([]byte, error) {

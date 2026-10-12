@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -57,6 +60,10 @@ type Role struct {
 	WaitsFor []string
 	// Data gives it a second volume, <unit>_data, mounted at role.DataDir.
 	Data bool
+	// ServesConsole publishes its service toward the console on a port of the
+	// host's 127.0.0.1, and gives it the console's identity, the only one it
+	// admits (implementation §6, The service between the console and the channels).
+	ServesConsole bool
 }
 
 // The defaults of the deployment parameters the context role enforces
@@ -92,6 +99,7 @@ var Roles = []Role{
 	{Unit: "channel_operator", Scope: bus.ChannelScope, Topic: "hitl_contact_operator",
 		AttemptWindow: &signing.AttemptWindow{From: ptr(1), To: ptr(1), FinalRound: ptr(true)},
 		Args:          []string{"--role=channel", "--audience=operator"}, WaitsFor: []string{"config"},
+		ServesConsole: true,
 		Consumers: func(id string) []bus.Consumer {
 			c := claimant("hitl_contact_operator")(id)
 			c[0].Filters = append(c[0].Filters, "task.completed."+id+".>", "task.failed."+id+".>", "task.aborted."+id+".>")
@@ -166,8 +174,16 @@ func ensureRoles(ctx context.Context, e *Engine, n names, m *material, dir, imag
 	}
 	// Every role receives the account as it ends up, revocations included.
 	account := File{Path: role.FileAccount, Mode: 0o644, Data: []byte(m.account.JWT)}
+	consolePub, err := m.console.PublicKey()
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range Roles {
-		if err := e.WriteVolume(ctx, n.volume(r.Unit), image, role.Dir, append(files[r.Unit], account)); err != nil {
+		write := append(files[r.Unit], account)
+		if r.ServesConsole {
+			write = append(write, File{Path: role.FileConsolePub, Mode: 0o644, Data: []byte(consolePub)})
+		}
+		if err := e.WriteVolume(ctx, n.volume(r.Unit), image, role.Dir, write); err != nil {
 			return nil, fmt.Errorf("deploy: writing %s's material: %w", r.Unit, err)
 		}
 		if err := writeFile(dir, filepath.Join(dirIdentities, r.Unit+".pub"), []byte(ids[r.Unit])); err != nil {
@@ -273,8 +289,12 @@ var roleHealthcheck = &container.HealthConfig{
 // roleSpec is a role's container: the roles' image with another invocation, its
 // volume, its alias on the network's Docker network and the unless-stopped
 // restart (implementation §6, The roles of the binary).
-func roleSpec(n names, r Role, image string) Spec {
+func roleSpec(n names, r Role, image, port string) Spec {
 	mounts := []mount.Mount{{Type: mount.TypeVolume, Source: n.volume(r.Unit), Target: role.Dir}}
+	var publish map[string]string
+	if port != "" {
+		publish = map[string]string{role.PortChannel + "/tcp": port}
+	}
 	if r.Data {
 		mounts = append(mounts, mount.Mount{Type: mount.TypeVolume, Source: n.volume(r.Unit + "_data"), Target: role.DataDir})
 	}
@@ -288,19 +308,27 @@ func roleSpec(n names, r Role, image string) Spec {
 		Mounts:      mounts,
 		Restart:     true,
 		Healthcheck: roleHealthcheck,
+		Publish:     publish,
 	}
 }
 
 // startRoles brings up each role once what it waits for is ready, and returns
 // when all of them are.
-func startRoles(ctx context.Context, e *Engine, n names, image string) error {
+func startRoles(ctx context.Context, e *Engine, n names, dir, image string) error {
 	for _, r := range Roles {
 		for _, dep := range r.WaitsFor {
 			if err := e.WaitHealthy(ctx, n.container(dep), roleReadyTimeout); err != nil {
 				return err
 			}
 		}
-		if err := e.EnsureCurrent(ctx, roleSpec(n, r, image)); err != nil {
+		var port string
+		if r.ServesConsole {
+			var err error
+			if port, err = ConsolePort(dir, r.Unit); err != nil {
+				return err
+			}
+		}
+		if err := e.EnsureCurrent(ctx, roleSpec(n, r, image, port)); err != nil {
 			return fmt.Errorf("deploy: %s: %w", r.Unit, err)
 		}
 	}
@@ -310,4 +338,31 @@ func startRoles(ctx context.Context, e *Engine, n names, image string) error {
 		}
 	}
 	return nil
+}
+
+// dirPorts keeps, in the console's directory, the host port of each role that
+// serves the console: zobik init chooses a free one once, and it stays fixed
+// (implementation §6, The deployment parameters).
+const dirPorts = "ports"
+
+// ConsolePort is the host port on 127.0.0.1 where unit serves the console.
+func ConsolePort(dir, unit string) (string, error) {
+	path := filepath.Join(dir, dirPorts, unit)
+	b, err := os.ReadFile(path)
+	if err == nil {
+		return strings.TrimSpace(string(b)), nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	ln.Close()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
+	}
+	return port, os.WriteFile(path, []byte(port), 0o600)
 }

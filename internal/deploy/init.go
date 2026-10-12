@@ -95,7 +95,7 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 	if err := runAct(ctx, e, n, o.Image, actSubstrate, consoleCreds, File{Path: actSubstratePath, Mode: 0o600, Data: substrate}); err != nil {
 		return err
 	}
-	return startRoles(ctx, e, n, o.Image)
+	return startRoles(ctx, e, n, o.Dir, o.Image)
 }
 
 func runAct(ctx context.Context, e *Engine, n names, image, act string, creds []byte, files ...File) error {

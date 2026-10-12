@@ -38,6 +38,10 @@ const (
 	// FileAccount is the network's account JWT, which the off-Bus interfaces
 	// verify a caller's JWT against (implementation §6, The off-Bus interfaces).
 	FileAccount = "account.jwt"
+	// FileConsolePub is the console's platform identity, the only one a
+	// channel's service admits (implementation §6, The service between the
+	// console and the channels).
+	FileConsolePub = "console.pub"
 
 	// DataDir is where a role with a data volume mounts it: the Context Store's content.
 	DataDir = "/var/lib/zobik-data"
@@ -48,6 +52,9 @@ const (
 	PortContext = "7001"
 	// AddrContext is where the Integration Sidecars and the channels reach the Context Store.
 	AddrContext = "context:" + PortContext
+	// PortChannel is where a channel serves the console, published on the
+	// host's 127.0.0.1 (implementation §6, The off-Bus interfaces).
+	PortChannel = "7002"
 )
 
 // Runtime is what a role runs with.
@@ -218,6 +225,10 @@ func Retry(ctx context.Context, l *Loop, timeout time.Duration, op func(ctx cont
 		}
 	}
 }
+
+// Dir is the directory of the role's volume, where it keeps what has to
+// survive a restart.
+func (rt *Runtime) Dir() string { return rt.dir }
 
 // Sign issues a signed object with the role's key, accredited by
 // signerCredential (implementation §9.1).

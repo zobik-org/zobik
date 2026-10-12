@@ -43,6 +43,8 @@ type Net struct {
 	Console jetstream.JetStream
 	// ContextAddr is where the Context Store listens.
 	ContextAddr string
+	// ConsoleKey is the console's platform identity.
+	ConsoleKey nkeys.KeyPair
 
 	ids  map[string]nkeys.KeyPair
 	dirs map[string]string
@@ -62,6 +64,7 @@ func New(t *testing.T, edit func(globalconfig.Values)) *Net {
 	}
 	n := &Net{T: t, Ctx: ctx, Account: a, Root: root, RootPub: rootPub,
 		ids: map[string]nkeys.KeyPair{}, dirs: map[string]string{}}
+	n.ConsoleKey, _ = nkeys.CreateUser()
 	n.Srv = startServer(t, a)
 	n.Console = n.JetStream(n.Conn(bus.ConsoleScope.Role, nil))
 
@@ -124,6 +127,9 @@ func (n *Net) mintRole(r deploy.Role) string {
 	if r.Topic != "" {
 		files[role.FileCredential] = n.Sign(n.Root, signing.TypeCapability,
 			signing.Capability{Sub: pub, Topic: r.Topic, ArtifactRef: "zobik:test", AttemptWindow: r.AttemptWindow}, "")
+	}
+	if r.ServesConsole {
+		files[role.FileConsolePub], _ = n.ConsoleKey.PublicKey()
 	}
 	if r.Certificate != "" {
 		files[role.FileRoleCertificate] = n.Sign(n.Root, signing.TypeRoleCertificate,

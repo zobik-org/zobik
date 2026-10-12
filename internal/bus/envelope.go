@@ -92,18 +92,29 @@ func Schema(name string) (*schema.Schema, error) {
 	return s[name], nil
 }
 
-// topicSchema names the schema of the data a fixed-convention topic fixes for
-// typ, chosen by the topic (implementation §10.1): <topic>.schema.json for the
-// announcement and <topic>.completed.schema.json for its answer.
-func topicSchema(typ, topic string) string {
+// topicSchemas names the schemas of the data a fixed-convention topic fixes for
+// typ, chosen by the topic and, in the hitl_contact_* family, by kind
+// (implementation §10.1): <topic>.schema.json for the announcement and
+// <topic>.completed.schema.json for its answer. A query whose kind has no schema
+// of its own validates against the family's common part.
+func topicSchemas(typ, topic, kind string) []string {
+	if strings.HasPrefix(topic, hitlPrefix) {
+		topic = "hitl_contact"
+		if typ == TypeAnnounced {
+			return []string{topic + "." + kind + ".schema.json", topic + ".schema.json"}
+		}
+	}
 	switch typ {
 	case TypeAnnounced:
-		return topic + ".schema.json"
+		return []string{topic + ".schema.json"}
 	case TypeCompleted:
-		return topic + ".completed.schema.json"
+		return []string{topic + ".completed.schema.json"}
 	}
-	return ""
+	return nil
 }
+
+// hitlPrefix is the prefix of the hitl_contact_<audience> family (architecture §3.5.3).
+const hitlPrefix = "hitl_contact_"
 
 // commonData is what the envelope rules read from data.
 type commonData struct {
@@ -167,16 +178,22 @@ func (e *Event) ValidateTopic() error {
 	if err != nil {
 		return err
 	}
-	var d commonData
+	var d struct {
+		Topic *string `json:"topic"`
+		Kind  string  `json:"kind"`
+	}
 	if err := json.Unmarshal(e.Data, &d); err != nil {
 		return fmt.Errorf("data: %w", err)
 	}
 	if d.Topic == nil {
 		return nil
 	}
-	if ts := s[topicSchema(e.Type, *d.Topic)]; ts != nil {
-		if err := ts.ValidateJSON(e.Data); err != nil {
-			return fmt.Errorf("data of %s: %w", *d.Topic, err)
+	for _, name := range topicSchemas(e.Type, *d.Topic, d.Kind) {
+		if ts := s[name]; ts != nil {
+			if err := ts.ValidateJSON(e.Data); err != nil {
+				return fmt.Errorf("data of %s: %w", *d.Topic, err)
+			}
+			return nil
 		}
 	}
 	return nil

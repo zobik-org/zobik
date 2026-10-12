@@ -1,0 +1,80 @@
+// The service between the console and the channels (implementation §6, The
+// service between the console and the channels).
+syntax = "proto3";
+package zobik.channel.v1;
+
+option go_package = "zobik.org/zobik/proto/zobik/channel/v1;channelv1";
+
+import "zobik/nri/v1/nri.proto";
+
+service Channel {
+  rpc Attach(stream ConsoleMessage)         returns (stream ChannelMessage);
+  rpc Open(stream OpenTrace)                returns (zobik.nri.v1.OpenAck);
+  rpc Answer(AnswerRequest)                 returns (AnswerAck);
+  rpc ReadContext(zobik.nri.v1.ContextRead) returns (stream zobik.nri.v1.Chunk);
+  rpc Purge(zobik.nri.v1.PurgeRequest)      returns (zobik.nri.v1.PurgeAck);
+  rpc ReadConfig(ReadConfigRequest)         returns (ConfigSnapshot);
+}
+
+// console → role, over Attach
+message ConsoleMessage {
+  oneof body {
+    Shown                 shown    = 1;  // the panel showed a query to the person
+    zobik.nri.v1.Received received = 2;  // confirms an expired by its delivery_id
+  }
+}
+
+message Shown {
+  string task_id = 1;  // the query
+}
+
+// role → console, over Attach
+message ChannelMessage {
+  oneof body {
+    zobik.nri.v1.Delivery consultation = 1;  // task.assigned of a query, without the scope token
+    Expired               expired      = 2;  // query the role closed without an answer
+  }
+}
+
+message Expired {
+  string delivery_id    = 1;
+  string task_id        = 2;  // the query
+  string failure_code   = 3;  // unanswered | undelivered
+}
+
+// Opening a trace: the payload and then the bodies
+message OpenTrace {
+  oneof part {
+    OpenHeader header = 1;  // first message
+    Body       body   = 2;  // opens a body; the chunks that follow it are its own
+    bytes      chunk  = 3;  // before the first Body, of the payload
+  }
+}
+
+message OpenHeader {
+  string topic     = 1;  // one of the channel's entries
+  string task_id   = 2;  // TaskID of the entry subtask in a signed act; empty otherwise
+  bytes  data      = 3;  // JSON of the entry subtask's data
+  string workspace = 4;  // empty if the request does not use it
+}
+
+message Body {
+  string name       = 1;
+  string media_type = 2;
+  bool   context    = 3;  // from the conversation's context, not from the request
+}
+
+message AnswerRequest {
+  string task_id = 1;  // a query the role retains
+  bytes  data    = 2;  // JSON of the answer
+}
+
+message AnswerAck {}
+
+message ReadConfigRequest {}
+
+message ConfigSnapshot {
+  string config_version = 1;
+  string published_at   = 2;  // RFC 3339
+  bytes  values         = 3;  // JSON object with the snapshot's keys
+}

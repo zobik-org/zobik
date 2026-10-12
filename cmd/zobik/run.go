@@ -46,7 +46,9 @@ func runCmd(ctx context.Context, args []string) error {
 			return fmt.Errorf("a channel serves --audience=%s or %s", channel.AudienceOperator, channel.AudienceUser)
 		}
 		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
-			return channel.Run(ctx, rt, nc, *audience)
+			return channel.Run(ctx, rt, nc, channel.Options{
+				Audience: *audience, Listen: ":" + role.PortChannel, ContextAddr: role.AddrContext,
+			})
 		}
 	default:
 		return fmt.Errorf("unknown role %q", *name)

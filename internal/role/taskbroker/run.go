@@ -76,7 +76,7 @@ func (b *broker) serve(ctx context.Context, rt *role.Runtime, l *role.Loop, nc *
 	}
 	defer sub.Unsubscribe()
 
-	go b.consume(ctx, rt.Loop("announcements", time.Minute), announcements, func(m jetstream.Msg) {
+	go role.Consume(ctx, rt.Loop("announcements", time.Minute), announcements, func(m jetstream.Msg) {
 		tokens := strings.Split(m.Subject(), ".")
 		switch {
 		case len(tokens) == 3 && tokens[1] == "announced":
@@ -87,7 +87,7 @@ func (b *broker) serve(ctx context.Context, rt *role.Runtime, l *role.Loop, nc *
 			m.Ack()
 		}
 	})
-	go b.consume(ctx, rt.Loop("proposals", time.Minute), proposals, func(m jetstream.Msg) {
+	go role.Consume(ctx, rt.Loop("proposals", time.Minute), proposals, func(m jetstream.Msg) {
 		tokens := strings.Split(m.Subject(), ".")
 		if len(tokens) != 3 {
 			m.Ack()
@@ -129,25 +129,6 @@ func (b *broker) resumeAll(ctx context.Context) error {
 		b.do(topic, func(_ context.Context, w *worker) { w.resume(t, taskID) })
 	}
 	return nil
-}
-
-// consume pulls from a durable consumer and hands each message to route.
-func (b *broker) consume(ctx context.Context, l *role.Loop, c jetstream.Consumer, route func(jetstream.Msg)) {
-	for ctx.Err() == nil {
-		l.Mark()
-		batch, err := c.Fetch(64, jetstream.FetchMaxWait(5*time.Second))
-		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				log.Printf("task_broker: fetching from %s: %v", c.CachedInfo().Stream, err)
-				time.Sleep(time.Second)
-			}
-			continue
-		}
-		for m := range batch.Messages() {
-			l.Mark()
-			route(m)
-		}
-	}
 }
 
 // followConfig reads the head every second: the Task Broker consults the

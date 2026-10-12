@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/hitl_contact.schema.json",
+  "description": "The common part of a query a structural requester or an Integration Sidecar opens on a hitl_contact_<audience> topic (architecture §3.5.2, implementation §10.1). Each kind adds its details in a schema of its own; a channel that has none for a kind validates against this one. The common fields are in data.schema.json.",
+  "type": "object",
+  "required": ["kind", "scope", "since", "evidence"],
+  "properties": {
+    "kind": {
+      "description": "What the query is about. Known values: result_delivery, budget_exceeded, gate_approval, egress_unavailable and those of architecture §3.15.7.",
+      "type": "string"
+    },
+    "scope": {
+      "description": "Known values: trace, network, niche, audience, egress, call (architecture §3.5.2).",
+      "type": "string"
+    },
+    "since": {
+      "description": "When the condition the query is about started.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "options": {
+      "description": "The admissible answers, a closed enumeration; absent in a delivery without options (architecture §3.5.4).",
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "outcome_if_silent": {
+      "description": "The element of options the requester applies if nobody answers.",
+      "type": "string"
+    },
+    "evidence": {
+      "description": "The observed facts that support the condition, raw (architecture §3.5.2).",
+      "type": "object",
+      "additionalProperties": {"opaque": true}
+    },
+    "details": {
+      "description": "The decision's data, with the fields each kind fixes (implementation §10.1).",
+      "type": "object",
+      "additionalProperties": {"opaque": true}
+    }
+  }
+}

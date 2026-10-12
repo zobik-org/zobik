@@ -1,10 +1,24 @@
 // The Node Runtime Interface (implementation §3). This file carries the messages
-// the Context Store and the channels already use; the service enters with the
-// Integration Sidecar.
+// the Context Store and the channel service already use; the service enters
+// with the Integration Sidecar.
 syntax = "proto3";
 package zobik.nri.v1;
 
 option go_package = "zobik.org/zobik/proto/zobik/nri/v1;nriv1";
+
+message Received {
+  string delivery_id = 1;
+}
+
+message Delivery {
+  string delivery_id = 1;
+  bytes  event       = 2;     // structured CloudEvent in JSON (§1.2.1)
+}
+
+message OpenAck {
+  string trace_id      = 1;  // TaskID of the root, by which it is named afterwards
+  string entry_task_id = 2;  // TaskID of the entry subtask
+}
 
 // Context Store: a portion is a name within a task's section
 message ContextRef {

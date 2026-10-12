@@ -98,21 +98,7 @@ func leaseTTL(head *globalconfig.Record) time.Duration {
 // proposals. Edits are applied one at a time, because each one is judged
 // against the head the previous one left.
 func (s *store) serve(ctx context.Context, l *role.Loop, c jetstream.Consumer) error {
-	for ctx.Err() == nil {
-		l.Mark()
-		batch, err := c.Fetch(16, jetstream.FetchMaxWait(5*time.Second))
-		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				log.Printf("config: fetching: %v", err)
-				time.Sleep(time.Second)
-			}
-			continue
-		}
-		for m := range batch.Messages() {
-			l.Mark()
-			s.handle(ctx, m)
-		}
-	}
+	role.Consume(ctx, l, c, func(m jetstream.Msg) { s.handle(ctx, m) })
 	return nil
 }
 

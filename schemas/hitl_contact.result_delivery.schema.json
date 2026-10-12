@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/hitl_contact.result_delivery.schema.json",
+  "description": "The delivery of a trace's outcome, which the channel that opened the trace opens on hitl_contact_<origin_audience> (architecture §3.5.4).",
+  "type": "object",
+  "required": ["kind", "scope", "since", "evidence", "details"],
+  "properties": {
+    "kind": {"description": "result_delivery.", "type": "string"},
+    "scope": {"description": "trace.", "type": "string"},
+    "since": {"description": "When the entry subtask closed.", "type": "string", "format": "date-time"},
+    "options": {
+      "description": "None with none, received with ack, accept and reject with acceptance (architecture §3.5.4).",
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "outcome_if_silent": {"description": "received with ack, accept with acceptance.", "type": "string"},
+    "evidence": {
+      "type": "object",
+      "required": ["trace_id", "task_id", "cost"],
+      "properties": {
+        "trace_id": {"description": "The trace.", "type": "string"},
+        "task_id": {"description": "The entry subtask.", "type": "string"},
+        "cost": {"description": "The trace's accumulated cost, in cost_unit (architecture §3.15.1).", "type": "number"}
+      }
+    },
+    "details": {
+      "description": "The terminal event of the entry subtask (architecture §3.5.4).",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {"description": "task.completed, task.failed or task.aborted.", "type": "string"},
+        "failure_reason": {"type": "string"},
+        "failure_code": {"type": "string"},
+        "disposition": {"type": "string"},
+        "data": {
+          "description": "The data of the terminal event without its common fields: the outcome, such as the config_version a config_change published.",
+          "type": "object",
+          "additionalProperties": {"opaque": true}
+        },
+        "context_ref": {
+          "description": "The result, by Claim-Check.",
+          "type": "object",
+          "required": ["trace_id", "task_id", "name"],
+          "properties": {
+            "trace_id": {"type": "string"},
+            "task_id": {"type": "string"},
+            "name": {"type": "string"}
+          }
+        }
+      }
+    }
+  }
+}

@@ -71,3 +71,27 @@ func AwaitConsumer(ctx context.Context, l *Loop, js jetstream.JetStream, rt *Run
 	})
 	return c, err
 }
+
+// Consume pulls from a durable consumer and hands each message to handle, until
+// ctx ends. It marks l between pulls, and a pull ends with ctx, so a role that
+// stops does not wait for one in flight.
+func Consume(ctx context.Context, l *Loop, c jetstream.Consumer, handle func(jetstream.Msg)) {
+	for ctx.Err() == nil {
+		l.Mark()
+		pull, cancel := context.WithTimeout(ctx, 5*time.Second)
+		batch, err := c.Fetch(64, jetstream.FetchContext(pull))
+		if err != nil {
+			cancel()
+			if ctx.Err() == nil {
+				log.Printf("fetching from %s: %v", c.CachedInfo().Stream, err)
+				time.Sleep(time.Second)
+			}
+			continue
+		}
+		for m := range batch.Messages() {
+			l.Mark()
+			handle(m)
+		}
+		cancel()
+	}
+}

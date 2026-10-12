@@ -3,7 +3,6 @@ package contextstore
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -102,29 +101,17 @@ func sweep(ctx context.Context, js jetstream.JetStream, store *Store, now time.T
 // is the TraceID of its traceparent closes the root, and by the closing rule the
 // whole tree has already finished (architecture §3.9.1, implementation §1.2.9).
 func observeCloses(ctx context.Context, l *role.Loop, c jetstream.Consumer, store *Store) {
-	for ctx.Err() == nil {
-		l.Mark()
-		batch, err := c.Fetch(16, jetstream.FetchMaxWait(5*time.Second))
-		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				log.Printf("context: fetching closes: %v", err)
-				time.Sleep(time.Second)
-			}
-			continue
-		}
-		for m := range batch.Messages() {
-			l.Mark()
-			var e bus.Event
-			if err := json.Unmarshal(m.Data(), &e); err == nil {
-				if trace := bus.TraceID(e.TraceParent); trace != "" && e.Subject == trace {
-					if err := store.MarkClosed(trace, time.Now()); err != nil {
-						log.Printf("context: closing %s: %v", trace, err)
-						m.Nak()
-						continue
-					}
+	role.Consume(ctx, l, c, func(m jetstream.Msg) {
+		var e bus.Event
+		if err := json.Unmarshal(m.Data(), &e); err == nil {
+			if trace := bus.TraceID(e.TraceParent); trace != "" && e.Subject == trace {
+				if err := store.MarkClosed(trace, time.Now()); err != nil {
+					log.Printf("context: closing %s: %v", trace, err)
+					m.Nak()
+					return
 				}
 			}
-			m.Ack()
 		}
-	}
+		m.Ack()
+	})
 }

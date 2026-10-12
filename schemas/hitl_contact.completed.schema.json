@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/hitl_contact.completed.schema.json",
+  "description": "The answer to a query on hitl_contact_<audience> (architecture §3.5.2, implementation §10.1). The common fields are in data.schema.json.",
+  "type": "object",
+  "properties": {
+    "decision": {
+      "description": "One of the query's options; absent in a delivery without options (architecture §3.5.4). A value outside options is silence.",
+      "type": "string"
+    }
+  }
+}

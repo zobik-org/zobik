@@ -119,7 +119,7 @@ The identity goes **before** everything else because the trailing wildcard of a 
 | `task.completed`, `task.failed`, `task.aborted` | `task.completed.<identity>.<topic>` and equivalents | the requester that opened the task |
 | `notice` | `notice.<topic>` | the node that watches the topic |
 
-Every subject has a fixed number of tokens, because a topic is a single term (§3.6.5).
+Every subject has a fixed number of tokens, because a topic is a single term (§3.6.5). **A trace's root has no topic of its own, so its terminal event travels on its entry subtask's**, and `data.topic` names that one too (§3.5.1, §3.5.4).
 
 **The directed event carries the recipient and not the publisher**, because the requester cannot filter by who answers it: it does not observe the award of the subtasks it opens (§3.9.1), so it does not know which identity is going to resolve them. A subject that carried both ends—destination and origin—would be filterable, but it would require a publish permission for each pair of nodes that can talk to each other, issued by the Spawner on each provisioning. The enforceable attribution the substrate provides decides something in a single place, the admission of a proposal (§3.7.5, step 4), and that is where it is. What closes off the forgery of a directed event is the node's edge: the Integration Sidecar writes the recipient and the task from the assignment it retains (§3.6.1), and the Logic Container does not reach the Bus through any channel of its own (§2.2).
 
@@ -1367,9 +1367,10 @@ import "zobik/nri/v1/nri.proto";
 service Channel {
   rpc Attach(stream ConsoleMessage)         returns (stream ChannelMessage);
   rpc Open(stream OpenTrace)                returns (zobik.nri.v1.OpenAck);
-  rpc Answer(Answer)                        returns (AnswerAck);
+  rpc Answer(AnswerRequest)                 returns (AnswerAck);
   rpc ReadContext(zobik.nri.v1.ContextRead) returns (stream zobik.nri.v1.Chunk);
   rpc Purge(zobik.nri.v1.PurgeRequest)      returns (zobik.nri.v1.PurgeAck);
+  rpc ReadConfig(ReadConfigRequest)         returns (ConfigSnapshot);
 }
 
 // console → role, over Attach
@@ -1400,7 +1401,7 @@ message Expired {
 
 // Opening a trace: the payload and then the bodies
 message OpenTrace {
-  oneof body {
+  oneof part {
     OpenHeader header = 1;  // first message
     Body       body   = 2;  // opens a body; the chunks that follow it are its own
     bytes      chunk  = 3;  // before the first Body, of the payload
@@ -1420,12 +1421,20 @@ message Body {
   bool   context    = 3;  // from the conversation's context, not from the request
 }
 
-message Answer {
+message AnswerRequest {
   string task_id = 1;  // a query the role retains
   bytes  data    = 2;  // JSON of the answer
 }
 
 message AnswerAck {}
+
+message ReadConfigRequest {}
+
+message ConfigSnapshot {
+  string config_version = 1;
+  string published_at   = 2;  // RFC 3339
+  bytes  values         = 3;  // JSON object with the snapshot's keys
+}
 ```
 
 **`Attach` is the console's session**, and it is what decides whether the channel proposes in round 1 (*The operator console*, above). On opening it, the role sends it each query it retains, and afterwards each one it wins; the console replaces what it was showing with them. A query is not confirmed: the console recognizes it by its `TaskID` every time it arrives.
@@ -1441,6 +1450,10 @@ message AnswerAck {}
 **`Answer` closes a query with `task.completed`** and the `data` the console assembles: the `decision` and, in the `reject` of an outcome delivery, its `failure_reason` (§3.5.2, §3.5.4). The role does not validate the `decision`, which the requester treats as silence if it is not in `options` (§3.5.2). It rejects a `task_id` the role does not retain with `FAILED_PRECONDITION`. **The console answers a delivery with `ack` on showing it**, with `received`: showing the outcome is delivering it.
 
 **`ReadContext` reads what the queries bring**—the result of an outcome, the listing of `node_catalog_query`—, with the token of the task it names: a query the role retains or a root it opened, as in the NRI (§3). **`Purge` deletes a trace the console opened** with its root's token (§3.4); it is what the work area executes when the person deletes a conversation.
+
+**`ReadConfig` returns the head of the Global Configuration**, which the administration affordance presents before any edit, with the `config_version` it declares as `base_version` (§3.17.1). The role reads it from the Config Store's bucket, which its scope already reads (§1.2.5): the NATS server publishes no port on the host (*The Docker network*, above), and the value the console shows is the one the network reads.
+
+**Only the console's platform identity reaches the service.** `zobik init` leaves its public key in each channel's volume, and the role rejects the connection of any other identity, even one issued under the console's scoped key, which lives in the clear on the host (*The root and the split Operator Channel*, above).
 
 ### The health of the roles
 
@@ -1525,7 +1538,7 @@ They are the keys the network cannot change from inside. Everything else is Glob
 | :--- | :--- | :--- |
 | `tenant` | a new one | Create the tenant-wide pieces, point at those of a tenant on the same host, or join one on another host with a join code (thesis 6, *The tenant CA, the link and the join code*). |
 | `forge` | `own` | `own`: the network is its own Forge. `dedicated`: the Forge is another network of the same tenant, dedicated to building nodes. `none`: the network derives no new nodes (§6.1). |
-| `ports` | free, chosen by `zobik init` | The ports of the panel, of the ingress proxy (§2.3) and of the registry on the link (*The tenant CA, the link and the join code*); they stay fixed in the effective file. |
+| `ports` | free, chosen by `zobik init` | The ports of the panel, of each channel's service toward the console (*The service between the console and the channels*), of the ingress proxy (§2.3) and of the registry on the link (*The tenant CA, the link and the join code*); they stay fixed in the effective file. |
 | `ingress_tunnel` | off | Receive from the internet through Tailscale Funnel (§2.3). |
 | `work_area_size` | `10G` per node | The ceiling of each node's shared volume, which hosts the work areas; it applies only on XFS with `pquota` (§2.1). |
 | `context_store_size` | `4G` | The ceiling of the Context Store's volume, against the host's disk (§1.2.9). |
