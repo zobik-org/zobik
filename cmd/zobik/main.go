@@ -51,6 +51,8 @@ func run(ctx context.Context, args []string) error {
 		return runCmd(ctx, rest)
 	case "health":
 		return healthCmd(ctx, rest)
+	case "config":
+		return configCmd(ctx, rest)
 	case deploy.ActCommand:
 		if len(rest) != 1 {
 			return fmt.Errorf("usage: zobik %s <act>", deploy.ActCommand)
