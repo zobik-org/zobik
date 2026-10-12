@@ -1,23 +1,107 @@
-// The Node Runtime Interface (implementation §3). This file carries the messages
-// the Context Store and the channel service already use; the service enters
-// with the Integration Sidecar.
+// The Node Runtime Interface (implementation §3).
 syntax = "proto3";
 package zobik.nri.v1;
 
 option go_package = "zobik.org/zobik/proto/zobik/nri/v1;nriv1";
 
+service NodeRuntime {
+  rpc Attach(stream LogicMessage) returns (stream SidecarMessage);
+  rpc Publish(PublishRequest)     returns (PublishAck);
+  rpc ReadContext(ContextRead)    returns (stream Chunk);
+  rpc WriteContext(stream ContextWrite) returns (ContextRef);
+  rpc ListContext(ContextList)    returns (ContextListing);
+  rpc Call(EgressRequest)         returns (EgressResponse);
+  rpc Open(stream OpenTrace)      returns (OpenAck);
+  rpc Purge(PurgeRequest)         returns (PurgeAck);
+  rpc Reply(IngressReply)         returns (ReplyAck);
+}
+
+// Logic Container → Integration Sidecar, over Attach
+message LogicMessage {
+  oneof body {
+    Hello    hello    = 1;  // interface version it was built with
+    Received received = 2;  // confirms a delivery by its delivery_id
+  }
+}
+
+message Hello {
+  uint32 minor = 1;  // minor version; the major one is the package
+}
+
 message Received {
   string delivery_id = 1;
 }
 
-message Delivery {
-  string delivery_id = 1;
-  bytes  event       = 2;     // structured CloudEvent in JSON (§1.2.1)
+message Accepted {}
+
+// Integration Sidecar → Logic Container, over Attach
+message SidecarMessage {
+  oneof body {
+    Accepted accepted   = 1;
+    Delivery assignment = 2;  // task.assigned, without the scope token, with its announcement
+    Delivery result     = 3;  // terminal event directed to the node, without source
+    Delivery notice     = 4;  // notice of a watched broadcast topic
+    Inbound  inbound    = 5;  // message admitted by an ingress entry
+  }
 }
 
-message OpenAck {
-  string trace_id      = 1;  // TaskID of the root, by which it is named afterwards
-  string entry_task_id = 2;  // TaskID of the entry subtask
+message Inbound {
+  string delivery_id   = 1;  // the one it is confirmed and replied with
+  string slot          = 2;  // name of the ingress_required slot
+  string operation     = 3;  // operation of that slot's interface
+  bytes  fields        = 4;  // JSON, already validated against the interface
+  bool   expects_reply = 5;  // the protocol expects a reply
+  repeated InboundBody bodies = 6;  // empty if the operation brings no bodies
+}
+
+message InboundBody {
+  string path       = 1;  // relative to /run/zobik/inbound/<delivery_id>/
+  string name       = 2;  // the one the sender declared
+  string media_type = 3;  // the one the sender declared
+  bool   context    = 4;  // from the conversation's context, not from the request
+}
+
+message Delivery {
+  string delivery_id  = 1;
+  bytes  event        = 2;  // structured CloudEvent in JSON (§1.2.1)
+  bytes  announcement = 3;  // on an assignment, the task's task.announced in the same form; empty otherwise
+}
+
+// Publication requests: only what the Logic Container decides
+message PublishRequest {
+  string task_id = 1;           // one of the tasks assigned to the node
+  oneof body {
+    AnnounceTask announce = 2;  // topic, data, optional previous_attempt
+    CompleteTask complete = 3;  // data; on a query, optional delivery_id of the Inbound that answers it
+    FailTask     fail     = 4;  // failure_reason, data
+    AskRequester ask      = 5;  // data, optional previous_attempt; always on hitl_contact_<origin_audience>
+  }
+}
+
+message AnnounceTask {
+  string topic            = 1;
+  bytes  data             = 2;  // JSON of the payload
+  string previous_attempt = 3;  // TaskID of the attempt it reopens; empty if it does not reopen
+}
+
+message CompleteTask {
+  bytes  data        = 1;  // JSON of the payload
+  string delivery_id = 2;  // Inbound that answers the query; empty if none
+}
+
+message FailTask {
+  string failure_reason = 1;
+  bytes  data           = 2;  // JSON of the payload
+  string failure_code   = 3;  // only on hitl_contact_*: undelivered | unanswered
+}
+
+message AskRequester {
+  bytes  data             = 1;  // JSON of the query's payload
+  string previous_attempt = 2;  // TaskID of the query it reopens; empty if it does not reopen
+}
+
+message PublishAck {
+  string task_id = 1;  // TaskID of the subtask that announce and ask open
 }
 
 // Context Store: a portion is a name within a task's section
@@ -57,8 +141,49 @@ message Chunk {
   bytes data = 1;  // up to 1 MiB
 }
 
+// Egress request: without target, which the slot's association resolves
+message EgressRequest {
+  string task_id   = 1;  // task whose metrics the call is charged to
+  string slot      = 2;  // name of the egress_required slot
+  string operation = 3;  // operation of that slot's interface
+  bytes  fields    = 4;  // JSON, validated against the interface
+  string body      = 5;  // path of the body, relative to the task's work area; empty with no body
+}
+
+message EgressResponse {
+  bytes  fields = 1;  // JSON, the response outside its body
+  string body   = 2;  // path of the response's body in the work area; empty with no body
+}
+
+// Opening a trace: only in a channel with a granted entry_topic
+message OpenTrace {
+  oneof body {
+    OpenHeader header = 1;  // first message: the Inbound's delivery_id, data and optional workspace
+    bytes      chunk  = 2;  // heavy payload, which goes to the Context Store
+  }
+}
+
+message OpenHeader {
+  string delivery_id = 1;  // that of the Inbound the trace comes from
+  bytes  data        = 2;  // JSON of the entry subtask's data
+  string workspace   = 3;  // empty if the channel does not use it
+}
+
+message OpenAck {
+  string trace_id      = 1;  // TaskID of the root, by which it is named afterwards
+  string entry_task_id = 2;  // TaskID of the entry subtask
+}
+
 message PurgeRequest {
   string task_id = 1;  // one of the roots the node opened
 }
 
 message PurgeAck {}
+
+// Reply to an ingress message, over the connection that brought it
+message IngressReply {
+  string delivery_id = 1;  // that of the Inbound it answers
+  bytes  fields      = 2;  // JSON, validated against the reply shape
+}
+
+message ReplyAck {}

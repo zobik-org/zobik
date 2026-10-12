@@ -159,14 +159,23 @@ func asConsultation(t *testing.T, m *channelv1.ChannelMessage) consultation {
 	if d == nil {
 		t.Fatalf("not a consultation: %v", m)
 	}
-	var e bus.Event
-	json.Unmarshal(d.GetEvent(), &e)
-	var c consultation
-	c.TaskID = e.Subject
-	json.Unmarshal(e.Data, &c.Data)
-	if _, ok := c.Data.Details["scope_token"]; ok {
+	var assigned, announced bus.Event
+	json.Unmarshal(d.GetEvent(), &assigned)
+	json.Unmarshal(d.GetAnnouncement(), &announced)
+	if assigned.Type != bus.TypeAssigned || announced.Type != bus.TypeAnnounced || announced.Subject != assigned.Subject {
+		t.Fatalf("consultation of %s %s with announcement %s %s", assigned.Type, assigned.Subject, announced.Type, announced.Subject)
+	}
+	if d.GetDeliveryId() != assigned.ID {
+		t.Errorf("delivery_id %s, assigned id %s", d.GetDeliveryId(), assigned.ID)
+	}
+	var data map[string]any
+	json.Unmarshal(assigned.Data, &data)
+	if _, ok := data["scope_token"]; ok {
 		t.Error("the consultation carries a scope token")
 	}
+	var c consultation
+	c.TaskID = assigned.Subject
+	json.Unmarshal(announced.Data, &c.Data)
 	return c
 }
 

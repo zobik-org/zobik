@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -117,19 +116,19 @@ func (c *channel) onAssigned(ctx context.Context, e *bus.Event) error {
 	return nil
 }
 
-// consultation is the query as the console receives it: the assignment, with
-// the query's data and without the scope token.
+// consultation is the query as the console receives it: its task.assigned,
+// without the scope token, with its task.announced (implementation §3, The session).
 func consultation(q *query) *channelv1.ChannelMessage {
 	var data map[string]json.RawMessage
-	_ = json.Unmarshal(q.a.Announcement.Data, &data) // onAssigned read it already
-	data = maps.Clone(data)
+	_ = json.Unmarshal(q.a.Assigned.Data, &data) // the Task Broker validated it
 	delete(data, "scope_token")
 	raw, _ := json.Marshal(data)
-	e := *q.a.Announcement
-	e.Type, e.ID, e.Data = bus.TypeAssigned, q.deliveryID, raw
+	e := *q.a.Assigned
+	e.Data = raw
 	b, _ := json.Marshal(e)
+	ann, _ := json.Marshal(q.a.Announcement)
 	return &channelv1.ChannelMessage{Body: &channelv1.ChannelMessage_Consultation{
-		Consultation: &nriv1.Delivery{DeliveryId: q.deliveryID, Event: b},
+		Consultation: &nriv1.Delivery{DeliveryId: q.deliveryID, Event: b, Announcement: ann},
 	}}
 }
 

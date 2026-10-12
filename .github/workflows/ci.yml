@@ -54,9 +54,14 @@ jobs:
           go install github.com/bufbuild/buf/cmd/buf@v1.57.0
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install --require-hashes -r sdk/python/requirements-codegen.txt
       - run: buf lint
       - run: buf generate
-      - run: git diff --exit-code
+      - run: sdk/python/generate.sh
+      - run: git add -N . && git diff --exit-code
 
   e2e:
     runs-on: ubuntu-latest

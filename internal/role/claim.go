@@ -72,12 +72,13 @@ func (c *Claimant) Propose(ctx context.Context, ann *bus.Event) error {
 // Assignment is a task the claimant won.
 type Assignment struct {
 	Announcement *bus.Event
-	TaskID       string
+	// Assigned is the task.assigned the Task Broker published.
+	Assigned *bus.Event
+	TaskID   string
 	// Token is the scope token the Task Broker minted for this task (architecture §3.14.3).
 	Token     string
 	Requester string
 	Started   time.Time
-	assigned  *bus.Event
 }
 
 // Assigned matches a task.assigned with the announcement it answers. It
@@ -95,8 +96,8 @@ func (c *Claimant) Assigned(e *bus.Event) (*Assignment, bool) {
 		RequesterIdentity string `json:"requester_identity"`
 	}
 	_ = json.Unmarshal(e.Data, &d) // a field of another type reads as absent
-	return &Assignment{Announcement: p.ann, TaskID: e.Subject, Token: d.ScopeToken,
-		Requester: d.RequesterIdentity, Started: time.Now(), assigned: e}, true
+	return &Assignment{Announcement: p.ann, Assigned: e, TaskID: e.Subject, Token: d.ScopeToken,
+		Requester: d.RequesterIdentity, Started: time.Now()}, true
 }
 
 // Rejected forgets the announcement of a proposal that lost.
@@ -152,7 +153,7 @@ func (c *Claimant) close(ctx context.Context, a *Assignment, typ string, data ma
 	if err != nil {
 		return err
 	}
-	e.TraceParent, e.ConfigVersion = a.assigned.TraceParent, a.assigned.ConfigVersion
+	e.TraceParent, e.ConfigVersion = a.Assigned.TraceParent, a.Assigned.ConfigVersion
 	if err := e.ValidateTopic(); err != nil {
 		return err
 	}
