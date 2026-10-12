@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/config_change.schema.json",
+  "description": "The data of a task.announced on config_change (architecture §3.14.4, implementation §10.1). The edit travels by Claim-Check in context_ref, with the shape of config_change.payload.schema.json, and the operator's proof covers it through payload_digest (implementation §9.2). The common fields are in data.schema.json.",
+  "type": "object",
+  "required": ["context_ref", "operator_proof"],
+  "properties": {
+    "context_ref": {
+      "description": "Where the edit is in the Context Store.",
+      "type": "object",
+      "required": ["trace_id", "task_id", "name"],
+      "properties": {
+        "trace_id": {"type": "string"},
+        "task_id": {"type": "string"},
+        "name": {"type": "string"}
+      }
+    },
+    "operator_proof": {
+      "description": "The operator's proof of the act, with act config_change (architecture §3.14.2, implementation §9.2).",
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/config_change.payload.schema.json",
+  "description": "The edit a config_change carries by Claim-Check: a declarative artifact over the versioned region (architecture §3.14.4). Each assigned value is validated against its key in the Global Configuration schema (implementation §1.2.5).",
+  "type": "object",
+  "required": ["base_version", "assignments"],
+  "properties": {
+    "base_version": {
+      "description": "The config_version the edit was made on (architecture §3.14.4).",
+      "type": "string",
+      "minLength": 1
+    },
+    "assignments": {
+      "description": "The value assigned to each key, by key name.",
+      "type": "object",
+      "additionalProperties": {"opaque": true}
+    }
+  }
+}

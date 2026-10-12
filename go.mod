@@ -5,6 +5,7 @@ go 1.27
 require (
 	cel.dev/cel-go v0.32.0
 	github.com/containerd/errdefs v1.0.0
+	github.com/cyberphone/json-canonicalization v0.0.0-20231011164504-785e29786b46
 	github.com/google/uuid v1.6.0
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.2

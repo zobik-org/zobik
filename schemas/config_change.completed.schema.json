@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/config_change.completed.schema.json",
+  "description": "The data of the task.completed with which the Config Store closes a config_change (architecture §3.14.4, implementation §10.1). The common fields are in data.schema.json.",
+  "type": "object",
+  "required": ["config_version"],
+  "properties": {
+    "config_version": {
+      "description": "The version the edit published (architecture §2.3).",
+      "type": "string"
+    }
+  }
+}

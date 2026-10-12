@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 	"sync"
 	"time"
@@ -60,9 +61,14 @@ func NewEvent(typ, source, subject string, data any) (*Event, error) {
 	}, nil
 }
 
+// compiled holds every schema the binary brings, by file name (implementation §10.2).
 var compiled = sync.OnceValues(func() (map[string]*schema.Schema, error) {
 	out := map[string]*schema.Schema{}
-	for _, name := range []string{"envelope.schema.json", "data.schema.json"} {
+	names, err := fs.Glob(schemas.FS, "*.schema.json")
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
 		doc, err := schemas.FS.ReadFile(name)
 		if err != nil {
 			return nil, err
@@ -73,6 +79,31 @@ var compiled = sync.OnceValues(func() (map[string]*schema.Schema, error) {
 	}
 	return out, nil
 })
+
+// Schema returns a schema the binary brings, by file name.
+func Schema(name string) (*schema.Schema, error) {
+	s, err := compiled()
+	if err != nil {
+		return nil, err
+	}
+	if s[name] == nil {
+		return nil, fmt.Errorf("bus: no schema %s", name)
+	}
+	return s[name], nil
+}
+
+// topicSchema names the schema of the data a fixed-convention topic fixes for
+// typ, chosen by the topic (implementation §10.1): <topic>.schema.json for the
+// announcement and <topic>.completed.schema.json for its answer.
+func topicSchema(typ, topic string) string {
+	switch typ {
+	case TypeAnnounced:
+		return topic + ".schema.json"
+	case TypeCompleted:
+		return topic + ".completed.schema.json"
+	}
+	return ""
+}
 
 // commonData is what the envelope rules read from data.
 type commonData struct {
@@ -123,6 +154,30 @@ func (e *Event) Validate() error {
 	// architecture §3.8.2: a notice carries no metrics.
 	case e.Type == TypeNotice && d.Metrics != nil:
 		return errors.New("data: a notice carries no metrics")
+	}
+	return nil
+}
+
+// ValidateTopic checks the data against the schema its topic fixes for its type,
+// if it fixes one (implementation §10.1). Whoever assembles a payload applies it
+// before publishing, and the claimant on receiving it; the Task Broker, which
+// carries the request without reading it, does not (implementation §10.2).
+func (e *Event) ValidateTopic() error {
+	s, err := compiled()
+	if err != nil {
+		return err
+	}
+	var d commonData
+	if err := json.Unmarshal(e.Data, &d); err != nil {
+		return fmt.Errorf("data: %w", err)
+	}
+	if d.Topic == nil {
+		return nil
+	}
+	if ts := s[topicSchema(e.Type, *d.Topic)]; ts != nil {
+		if err := ts.ValidateJSON(e.Data); err != nil {
+			return fmt.Errorf("data of %s: %w", *d.Topic, err)
+		}
 	}
 	return nil
 }

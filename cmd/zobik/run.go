@@ -29,7 +29,9 @@ func runCmd(ctx context.Context, args []string) error {
 	var body role.Body
 	switch *name {
 	case "config":
-		body = config.Run
+		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
+			return config.Run(ctx, rt, nc, config.Options{ContextAddr: role.AddrContext})
+		}
 	case "task_broker":
 		body = taskbroker.Run
 	case "context":
