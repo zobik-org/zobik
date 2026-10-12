@@ -156,9 +156,8 @@ func (o *Operator) ConfigSet(ctx context.Context, base *Snapshot, assignments ma
 			}
 			// Showing the outcome is delivering it (implementation §6, The service
 			// between the console and the channels).
-			if err := session.Send(&channelv1.ConsoleMessage{Body: &channelv1.ConsoleMessage_Shown{Shown: &channelv1.Shown{TaskId: d.taskID}}}); err != nil {
-				return nil, fmt.Errorf("console: showing the delivery: %w", err)
-			}
+			// Answer confirms the delivery; a broken session loses only the mark.
+			_ = session.Send(&channelv1.ConsoleMessage{Body: &channelv1.ConsoleMessage_Shown{Shown: &channelv1.Shown{TaskId: d.taskID}}})
 			if _, err := o.Client.Answer(ctx, &channelv1.AnswerRequest{TaskId: d.taskID, Data: []byte(`{"decision":"received"}`)}); err != nil {
 				return nil, fmt.Errorf("console: confirming the delivery: %w", err)
 			}

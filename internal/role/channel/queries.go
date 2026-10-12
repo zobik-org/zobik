@@ -61,10 +61,7 @@ type round struct {
 // the TraceID proposes (architecture §3.5.2, implementation §6, The operator console).
 func (c *channel) onAnnounced(ctx context.Context, e *bus.Event) error {
 	var r round
-	if err := json.Unmarshal(e.Data, &r); err != nil {
-		log.Printf("channel: %s: malformed round: %v", e.Subject, err)
-		return nil
-	}
+	_ = json.Unmarshal(e.Data, &r) // a field of another type reads as absent
 	attempts := 1
 	if r.CurrentAttempts != nil {
 		attempts = *r.CurrentAttempts
@@ -99,11 +96,7 @@ func (c *channel) onAssigned(ctx context.Context, e *bus.Event) error {
 		return nil
 	}
 	var r round
-	if err := json.Unmarshal(a.Announcement.Data, &r); err != nil {
-		// A query whose round is unreadable cannot be shown: the lease is let go.
-		log.Printf("channel: %s: malformed round: %v", a.TaskID, err)
-		return nil
-	}
+	_ = json.Unmarshal(a.Announcement.Data, &r) // a field of another type reads as absent
 	window, err := c.responseWindow(ctx, a.Announcement.ConfigVersion)
 	if err != nil {
 		// Without the window, the query cannot be bounded: the lease is let

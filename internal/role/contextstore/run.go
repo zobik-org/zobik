@@ -55,7 +55,9 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	if err != nil {
 		return err
 	}
-	role.ServeRPC(g, ln)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	role.ServeRPC(cancel, g, ln)
 	defer g.Stop()
 
 	go observeCloses(ctx, rt.Loop("closes", time.Minute), consumer, store)
@@ -67,7 +69,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return role.ServeFailure(ctx)
 		case now := <-t.C:
 			l.Mark()
 			if now.Before(next) {

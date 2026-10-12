@@ -3,8 +3,6 @@ package role
 import (
 	"context"
 	"encoding/json"
-	"log"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +11,6 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	"google.golang.org/grpc"
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/rpcauth"
@@ -173,14 +170,4 @@ func (rt *Runtime) RPCCredentials() *rpcauth.Client {
 		},
 		Key: rt.key,
 	}
-}
-
-// ServeRPC serves an off-Bus interface on ln until g stops. Any other end
-// leaves the interface down, so the role exits and its restart brings it back.
-func ServeRPC(g *grpc.Server, ln net.Listener) {
-	go func() {
-		if err := g.Serve(ln); err != nil {
-			log.Fatalf("serving %s: %v", ln.Addr(), err)
-		}
-	}()
 }

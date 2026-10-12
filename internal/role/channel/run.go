@@ -124,12 +124,17 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	if err != nil {
 		return err
 	}
-	role.ServeRPC(g, ln)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	role.ServeRPC(cancel, g, ln)
 	defer g.Stop()
 
 	go c.followHead(ctx, rt.Loop("head", time.Minute))
 	rt.SetReady(true)
-	return c.serve(ctx, l, consumer)
+	if err := c.serve(ctx, l, consumer); err != nil {
+		return err
+	}
+	return role.ServeFailure(ctx)
 }
 
 // channel is the role's state: the roots it opened, the queries it retains and
