@@ -90,7 +90,9 @@ func (s *Server) clock() time.Time {
 }
 
 func (s *Server) ServerHandshake(raw net.Conn) (net.Conn, credentials.AuthInfo, error) {
-	raw.SetDeadline(time.Now().Add(handshakeTimeout))
+	if err := raw.SetDeadline(time.Now().Add(handshakeTimeout)); err != nil {
+		return nil, nil, err
+	}
 	nonce := make([]byte, 32)
 	rand.Read(nonce)
 	if err := writeLine(raw, nonce); err != nil {
@@ -113,7 +115,9 @@ func (s *Server) ServerHandshake(raw net.Conn) (net.Conn, credentials.AuthInfo, 
 		raw.Close()
 		return nil, nil, err
 	}
-	raw.SetDeadline(time.Time{})
+	if err := raw.SetDeadline(time.Time{}); err != nil {
+		return nil, nil, err
+	}
 	return expiring(&buffered{Conn: raw, r: r}, info.Expires), info, nil
 }
 
@@ -181,7 +185,9 @@ func (c *Client) ClientHandshake(ctx context.Context, _ string, raw net.Conn) (n
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
-	raw.SetDeadline(deadline)
+	if err := raw.SetDeadline(deadline); err != nil {
+		return nil, nil, err
+	}
 	r := bufio.NewReader(raw)
 	var nonce []byte
 	if err := readLine(r, &nonce); err != nil {
@@ -206,7 +212,9 @@ func (c *Client) ClientHandshake(ctx context.Context, _ string, raw net.Conn) (n
 		raw.Close()
 		return nil, nil, errors.New(v.Error)
 	}
-	raw.SetDeadline(time.Time{})
+	if err := raw.SetDeadline(time.Time{}); err != nil {
+		return nil, nil, err
+	}
 	return &buffered{Conn: raw, r: r}, Info{CommonAuthInfo: credentials.CommonAuthInfo{SecurityLevel: credentials.NoSecurity}}, nil
 }
 

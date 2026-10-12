@@ -247,7 +247,7 @@ func annotation(node map[string]json.RawMessage, name string, dst *string) error
 		return nil
 	}
 	if err := json.Unmarshal(v, dst); err != nil {
-		return fmt.Errorf("%s: %v", name, err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
 }

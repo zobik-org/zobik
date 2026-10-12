@@ -65,7 +65,7 @@ func Open(dir string, storeLimit, traceLimit int64) (*Store, error) {
 				return err
 			}
 			if strings.HasPrefix(d.Name(), ".tmp-") {
-				return os.Remove(path) // a write a crash interrupted
+				return os.Remove(path) //nolint:gosec // a write a crash interrupted, in the role's own volume
 			}
 			if d.Name() == closedFile {
 				return nil

@@ -138,7 +138,7 @@ func (s *service) Open(stream channelv1.Channel_OpenServer) error {
 	}
 	for {
 		m, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -211,7 +211,7 @@ func (s *service) ReadContext(req *nriv1.ContextRead, stream channelv1.Channel_R
 	}
 	for {
 		chunk, err := r.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {

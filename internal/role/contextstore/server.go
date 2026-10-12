@@ -66,7 +66,7 @@ func (s *Server) Read(req *contextv1.StoreRead, stream contextv1.ContextStore_Re
 				return err
 			}
 		}
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -95,7 +95,7 @@ func (s *Server) Write(stream contextv1.ContextStore_WriteServer) error {
 	}
 	for {
 		msg, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

@@ -55,7 +55,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	if err != nil {
 		return err
 	}
-	go g.Serve(ln)
+	role.ServeRPC(g, ln)
 	defer g.Stop()
 
 	go observeCloses(ctx, rt.Loop("closes", time.Minute), consumer, store)

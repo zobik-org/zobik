@@ -1,3 +1,12 @@
 version: v2
 modules:
   - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # The services and messages are named by implementation.md.
+    - SERVICE_SUFFIX
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+    - RPC_REQUEST_RESPONSE_UNIQUE

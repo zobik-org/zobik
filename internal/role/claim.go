@@ -3,6 +3,8 @@ package role
 import (
 	"context"
 	"encoding/json"
+	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/grpc"
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/rpcauth"
@@ -94,7 +97,7 @@ func (c *Claimant) Assigned(e *bus.Event) (*Assignment, bool) {
 		ScopeToken        string `json:"scope_token"`
 		RequesterIdentity string `json:"requester_identity"`
 	}
-	json.Unmarshal(e.Data, &d)
+	_ = json.Unmarshal(e.Data, &d) // a field of another type reads as absent
 	return &Assignment{Announcement: p.ann, TaskID: e.Subject, Token: d.ScopeToken,
 		Requester: d.RequesterIdentity, Started: time.Now(), assigned: e}, true
 }
@@ -114,7 +117,7 @@ func (c *Claimant) KeepLease(a *Assignment, ttl func() time.Duration) (stop func
 	subject := "lease." + c.rt.ID + "." + c.topic + "." + a.TaskID
 	go func() {
 		for {
-			c.nc.Publish(subject, nil)
+			_ = c.nc.Publish(subject, nil) // a lost renewal is made up by the next one
 			select {
 			case <-done:
 				return
@@ -170,4 +173,14 @@ func (rt *Runtime) RPCCredentials() *rpcauth.Client {
 		},
 		Key: rt.key,
 	}
+}
+
+// ServeRPC serves an off-Bus interface on ln until g stops. Any other end
+// leaves the interface down, so the role exits and its restart brings it back.
+func ServeRPC(g *grpc.Server, ln net.Listener) {
+	go func() {
+		if err := g.Serve(ln); err != nil {
+			log.Fatalf("serving %s: %v", ln.Addr(), err)
+		}
+	}()
 }

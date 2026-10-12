@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -27,7 +28,7 @@ type Engine struct {
 
 // NewEngine connects to the engine named by the environment (DOCKER_HOST), or the default socket.
 func NewEngine(ctx context.Context) (*Engine, error) {
-	c, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
+	c, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +127,7 @@ func (e *Engine) WriteVolume(ctx context.Context, volume, image, dir string, fil
 	if err != nil {
 		return err
 	}
-	defer e.c.ContainerRemove(context.WithoutCancel(ctx), res.ID, client.ContainerRemoveOptions{Force: true})
+	defer e.discard(ctx, res.ID)
 	rooted := make([]File, len(files))
 	for i, f := range files {
 		rooted[i] = File{Path: path.Join(dir, f.Path), Mode: f.Mode, Data: f.Data}
@@ -278,7 +279,7 @@ func (e *Engine) RunEphemeral(ctx context.Context, s Spec) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer e.c.ContainerRemove(context.WithoutCancel(ctx), id, client.ContainerRemoveOptions{Force: true})
+	defer e.discard(ctx, id)
 
 	wait := e.c.ContainerWait(ctx, id, client.ContainerWaitOptions{Condition: container.WaitConditionNextExit})
 	if _, err := e.c.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
@@ -308,7 +309,7 @@ func (e *Engine) RunAttached(ctx context.Context, s Spec, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer e.c.ContainerRemove(context.WithoutCancel(ctx), id, client.ContainerRemoveOptions{Force: true})
+	defer e.discard(ctx, id)
 	if _, err := e.c.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
 		return err
 	}
@@ -372,11 +373,17 @@ func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
 			return "", err
 		}
 		if _, err := e.c.CopyToContainer(ctx, res.ID, client.CopyToContainerOptions{DestinationPath: "/", Content: archive}); err != nil {
-			e.c.ContainerRemove(context.WithoutCancel(ctx), res.ID, client.ContainerRemoveOptions{Force: true})
+			e.discard(ctx, res.ID)
 			return "", err
 		}
 	}
 	return res.ID, nil
+}
+
+// discard removes a container the engine created for one act. The removal is
+// best effort: its failure leaves a container behind and does not undo the act.
+func (e *Engine) discard(ctx context.Context, id string) {
+	_, _ = e.c.ContainerRemove(context.WithoutCancel(ctx), id, client.ContainerRemoveOptions{Force: true})
 }
 
 // samePorts says whether a container publishes exactly the ports in want.
@@ -404,7 +411,7 @@ func (e *Engine) output(ctx context.Context, id string) ([]byte, error) {
 	}
 	defer logs.Close()
 	var out bytes.Buffer
-	if _, err := stdcopy.StdCopy(&out, &out, logs); err != nil && err != io.EOF {
+	if _, err := stdcopy.StdCopy(&out, &out, logs); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 	return out.Bytes(), nil

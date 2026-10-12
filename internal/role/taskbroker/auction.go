@@ -205,7 +205,7 @@ func award(taskID string, vs []verdict) (winner int, ok bool) {
 			continue
 		}
 		h := drawHash(taskID, v.identity)
-		if winner < 0 || v.score > vs[winner].score || v.score == vs[winner].score && bytes.Compare(h, best) > 0 {
+		if winner < 0 || v.score > vs[winner].score || v.score == vs[winner].score && bytes.Compare(h, best) > 0 { //nolint:gosec // vs[winner] is read only when winner >= 0
 			winner, best = i, h
 		}
 	}

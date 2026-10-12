@@ -44,11 +44,11 @@ func operator(t *testing.T) (*console.Operator, *testnet.Net) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, closeConn, err := console.Dial(addr, token, n.ConsoleKey)
+	client, conn, err := console.Dial(addr, token, n.ConsoleKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeConn() })
+	t.Cleanup(func() { conn.Close() })
 	return &console.Operator{Root: n.Root, ChannelID: n.ID("channel_operator"), Client: client}, n
 }
 
