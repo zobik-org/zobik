@@ -26,6 +26,7 @@ func TestV0(t *testing.T) {
 		"context_retention_grace":       `604800000`,
 		"hitl_response_window":          `86400000`,
 		"result_delivery":               `{"audiences":{"user":"acceptance"},"default":"ack"}`,
+		"egress_registry":               `{}`,
 	}
 	v0 := s.V0()
 	if len(v0) != len(want) {
@@ -41,7 +42,10 @@ func TestV0(t *testing.T) {
 	}
 }
 
-var model = `{"entry":"embeddings","model":"nomic-embed-text","document_prefix":"search_document: ","query_prefix":"search_query: "}`
+var (
+	model    = `{"entry":"embeddings","model":"nomic-embed-text","document_prefix":"search_document: ","query_prefix":"search_query: "}`
+	registry = `{"embeddings":{"target":"http://llama:8080"}}`
+)
 
 func TestApplyVersioned(t *testing.T) {
 	s, err := Load()
@@ -49,6 +53,7 @@ func TestApplyVersioned(t *testing.T) {
 		t.Fatal(err)
 	}
 	v0 := s.V0()
+	reg := with(v0, "egress_registry", registry)
 	cases := []struct {
 		name   string
 		head   globalconfig.Values
@@ -64,11 +69,24 @@ func TestApplyVersioned(t *testing.T) {
 		{"open without a vector space", v0, map[string]string{"network_admission": `"open"`}, "embedding_model assigned"},
 		{"auction not below the window", v0, map[string]string{"auction_timeout": `86400000`}, "less than hitl_response_window"},
 		{"window not above the auction", v0, map[string]string{"hitl_response_window": `1000`}, "less than hitl_response_window"},
-		{"assign the vector space frozen", v0, map[string]string{"embedding_model": model}, ""},
-		{"assign the vector space and open together", v0, map[string]string{"embedding_model": model, "network_admission": `"open"`}, "requires network_admission = frozen"},
-		{"open once it has one", with(v0, "embedding_model", model), map[string]string{"network_admission": `"open"`}, ""},
-		{"edit the vector space open", with(with(v0, "embedding_model", model), "network_admission", `"open"`), map[string]string{"embedding_model": model}, "requires network_admission = frozen"},
-		{"a composite field missing", v0, map[string]string{"embedding_model": `{"entry":"e","model":"m"}`}, "required"},
+		{"assign the vector space frozen", reg, map[string]string{"embedding_model": model}, ""},
+		{"assign the vector space and open together", reg, map[string]string{"embedding_model": model, "network_admission": `"open"`}, "requires network_admission = frozen"},
+		{"open once it has one", with(reg, "embedding_model", model), map[string]string{"network_admission": `"open"`}, ""},
+		{"edit the vector space open", with(with(reg, "embedding_model", model), "network_admission", `"open"`), map[string]string{"embedding_model": model}, "requires network_admission = frozen"},
+		{"a composite field missing", reg, map[string]string{"embedding_model": `{"entry":"e","model":"m"}`}, "required"},
+		{"the vector space without its entry", v0, map[string]string{"embedding_model": model}, "names no egress_registry entry"},
+		{"the entry and the vector space together", v0, map[string]string{"egress_registry": registry, "embedding_model": model}, ""},
+		{"remove the vector space's entry", with(reg, "embedding_model", model), map[string]string{"egress_registry": `{}`}, "names no egress_registry entry"},
+		{"an https target with a path", v0, map[string]string{"egress_registry": `{"e":{"target":"https://api.example.com/openai"}}`}, ""},
+		{"a target without a scheme", v0, map[string]string{"egress_registry": `{"e":{"target":"llama:8080"}}`}, "http or https URL"},
+		{"a target with credentials", v0, map[string]string{"egress_registry": `{"e":{"target":"https://u:p@api.example.com"}}`}, "http or https URL"},
+		{"a target with a query", v0, map[string]string{"egress_registry": `{"e":{"target":"https://api.example.com/?k=v"}}`}, "http or https URL"},
+		{"an entry without a target", v0, map[string]string{"egress_registry": `{"e":{}}`}, "required"},
+		{"an IPv6 target", v0, map[string]string{"egress_registry": `{"e":{"target":"http://[::1]:8080"}}`}, ""},
+		{"a target with a space in its host", v0, map[string]string{"egress_registry": `{"e":{"target":"http://ll ama:8080"}}`}, "http or https URL"},
+		{"a target with a port that is no number", v0, map[string]string{"egress_registry": `{"e":{"target":"http://llama:port"}}`}, "http or https URL"},
+		{"a target without a host", v0, map[string]string{"egress_registry": `{"e":{"target":"http://:8080"}}`}, "http or https URL"},
+		{"the vector space on a head without egress_registry", without(v0, "egress_registry"), map[string]string{"embedding_model": model}, "names no egress_registry entry"},
 	}
 	for _, c := range cases {
 		assign := map[string]json.RawMessage{}
@@ -113,6 +131,12 @@ func with(v globalconfig.Values, key, value string) globalconfig.Values {
 		out[k] = x
 	}
 	out[key] = json.RawMessage(value)
+	return out
+}
+
+func without(v globalconfig.Values, key string) globalconfig.Values {
+	out := with(v, key, "null")
+	delete(out, key)
 	return out
 }
 

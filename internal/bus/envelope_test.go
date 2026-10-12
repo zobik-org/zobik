@@ -40,6 +40,10 @@ func TestValidate(t *testing.T) {
 		"null field":                  {func(e *Event) { e.Data = json.RawMessage(`{"topic":null}`) }, "data: topic: null"},
 		"wrong field type":            {func(e *Event) { e.Data = json.RawMessage(`{"current_attempts":"2"}`) }, "current_attempts"},
 		"embedding outside announced": {func(e *Event) { e.Type = TypeProposed }, "task_embedding"},
+		"text outside announced": {func(e *Event) {
+			e.Type = TypeProposed
+			e.Data = json.RawMessage(`{"task_text":"echo this"}`)
+		}, "task_text"},
 		"failed without reason": {func(e *Event) {
 			e.Type = TypeFailed
 			e.Data, _ = json.Marshal(map[string]any{"metrics": metrics})

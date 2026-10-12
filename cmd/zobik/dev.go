@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -20,10 +21,13 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/deploy"
+	"zobik.org/zobik/internal/embedding"
+	"zobik.org/zobik/internal/globalconfig"
 )
 
 // The development viewer of the first stages and its companion: zobik tap shows
-// every event on the Bus live, and zobik publish puts one there by hand. Each runs
+// every event on the Bus live, and zobik publish puts one there by hand, stamping
+// the task_embedding of an announcement as an Integration Sidecar does. Each runs
 // as an ephemeral container on the network's Docker network, with an identity of
 // a scope that only a development binary registers.
 func init() {
@@ -111,6 +115,7 @@ func publishCmd(ctx context.Context, args []string) error {
 	task := fs.String("task", "", "the event's subject: the TaskID (default: a new one)")
 	source := fs.String("source", "zobik-publish", "the event's source")
 	data := fs.String("data", "{}", "the event's data, as a JSON object")
+	text := fs.String("text", "", "the announcement's task_text, whose task_embedding is generated in the current vector space")
 	traceparent := fs.String("traceparent", "", "the W3C traceparent (default: a new trace for task.* events)")
 	configVersion := fs.String("configversion", "v0", "the configversion, stamped with traceparent")
 	if err := fs.Parse(args); err != nil {
@@ -123,6 +128,12 @@ func publishCmd(ctx context.Context, args []string) error {
 	var d map[string]any
 	if err := json.Unmarshal([]byte(*data), &d); err != nil {
 		return fmt.Errorf("--data: %w", err)
+	}
+	if d == nil {
+		return errors.New("--data: not a JSON object")
+	}
+	if *text != "" {
+		d["task_text"] = *text
 	}
 	if *topic != "" && *typ != bus.TypeAssigned && *typ != bus.TypeRejected {
 		if _, ok := d["topic"]; !ok {
@@ -182,10 +193,57 @@ func publishInside(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := stampEmbedding(ctx, js, &e); err != nil {
+		return err
+	}
 	if err := bus.Publish(ctx, js, string(subject), &e); err != nil {
 		return err
 	}
 	fmt.Printf("published %s %s on %s\n", e.Type, e.ID, subject)
+	return nil
+}
+
+// stampEmbedding generates the task_embedding of an announcement that carries a
+// task_text and no task_embedding, under the current embedding_model, and
+// stamps it with its model_id (architecture §3.7.4).
+func stampEmbedding(ctx context.Context, js jetstream.JetStream, e *bus.Event) error {
+	if e.Type != bus.TypeAnnounced {
+		return nil
+	}
+	var d map[string]json.RawMessage
+	if err := json.Unmarshal(e.Data, &d); err != nil {
+		return err
+	}
+	raw, ok := d["task_text"]
+	if _, stamped := d["task_embedding"]; stamped || !ok {
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return err
+	}
+	head, _, err := globalconfig.Head(ctx, js)
+	if err != nil {
+		return err
+	}
+	space, err := embedding.Resolve(head.Values)
+	if err != nil {
+		return err
+	}
+	v, err := space.Query(ctx, embedding.Client(), text)
+	if err != nil {
+		return err
+	}
+	if d["task_embedding"], err = json.Marshal(embedding.Encode(v)); err != nil {
+		return err
+	}
+	if d["model_id"], err = json.Marshal(space.ModelID); err != nil {
+		return err
+	}
+	if e.Data, err = json.Marshal(d); err != nil {
+		return err
+	}
+	fmt.Printf("task_embedding: %d dimensions under %s\n", len(v), space.ModelID)
 	return nil
 }
 
