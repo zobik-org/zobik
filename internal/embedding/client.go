@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"unicode/utf8"
 
 	"zobik.org/zobik/internal/digest"
 )
@@ -24,6 +25,9 @@ type Space struct {
 	Model          string
 	DocumentPrefix string
 	QueryPrefix    string
+
+	// endpoint is the operation's URL under Target.
+	endpoint string
 }
 
 // ErrNoSpace is a configuration without embedding_model: the network is born
@@ -57,6 +61,10 @@ func Resolve(values map[string]json.RawMessage) (*Space, error) {
 	if !ok {
 		return nil, fmt.Errorf("embedding: embedding_model.entry %q names no egress_registry entry", m.Entry)
 	}
+	base, err := url.Parse(entry.Target)
+	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
+		return nil, fmt.Errorf("embedding: target %q is not an http or https URL", entry.Target)
+	}
 	id, err := digest.JSON(raw)
 	if err != nil {
 		return nil, fmt.Errorf("embedding: model_id: %w", err)
@@ -67,6 +75,7 @@ func Resolve(values map[string]json.RawMessage) (*Space, error) {
 		Model:          m.Model,
 		DocumentPrefix: m.DocumentPrefix,
 		QueryPrefix:    m.QueryPrefix,
+		endpoint:       base.JoinPath("v1", "embeddings").String(),
 	}, nil
 }
 
@@ -97,10 +106,6 @@ func Client() *http.Client {
 // OpenAI embeddings API (implementation §1.2.15), and returns the vector
 // normalized (architecture §3.7.5).
 func (s *Space) generate(ctx context.Context, c *http.Client, input string) ([]float32, error) {
-	base, err := url.Parse(s.Target)
-	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
-		return nil, fmt.Errorf("embedding: target %q is not an http or https URL", s.Target)
-	}
 	body, err := json.Marshal(map[string]any{
 		"model":           s.Model,
 		"input":           []string{input},
@@ -109,7 +114,7 @@ func (s *Space) generate(ctx context.Context, c *http.Client, input string) ([]f
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base.JoinPath("v1", "embeddings").String(), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -161,9 +166,13 @@ func normalize(v []float64) ([]float32, error) {
 	return out, nil
 }
 
+// truncate cuts b to at most n bytes, at a rune boundary.
 func truncate(b []byte, n int) []byte {
 	if len(b) <= n {
 		return b
+	}
+	for n > 0 && !utf8.RuneStart(b[n]) {
+		n--
 	}
 	return append(b[:n:n], "…"...)
 }

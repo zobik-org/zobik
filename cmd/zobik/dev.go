@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -128,6 +129,9 @@ func publishCmd(ctx context.Context, args []string) error {
 	if err := json.Unmarshal([]byte(*data), &d); err != nil {
 		return fmt.Errorf("--data: %w", err)
 	}
+	if d == nil {
+		return errors.New("--data: not a JSON object")
+	}
 	if *text != "" {
 		d["task_text"] = *text
 	}
@@ -210,11 +214,12 @@ func stampEmbedding(ctx context.Context, js jetstream.JetStream, e *bus.Event) e
 	if err := json.Unmarshal(e.Data, &d); err != nil {
 		return err
 	}
-	if _, ok := d["task_embedding"]; ok || d["task_text"] == nil {
+	raw, ok := d["task_text"]
+	if _, stamped := d["task_embedding"]; stamped || !ok {
 		return nil
 	}
 	var text string
-	if err := json.Unmarshal(d["task_text"], &text); err != nil {
+	if err := json.Unmarshal(raw, &text); err != nil {
 		return err
 	}
 	head, _, err := globalconfig.Head(ctx, js)
@@ -239,7 +244,7 @@ func stampEmbedding(ctx context.Context, js jetstream.JetStream, e *bus.Event) e
 		return err
 	}
 	fmt.Printf("task_embedding: %d dimensions under %s\n", len(v), space.ModelID)
-	return e.Validate()
+	return nil
 }
 
 func subjectFor(typ, topic, identity string) (string, error) {

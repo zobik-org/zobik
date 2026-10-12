@@ -15,7 +15,7 @@
       "preconditions": [
         {"rule": "config.network_admission == \"frozen\"", "message": "editing embedding_model requires network_admission = frozen (architecture §3.13.7, §3.18)"},
         {"rule": "config.network_admission == \"frozen\" || has(config.embedding_model)", "message": "the network opens only with embedding_model assigned (architecture §2.3, §3.18)"},
-        {"rule": "!has(config.embedding_model) || config.embedding_model.entry in config.egress_registry", "message": "embedding_model.entry names no egress_registry entry (architecture §2.3)"}
+        {"rule": "!has(config.embedding_model) || (has(config.egress_registry) && config.embedding_model.entry in config.egress_registry)", "message": "embedding_model.entry names no egress_registry entry (architecture §2.3)"}
       ]
     },
     "egress_registry": {
@@ -32,8 +32,8 @@
       "query_class": "current",
       "storage": "versioned",
       "preconditions": [
-        {"rule": "config.egress_registry.all(k, config.egress_registry[k].target.matches('^https?://[^/?#@]+(/[^?#]*)?$'))", "message": "a target is an http or https URL with no credentials, query or fragment (architecture §3.16.2)"},
-        {"rule": "!has(config.embedding_model) || config.embedding_model.entry in config.egress_registry", "message": "embedding_model.entry names no egress_registry entry (architecture §2.3)"}
+        {"rule": "config.egress_registry.all(k, config.egress_registry[k].target.matches('^https?://([A-Za-z0-9.-]+|[[][0-9A-Fa-f:.]+[]])(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$'))", "message": "a target is an http or https URL of a host, an optional port and an optional path, with no credentials, query or fragment (architecture §3.16.2)"},
+        {"rule": "!has(config.embedding_model) || (has(config.egress_registry) && config.embedding_model.entry in config.egress_registry)", "message": "embedding_model.entry names no egress_registry entry (architecture §2.3)"}
       ]
     }
   }

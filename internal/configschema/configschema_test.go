@@ -82,6 +82,11 @@ func TestApplyVersioned(t *testing.T) {
 		{"a target with credentials", v0, map[string]string{"egress_registry": `{"e":{"target":"https://u:p@api.example.com"}}`}, "http or https URL"},
 		{"a target with a query", v0, map[string]string{"egress_registry": `{"e":{"target":"https://api.example.com/?k=v"}}`}, "http or https URL"},
 		{"an entry without a target", v0, map[string]string{"egress_registry": `{"e":{}}`}, "required"},
+		{"an IPv6 target", v0, map[string]string{"egress_registry": `{"e":{"target":"http://[::1]:8080"}}`}, ""},
+		{"a target with a space in its host", v0, map[string]string{"egress_registry": `{"e":{"target":"http://ll ama:8080"}}`}, "http or https URL"},
+		{"a target with a port that is no number", v0, map[string]string{"egress_registry": `{"e":{"target":"http://llama:port"}}`}, "http or https URL"},
+		{"a target without a host", v0, map[string]string{"egress_registry": `{"e":{"target":"http://:8080"}}`}, "http or https URL"},
+		{"the vector space on a head without egress_registry", without(v0, "egress_registry"), map[string]string{"embedding_model": model}, "names no egress_registry entry"},
 	}
 	for _, c := range cases {
 		assign := map[string]json.RawMessage{}
@@ -126,6 +131,12 @@ func with(v globalconfig.Values, key, value string) globalconfig.Values {
 		out[k] = x
 	}
 	out[key] = json.RawMessage(value)
+	return out
+}
+
+func without(v globalconfig.Values, key string) globalconfig.Values {
+	out := with(v, key, "null")
+	delete(out, key)
 	return out
 }
 

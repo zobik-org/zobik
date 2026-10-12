@@ -147,8 +147,7 @@ func TestGenerateFailures(t *testing.T) {
 		srv.Close()
 	}
 
-	bad, _ := embedding.Resolve(values("ftp://llama"))
-	if _, err := bad.Query(context.Background(), embedding.Client(), "x"); err == nil || !strings.Contains(err.Error(), "http or https") {
+	if _, err := embedding.Resolve(values("ftp://llama")); err == nil || !strings.Contains(err.Error(), "http or https") {
 		t.Errorf("an ftp target: %v", err)
 	}
 }
