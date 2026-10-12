@@ -25,8 +25,8 @@ func TestBus(t *testing.T) {
 	defer cancel()
 	z := newNetwork(t, ctx)
 
-	z.run(t, ctx, "operator\npw-e2e\n", "init")
-	z.run(t, ctx, "operator\npw-e2e\n", "init") // converges
+	z.run(t, ctx, credentials, "init")
+	z.run(t, ctx, credentials, "init") // converges
 
 	lines := z.start(t, ctx, "tap")
 	waitFor(t, lines, regexp.MustCompile(`^tap: listening`))
@@ -71,9 +71,16 @@ func newNetwork(t *testing.T, ctx context.Context) *network {
 	return z
 }
 
+// cmd runs a subcommand on the test's network. The network's flags go right
+// after the command's words, before the arguments the command parses itself.
 func (z *network) cmd(ctx context.Context, stdin string, args ...string) *exec.Cmd {
-	args = append(args, "--network", z.name, "--dir", z.dir)
-	c := exec.CommandContext(ctx, z.bin, args...)
+	words := 1
+	if args[0] == "config" {
+		words = 2
+	}
+	full := append(append([]string{}, args[:words]...), "--network", z.name, "--dir", z.dir)
+	full = append(full, args[words:]...)
+	c := exec.CommandContext(ctx, z.bin, full...)
 	c.Stdin = strings.NewReader(stdin)
 	return c
 }

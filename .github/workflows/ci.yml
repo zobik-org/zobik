@@ -23,6 +23,20 @@ jobs:
       - run: go vet -tags dev ./...
       - run: go vet -tags e2e ./test/e2e/
 
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: |
+          go install github.com/bufbuild/buf/cmd/buf@v1.57.0
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+      - run: buf generate
+      - run: git diff --exit-code
+
   e2e:
     runs-on: ubuntu-latest
     steps:
