@@ -1,7 +1,7 @@
 # The zobik image: every structural role, and the console's ephemeral acts on the Bus.
 # Build from the repository root: docker build -f images/zobik.Dockerfile -t zobik:dev .
 # TAGS=dev builds a development binary.
-FROM golang:1.27 AS build
+FROM golang:1.27.2 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
