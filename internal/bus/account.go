@@ -128,6 +128,30 @@ func RegisterScopes(root nkeys.KeyPair, accountJWT string, scopes []Scope) (stri
 	return signed, keys, err
 }
 
+// RotateScope returns the account's JWT, signed again by the root, with a new
+// scoped signing key for scope in place of any it had, and that key. Every user
+// the replaced key issued stops being admitted.
+func RotateScope(root nkeys.KeyPair, accountJWT string, scope Scope) (string, nkeys.KeyPair, error) {
+	acc, err := jwt.DecodeAccountClaims(accountJWT)
+	if err != nil {
+		return "", nil, err
+	}
+	for _, k := range acc.SigningKeys.Keys() {
+		if s, ok := acc.SigningKeys.GetScope(k); ok && s != nil && s.(*jwt.UserScope).Role == scope.Role {
+			acc.SigningKeys.Remove(k)
+		}
+	}
+	unscoped, err := acc.Encode(root)
+	if err != nil {
+		return "", nil, err
+	}
+	signed, keys, err := RegisterScopes(root, unscoped, []Scope{scope})
+	if err != nil {
+		return "", nil, err
+	}
+	return signed, keys[scope.Role], nil
+}
+
 // Revoke returns the account's JWT, signed again by the root, with the
 // identities users revoked: an act of deployment that leaves an identity unused
 // revokes it (implementation §6, The root and the split Operator Channel).

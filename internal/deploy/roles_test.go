@@ -96,6 +96,45 @@ func TestMintRole(t *testing.T) {
 	}
 }
 
+// A role that issues identities keeps its scope's signing key, and minting it
+// again leaves the account with only the new one.
+func TestMintIssuer(t *testing.T) {
+	m := testMaterial(t)
+	for _, r := range Roles {
+		if r.Issues == nil {
+			continue
+		}
+		var keys []string
+		for range 2 {
+			_, fs, err := m.mintRole(r, "zobik:test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			kp, err := nkeys.FromSeed([]byte(files(fs)[role.FileSigningKey]))
+			if err != nil {
+				t.Fatalf("%s: signing key: %v", r.Unit, err)
+			}
+			pub, _ := kp.PublicKey()
+			keys = append(keys, pub)
+		}
+		ac, err := jwt.DecodeAccountClaims(m.account.JWT)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var scoped []string
+		for _, k := range ac.SigningKeys.Keys() {
+			if s, ok := ac.SigningKeys.GetScope(k); ok && s.(*jwt.UserScope).Role == r.Issues.Role {
+				scoped = append(scoped, k)
+			}
+		}
+		if len(scoped) != 1 || scoped[0] != keys[1] || keys[0] == keys[1] {
+			t.Errorf("%s: the account's %s keys are %v after minting %v", r.Unit, r.Issues.Role, scoped, keys)
+		}
+		return
+	}
+	t.Fatal("no role issues identities")
+}
+
 // The channel of the panel competes in round 1 and the final one.
 func TestOperatorChannelWindow(t *testing.T) {
 	m := testMaterial(t)

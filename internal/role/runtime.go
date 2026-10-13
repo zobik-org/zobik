@@ -35,6 +35,10 @@ const (
 	FileRootPub         = "root.pub"
 	FileCredential      = "credential.jws"
 	FileRoleCertificate = "role_certificate.jws"
+	// FileSigningKey is the scoped signing key a role issues identities with
+	// without the console: the Spawner's, for the fleet (implementation §6, The
+	// root and the split Operator Channel).
+	FileSigningKey = "signing_key.nk"
 	// FileAccount is the network's account JWT, which the off-Bus interfaces
 	// verify a caller's JWT against (implementation §6, The off-Bus interfaces).
 	FileAccount = "account.jwt"

@@ -91,7 +91,10 @@ func New(t *testing.T, edit func(globalconfig.Values)) *Net {
 	// Every role's material and consumers, as zobik init leaves them.
 	var consumers []bus.Consumer
 	for _, r := range deploy.Roles {
-		consumers = append(consumers, r.Consumers(n.mintRole(r))...)
+		id := n.mintRole(r)
+		if r.Consumers != nil {
+			consumers = append(consumers, r.Consumers(id)...)
+		}
 	}
 	if err := bus.EnsureConsumers(ctx, n.Console, consumers); err != nil {
 		t.Fatal(err)

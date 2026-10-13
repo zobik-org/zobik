@@ -30,6 +30,7 @@ import (
 //	root.pub              the root's public key, to verify against (thesis 9)
 //	credential.jws        a structural node's capability credential
 //	role_certificate.jws  the role certificate of a role that signs
+//	signing_key.nk        the scoped signing key of a role that issues identities
 //
 // The console keeps only each identity's public key, in identities/<unit>.pub.
 const (
@@ -64,6 +65,13 @@ type Role struct {
 	// host's 127.0.0.1, and gives it the console's identity, the only one it
 	// admits (implementation §6, The service between the console and the channels).
 	ServesConsole bool
+	// Issues is the scope whose signing key the role keeps in its volume, to
+	// issue identities without the console. Minting the role rotates the key, so
+	// the identities a lost volume's key issued stop being admitted.
+	Issues *bus.Scope
+	// Unstarted roles receive their volume and their material, and no container:
+	// their acts run in an ephemeral container that mounts the volume.
+	Unstarted bool
 }
 
 // The defaults of the deployment parameters the context role enforces
@@ -94,6 +102,9 @@ var Roles = []Role{
 		Consumers: func(id string) []bus.Consumer {
 			return []bus.Consumer{{Stream: "task", Name: id, Filters: []string{"task.completed.>", "task.failed.>", "task.aborted.>"}}}
 		}},
+	// The Spawner's container comes with its decisions; until then the act of
+	// provisioning runs with its material (Provision).
+	{Unit: "spawner", Scope: bus.SpawnerScope, Certificate: signing.RoleSpawner, Issues: &bus.NodeScope, Unstarted: true},
 	// The panel's channels go first and last in their audience (implementation §6,
 	// The operator console). A channel also receives the closes of the tasks it opens.
 	{Unit: "channel_operator", Scope: bus.ChannelScope, Topic: "hitl_contact_operator",
@@ -131,6 +142,7 @@ func ensureRoles(ctx context.Context, e *Engine, n names, m *material, dir, imag
 	ids := map[string]string{}
 	files := map[string][]File{}
 	var revoked []string
+	account := m.account.JWT
 	for _, r := range Roles {
 		created, err := e.EnsureVolume(ctx, n.volume(r.Unit), n.labels())
 		if err != nil {
@@ -168,18 +180,20 @@ func ensureRoles(ctx context.Context, e *Engine, n names, m *material, dir, imag
 			return nil, err
 		}
 		m.account.JWT = updated
-		if err := writeFile(dir, fileAccount, []byte(updated)); err != nil {
+	}
+	if m.account.JWT != account {
+		if err := writeFile(dir, fileAccount, []byte(m.account.JWT)); err != nil {
 			return nil, err
 		}
 	}
-	// Every role receives the account as it ends up, revocations included.
-	account := File{Path: role.FileAccount, Mode: 0o644, Data: []byte(m.account.JWT)}
+	// Every role receives the account as it ends up, rotations and revocations included.
+	accountFile := File{Path: role.FileAccount, Mode: 0o644, Data: []byte(m.account.JWT)}
 	consolePub, err := m.console.PublicKey()
 	if err != nil {
 		return nil, err
 	}
 	for _, r := range Roles {
-		write := append(files[r.Unit], account)
+		write := append(files[r.Unit], accountFile)
 		if r.ServesConsole {
 			write = append(write, File{Path: role.FileConsolePub, Mode: 0o644, Data: []byte(consolePub)})
 		}
@@ -239,6 +253,18 @@ func (m *material) mintRole(r Role, image string) (string, []File, error) {
 			return "", nil, err
 		}
 		files = append(files, File{Path: role.FileRoleCertificate, Mode: 0o644, Data: []byte(cert)})
+	}
+	if r.Issues != nil {
+		updated, key, err := bus.RotateScope(m.root, m.account.JWT, *r.Issues)
+		if err != nil {
+			return "", nil, err
+		}
+		seed, err := key.Seed()
+		if err != nil {
+			return "", nil, err
+		}
+		m.account.JWT = updated
+		files = append(files, File{Path: role.FileSigningKey, Mode: 0o600, Data: seed})
 	}
 	return pub, files, nil
 }
@@ -316,6 +342,9 @@ func roleSpec(n names, r Role, image, port string) Spec {
 // when all of them are.
 func startRoles(ctx context.Context, e *Engine, n names, dir, image string) error {
 	for _, r := range Roles {
+		if r.Unstarted {
+			continue
+		}
 		for _, dep := range r.WaitsFor {
 			if err := e.WaitHealthy(ctx, n.container(dep), roleReadyTimeout); err != nil {
 				return err
@@ -333,6 +362,9 @@ func startRoles(ctx context.Context, e *Engine, n names, dir, image string) erro
 		}
 	}
 	for _, r := range Roles {
+		if r.Unstarted {
+			continue
+		}
 		if err := e.WaitHealthy(ctx, n.container(r.Unit), roleReadyTimeout); err != nil {
 			return err
 		}
