@@ -12,8 +12,9 @@ import (
 // ceiling of 512 MB that discards the oldest (implementation §1.2.1). lease.> has
 // none: the renewal travels on NATS core.
 const (
-	familyRetention = 7 * 24 * time.Hour
-	familyMaxBytes  = 512 << 20
+	// Retention is how long a family stream keeps an event.
+	Retention      = 7 * 24 * time.Hour
+	familyMaxBytes = 512 << 20
 )
 
 // Streams are the family streams zobik init creates and no operation of the network alters.
@@ -29,7 +30,7 @@ func familyStream(name, subject string) jetstream.StreamConfig {
 		Subjects:  []string{subject},
 		Retention: jetstream.LimitsPolicy,
 		Storage:   jetstream.FileStorage,
-		MaxAge:    familyRetention,
+		MaxAge:    Retention,
 		MaxBytes:  familyMaxBytes,
 		Discard:   jetstream.DiscardOld,
 	}

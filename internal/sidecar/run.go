@@ -19,19 +19,27 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/globalconfig"
+	"zobik.org/zobik/internal/role"
+	"zobik.org/zobik/internal/rpcauth"
+	contextv1 "zobik.org/zobik/proto/zobik/context/v1"
 	nriv1 "zobik.org/zobik/proto/zobik/nri/v1"
 )
 
-// Socket is where the Integration Sidecar serves the NRI: the NRI major version
-// fixes the path (implementation §2.1).
-var Socket = filepath.Join(SharedDir, "nri.sock")
-
 // Options are what Run takes besides the startup configuration.
 type Options struct {
-	// Socket is where it listens; Socket by default.
+	// Shared is the volume shared with the Logic Container, SharedDir by
+	// default; State, the private one, StateDir by default.
+	Shared, State string
+	// Socket is where it listens; nri.sock in Shared by default, the path the
+	// NRI major version fixes (implementation §2.1).
 	Socket string
 	// Speaks is the range the binary speaks; Speaks by default.
 	Speaks Range
+	// StartupPath is the startup configuration, where it reads its JWT on
+	// each connection to the Context Store; StartupPath by default.
+	StartupPath string
+	// ContextAddr is the Context Store; role.AddrContext by default.
+	ContextAddr string
 }
 
 // The gRPC keepalive with which the Integration Sidecar checks that the session
@@ -45,25 +53,37 @@ var (
 // nc, until ctx ends. It returns an error when its Logic Container's version
 // is one it does not serve, without having bound to its consumer
 // (implementation §3, The interface version).
-func Run(ctx context.Context, nc *nats.Conn, st *Startup, o Options) error {
+func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error {
+	if o.Shared == "" {
+		o.Shared = SharedDir
+	}
+	if o.State == "" {
+		o.State = StateDir
+	}
 	if o.Socket == "" {
-		o.Socket = Socket
+		o.Socket = filepath.Join(o.Shared, "nri.sock")
+	}
+	if o.StartupPath == "" {
+		o.StartupPath = StartupPath
+	}
+	if o.ContextAddr == "" {
+		o.ContextAddr = role.AddrContext
 	}
 	if o.Speaks == nil {
 		o.Speaks = Speaks
 	}
-	declared, err := ParseVersion(st.NRIVersion)
+	declared, err := ParseVersion(startup.NRIVersion)
 	if err != nil {
 		return err
 	}
 	if !o.Speaks.Fits(declared) {
 		return fmt.Errorf("sidecar: the Logic Container's image declares NRI %s, outside %v", declared, o.Speaks)
 	}
-	id, err := identity(st)
+	id, err := identity(startup)
 	if err != nil {
 		return err
 	}
-	cred, err := credential(st.Credential, st.Root)
+	cred, err := credential(startup.Credential, startup.Root)
 	if err != nil {
 		return err
 	}
@@ -80,6 +100,29 @@ func Run(ctx context.Context, nc *nats.Conn, st *Startup, o Options) error {
 	}
 	cfg := newConfig(js, head)
 	go cfg.follow(ctx)
+	st, err := openState(o.State)
+	if err != nil {
+		return err
+	}
+	go prune(ctx, st)
+	kp, err := nkeys.FromSeed([]byte(startup.Identity))
+	if err != nil {
+		return err
+	}
+	conn, err := grpc.NewClient(o.ContextAddr, grpc.WithTransportCredentials(&rpcauth.Client{
+		JWT: func() (string, error) {
+			st, err := LoadStartup(o.StartupPath)
+			if err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(st.BusJWT), nil
+		},
+		Key: kp,
+	}))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
 
 	_ = os.Remove(o.Socket)
 	ln, err := net.Listen("unix", o.Socket)
@@ -93,12 +136,21 @@ func Run(ctx context.Context, nc *nats.Conn, st *Startup, o Options) error {
 		return err
 	}
 
+	// The outbox outlives ctx for a moment, to send what the end of the
+	// session leaves.
+	outCtx, stopOut := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopOut()
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	n := newNode(id, st.Credential, cred, js, nc, cfg)
+	out := newOutbox(outCtx, st, js, cfg)
+	if err := out.resume(); err != nil {
+		return err
+	}
+	n := newNode(id, startup.Credential, cred, js, nc, cfg, st, out, o.Shared)
+	n.clearAreas()
 	g := grpc.NewServer(grpc.KeepaliveParams(keepaliveServer), grpc.KeepaliveEnforcementPolicy(keepalivePolicy))
 	nriv1.RegisterNodeRuntimeServer(g, &service{
-		n:      n,
+		n: n, store: contextv1.NewContextStoreClient(conn),
 		speaks: o.Speaks, declared: declared,
 		fatal: func(err error) { cancel(err) },
 	})
@@ -113,10 +165,28 @@ func Run(ctx context.Context, nc *nats.Conn, st *Startup, o Options) error {
 	// (implementation §2.4).
 	n.cutOpen()
 	g.Stop()
+	out.drain(drainTimeout)
 	if err := context.Cause(ctx); !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return nil
+}
+
+// drainTimeout is how long the end of the process waits for the outbox.
+const drainTimeout = 3 * time.Second
+
+// prune forgets the old delivered ids, at startup and every hour.
+func prune(ctx context.Context, st *state) {
+	for {
+		if err := st.prune(); err != nil {
+			log.Printf("sidecar: pruning the delivered ids: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Hour):
+		}
+	}
 }
 
 func identity(st *Startup) (string, error) {
