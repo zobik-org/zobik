@@ -143,13 +143,13 @@ func judge(creds *credentials, t *announced, p proposal) (verdict, error) {
 	if p.declared != nil {
 		sEff = math.Min(*p.declared, sCalc)
 	}
-	score := round(sEff, t.decimals)
-	sim := scaled(score, t.decimals)
+	score := embedding.Round(sEff, t.decimals)
+	sim := embedding.Scaled(score, t.decimals)
 	return verdict{
 		identity:   p.identity,
 		score:      score,
 		similarity: &sim,
-		admissible: score > round(cred.Claims.SimilarityFloor, t.decimals),
+		admissible: score > embedding.Round(cred.Claims.SimilarityFloor, t.decimals),
 	}, nil
 }
 
@@ -158,8 +158,8 @@ func judge(creds *credentials, t *announced, p proposal) (verdict, error) {
 func byDeclared(p proposal, decimals int) verdict {
 	v := verdict{identity: p.identity, score: math.MinInt64, admissible: true}
 	if p.declared != nil {
-		v.score = round(*p.declared, decimals)
-		sim := scaled(v.score, decimals)
+		v.score = embedding.Round(*p.declared, decimals)
+		sim := embedding.Scaled(v.score, decimals)
 		v.similarity = &sim
 	}
 	return v
@@ -182,16 +182,6 @@ func checkChannelProof(root, topic string, cred *signing.Capability) error {
 		return fmt.Errorf("the proof authorizes artifact %q", proof.Claims.ArtifactRef)
 	}
 	return nil
-}
-
-// round expresses s in units of 10^-decimals, which is the resolution the
-// network declares it distinguishes similarities at (architecture §3.7.5, step 4).
-func round(s float64, decimals int) int64 {
-	return int64(math.Round(s * math.Pow10(decimals)))
-}
-
-func scaled(score int64, decimals int) float64 {
-	return float64(score) / math.Pow10(decimals)
 }
 
 // award picks the highest admissible score; a tie is drawn by the highest

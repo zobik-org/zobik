@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/claim"
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role"
 	"zobik.org/zobik/internal/rpcauth"
@@ -99,15 +100,13 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	topic := signing.HITLPrefix + o.Audience
 	c := &channel{
 		rt: rt, js: js, audience: o.Audience, topic: topic,
-		claimant: role.NewClaimant(rt, js, nc, topic),
+		claimant: claim.New(rt.ID, rt.Credential, js, nc, topic),
 		context:  contextv1.NewContextStoreClient(conn),
 		roots:    store, open: open,
 		byEntry: map[string]string{}, byDelivery: map[string]string{},
 		queries: map[string]*query{}, windows: map[string]time.Duration{},
 	}
-	if w := cred.Claims.AttemptWindow; w != nil {
-		c.window = *w
-	}
+	c.window = cred.Claims.AttemptWindow
 	c.head.Store(head)
 	for id, r := range open {
 		c.byEntry[r.EntryTaskID] = id
@@ -144,9 +143,9 @@ type channel struct {
 	js       jetstream.JetStream
 	audience string
 	topic    string
-	claimant *role.Claimant
+	claimant *claim.Claimant
 	context  contextv1.ContextStoreClient
-	window   signing.AttemptWindow
+	window   *signing.AttemptWindow
 	roots    *roots
 	// head is the Global Configuration as last read.
 	head atomic.Pointer[globalconfig.Record]

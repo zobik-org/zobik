@@ -27,6 +27,7 @@ import (
 	"zobik.org/zobik/internal/role"
 	"zobik.org/zobik/internal/role/contextstore"
 	"zobik.org/zobik/internal/rpcauth"
+	"zobik.org/zobik/internal/sidecar"
 	"zobik.org/zobik/internal/signing"
 	contextv1 "zobik.org/zobik/proto/zobik/context/v1"
 )
@@ -57,7 +58,7 @@ func New(t *testing.T, edit func(globalconfig.Values)) *Net {
 	t.Cleanup(cancel)
 	root, _ := nkeys.CreateOperator()
 	rootPub, _ := root.PublicKey()
-	scopes := append([]bus.Scope{bus.ConsoleScope, bus.TapScope}, bus.RoleScopes...)
+	scopes := append([]bus.Scope{bus.ConsoleScope, bus.TapScope, bus.PublishScope, bus.NodeScope}, bus.RoleScopes...)
 	a, err := bus.NewAccount(root, "test", scopes)
 	if err != nil {
 		t.Fatal(err)
@@ -195,6 +196,35 @@ func (n *Net) Start(unit string, body role.Body) *role.Runtime {
 		}
 	}
 	return rt
+}
+
+// MintNode does what the act of provisioning does for a node's identity
+// (architecture §3.13.1): it issues the node's platform identity under the node
+// scope, signs cap as its capability credential with the spawner role's
+// material, and creates its durable consumer. cap.Sub is filled in. It returns
+// the startup configuration, for an image that declares NRI version.
+func (n *Net) MintNode(cap signing.Capability, version string) sidecar.Startup {
+	n.T.Helper()
+	kp, _ := nkeys.CreateUser()
+	pub, _ := kp.PublicKey()
+	seed, _ := kp.Seed()
+	userJWT, err := bus.IssueUser(n.Account.SigningKeys[bus.NodeScope.Role], n.Account.Public, pub, cap.Topic, time.Now().Add(time.Hour))
+	if err != nil {
+		n.T.Fatal(err)
+	}
+	spawner, err := role.Load("spawner", n.dirs["spawner"])
+	if err != nil {
+		n.T.Fatal(err)
+	}
+	cap.Sub, cap.Iat = pub, time.Now().Unix()
+	credential, err := spawner.Sign(signing.TypeCapability, cap, spawner.Certificate)
+	if err != nil {
+		n.T.Fatal(err)
+	}
+	if err := bus.NodeConsumer(n.Ctx, n.Console, pub, cap.Topic); err != nil {
+		n.T.Fatal(err)
+	}
+	return sidecar.Startup{Identity: string(seed), BusJWT: userJWT, Credential: credential, Root: n.RootPub, NRIVersion: version}
 }
 
 // startContextStore serves the Context Store, which authenticates its callers
