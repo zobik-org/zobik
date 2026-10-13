@@ -37,9 +37,23 @@ type node struct {
 	claimant *claim.Claimant
 	cfg      *config
 
+	st  *state
+	out *outbox
+	// areas is the shared volume, where the work areas go (implementation §3).
+	areas string
+
 	mu      sync.Mutex
 	session *session
 	tasks   map[string]*task // by TaskID
+	// held are the deliveries waiting for the Logic Container's Received, by
+	// delivery_id: the Bus's message is acknowledged on it (implementation §3,
+	// The session).
+	held map[string]*held
+	// subtasks are the lineages the node's tasks opened, by each attempt's TaskID.
+	subtasks map[string]*lineage
+	// unsent counts the closed tasks whose terminal event the Bus has not
+	// confirmed yet.
+	unsent int
 	// waiting is the TaskID of the proposal a worker waits on, until its
 	// answer or waitUntil: it proposes on no other meanwhile, so it does not
 	// win two tasks at once.
@@ -50,22 +64,27 @@ type node struct {
 // task is an assignment the node holds for its Logic Container.
 type task struct {
 	a *claim.Assignment
-	// deliveryID names its delivery; msg is the task.assigned, acknowledged to
-	// the Bus when the Logic Container confirms it (implementation §3, The session).
+	// deliveryID names its delivery, the task.assigned's id.
 	deliveryID string
-	msg        jetstream.Msg
-	confirmed  chan struct{}
 	stopLease  func()
 	// closing marks a close in flight, and detached a task whose session was
 	// cut meanwhile: if that close fails, the task fails as the session's.
 	closing, detached bool
 }
 
-func newNode(id, credential string, cred *signing.Capability, js jetstream.JetStream, nc *nats.Conn, cfg *config) *node {
+// held is a delivery waiting for its Received: an assignment, or the result
+// of a subtask of the task parent.
+type held struct {
+	msg       jetstream.Msg
+	parent    string
+	confirmed chan struct{}
+}
+
+func newNode(id, credential string, cred *signing.Capability, js jetstream.JetStream, nc *nats.Conn, cfg *config, st *state, out *outbox, areas string) *node {
 	n := &node{
-		id: id, cred: cred, js: js, cfg: cfg,
+		id: id, cred: cred, js: js, cfg: cfg, st: st, out: out, areas: areas,
 		claimant: claim.New(id, credential, js, nc, cred.Topic),
-		tasks:    map[string]*task{},
+		tasks:    map[string]*task{}, held: map[string]*held{}, subtasks: map[string]*lineage{},
 	}
 	if strings.HasPrefix(cred.Topic, signing.HITLPrefix) {
 		n.channel, n.audience = true, strings.TrimPrefix(cred.Topic, signing.HITLPrefix)
@@ -122,6 +141,12 @@ func (n *node) handle(ctx context.Context, m jetstream.Msg) {
 		m.Ack()
 		return
 	}
+	// What reaches the Logic Container is deduplicated by id before it is
+	// delivered (architecture §3.6.4).
+	if e.Type != bus.TypeAnnounced && e.Type != bus.TypeRejected && n.st.delivered(e.ID) {
+		m.Ack()
+		return
+	}
 	opCtx, cancel := context.WithTimeout(ctx, opTimeout)
 	defer cancel()
 	switch e.Type {
@@ -136,6 +161,10 @@ func (n *node) handle(ctx context.Context, m jetstream.Msg) {
 	case bus.TypeRejected:
 		n.claimant.Rejected(&e)
 		n.answered(e.Subject)
+	case bus.TypeCompleted, bus.TypeFailed, bus.TypeAborted:
+		if n.onResult(&e, m) {
+			return
+		}
 	}
 	m.Ack()
 }
@@ -154,7 +183,7 @@ func (n *node) onAnnounced(ctx context.Context, e *bus.Event) error {
 	}
 	n.mu.Lock()
 	attached := n.session != nil
-	free := attached && len(n.tasks) == 0 && (n.waiting == "" || time.Now().After(n.waitUntil))
+	free := attached && len(n.tasks) == 0 && n.unsent == 0 && (n.waiting == "" || time.Now().After(n.waitUntil))
 	n.mu.Unlock()
 	if n.channel {
 		if !attached {
@@ -211,14 +240,29 @@ func (n *node) onAssigned(e *bus.Event, m jetstream.Msg) bool {
 		log.Printf("sidecar: %s won and let go", a.TaskID)
 		return false
 	}
-	t := &task{a: a, deliveryID: e.ID, msg: m, confirmed: make(chan struct{})}
+	// The work area is created empty before the delivery (implementation §3,
+	// Context Store and egress); a TaskID that cannot name it is not taken.
+	if err := n.newArea(a.TaskID); err != nil {
+		n.mu.Unlock()
+		log.Printf("sidecar: %s won and let go: %v", a.TaskID, err)
+		return false
+	}
+	t := &task{a: a, deliveryID: e.ID}
 	t.stopLease = n.claimant.KeepLease(a, n.cfg.leaseTTL)
 	n.tasks[a.TaskID] = t
+	n.hold(e.ID, "", m, s.done)
 	n.mu.Unlock()
 
-	go holdUnconfirmed(m, t.confirmed, s.done)
 	s.send(&nriv1.SidecarMessage{Body: &nriv1.SidecarMessage_Assignment{Assignment: delivery(t)}})
 	return true
+}
+
+// hold keeps m unacknowledged until the Logic Container confirms the delivery
+// id. Called with n.mu held.
+func (n *node) hold(id, parent string, m jetstream.Msg, done <-chan struct{}) {
+	h := &held{msg: m, parent: parent, confirmed: make(chan struct{})}
+	n.held[id] = h
+	go holdUnconfirmed(m, h.confirmed, done)
 }
 
 // holdUnconfirmed keeps the Bus from redelivering a task.assigned while its
@@ -253,18 +297,34 @@ func delivery(t *task) *nriv1.Delivery {
 	return &nriv1.Delivery{DeliveryId: t.deliveryID, Event: event, Announcement: ann}
 }
 
-// received acknowledges to the Bus the delivery the Logic Container confirmed.
+// received settles the delivery the Logic Container confirmed.
 func (n *node) received(deliveryID string) {
 	n.mu.Lock()
-	defer n.mu.Unlock()
-	for _, t := range n.tasks {
-		if t.deliveryID == deliveryID && t.msg != nil {
-			t.msg.Ack()
-			t.msg = nil
-			close(t.confirmed)
-			return
-		}
+	h := n.unhold(deliveryID)
+	n.mu.Unlock()
+	if h != nil {
+		n.settle(deliveryID, h.msg)
 	}
+}
+
+// unhold takes a held delivery out, or returns nil. Called with n.mu held.
+func (n *node) unhold(id string) *held {
+	h := n.held[id]
+	if h == nil {
+		return nil
+	}
+	delete(n.held, id)
+	close(h.confirmed)
+	return h
+}
+
+// settle marks the event id as processed and only then acknowledges it, so a
+// crash in between delivers it again only to be discarded (architecture §3.6.4).
+func (n *node) settle(id string, m jetstream.Msg) {
+	if err := n.st.mark(id); err != nil {
+		log.Printf("sidecar: marking %s: %v", id, err)
+	}
+	m.Ack()
 }
 
 // begin reserves a task the node holds for closing it, or returns nil: two
@@ -291,21 +351,43 @@ func (n *node) abort(t *task) {
 	}
 }
 
-// closed forgets a task whose terminal event is published.
-func (n *node) closed(t *task) {
+// closed forgets a task whose terminal event is in the outbox, with its work
+// area and its subtasks. Its lease is renewed until the Bus confirms the event.
+func (n *node) closed(t *task, sent <-chan struct{}) {
 	n.mu.Lock()
 	delete(n.tasks, t.a.TaskID)
-	if t.msg != nil {
-		t.msg.Ack()
-		t.msg = nil
-		close(t.confirmed)
+	n.forgetSubtasks(t.a.TaskID)
+	// The task's delivery and its subtasks' results are settled: no one
+	// waits on them.
+	settled := map[string]*held{}
+	for id, h := range n.held {
+		if id == t.deliveryID || h.parent == t.a.TaskID {
+			settled[id] = n.unhold(id)
+		}
 	}
+	n.unsent++
 	n.mu.Unlock()
-	t.stopLease()
+	for id, h := range settled {
+		n.settle(id, h.msg)
+	}
+	n.removeArea(t.a.TaskID)
+	go func() {
+		// Until the Bus confirms the terminal event, the task is still the
+		// node's: its lease is renewed and a worker proposes on nothing
+		// (architecture §3.6.1). The end of the process ends the wait.
+		select {
+		case <-sent:
+		case <-n.out.ctx.Done():
+		}
+		t.stopLease()
+		n.mu.Lock()
+		n.unsent--
+		n.mu.Unlock()
+	}()
 }
 
-// open starts a session, unless one is open.
-func (n *node) open(s *session) bool {
+// attach starts a session, unless one is open.
+func (n *node) attach(s *session) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.session != nil {
@@ -328,8 +410,20 @@ func (n *node) cut(s *session) {
 	n.waiting = ""
 	tasks := n.tasks
 	n.tasks = map[string]*task{}
+	// The terminal events of the subtasks reach no one: their parents fail.
+	n.subtasks = map[string]*lineage{}
+	unconfirmed := n.held
+	n.held = map[string]*held{}
+	for _, h := range unconfirmed {
+		close(h.confirmed)
+	}
+	// Under the lock, so a session that opens next finds its areas intact.
+	n.clearAreas()
 	n.mu.Unlock()
 	n.claimant.Forget()
+	for id, h := range unconfirmed {
+		n.settle(id, h.msg)
+	}
 
 	for _, t := range tasks {
 		n.mu.Lock()
@@ -353,16 +447,16 @@ func (n *node) cutOpen() {
 
 // lost closes a task of a cut session with task.failed (architecture §3.6.1).
 func (n *node) lost(t *task) {
+	e, subject, err := n.claimant.Terminal(t.a, bus.TypeFailed, map[string]any{
+		"failure_reason": "the Node Runtime Interface session was cut", "failure_code": codeLogicContainerLost,
+	})
+	if err == nil {
+		var sent <-chan struct{}
+		if sent, err = n.out.put(&pending{Subject: subject, Event: e}); err == nil {
+			n.closed(t, sent)
+			return
+		}
+	}
+	log.Printf("sidecar: closing %s: %v", t.a.TaskID, err)
 	t.stopLease()
-	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
-	defer cancel()
-	if err := n.claimant.Fail(ctx, t.a, codeLogicContainerLost, "the Node Runtime Interface session was cut"); err != nil {
-		log.Printf("sidecar: closing %s: %v", t.a.TaskID, err)
-	}
-	n.mu.Lock()
-	if t.msg != nil {
-		t.msg.Ack()
-		t.msg = nil
-	}
-	n.mu.Unlock()
 }

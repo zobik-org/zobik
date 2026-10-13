@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/signing"
 )
@@ -113,7 +114,7 @@ func judge(creds *credentials, t *announced, p proposal) (verdict, error) {
 			}
 		}
 		return byDeclared(p, t.decimals), nil
-	case structuralTopics[t.topic]:
+	case bus.StructuralTopics[t.topic]:
 		if !structural {
 			return verdict{}, discard("%s is claimed by a structural component", t.topic)
 		}

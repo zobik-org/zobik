@@ -11,6 +11,7 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/signing"
+	contextv1 "zobik.org/zobik/proto/zobik/context/v1"
 	nriv1 "zobik.org/zobik/proto/zobik/nri/v1"
 )
 
@@ -32,6 +33,9 @@ func (s *session) send(m *nriv1.SidecarMessage) {
 type service struct {
 	nriv1.UnimplementedNodeRuntimeServer
 	n *node
+	// store is the Context Store, which the Integration Sidecar reaches on the
+	// Logic Container's behalf (architecture §3.6.1).
+	store contextv1.ContextStoreClient
 	// speaks is the range the binary speaks, and declared the version the
 	// Spawner passed in the startup configuration.
 	speaks   Range
@@ -65,7 +69,7 @@ func (sv *service) Attach(stream nriv1.NodeRuntime_AttachServer) error {
 	}
 
 	s := &session{out: make(chan *nriv1.SidecarMessage, 64), done: make(chan struct{})}
-	if !sv.n.open(s) {
+	if !sv.n.attach(s) {
 		return status.Error(codes.FailedPrecondition, "a session is already open")
 	}
 	ctx, unbind := context.WithCancel(stream.Context())
@@ -114,21 +118,37 @@ var reserved = []string{
 // The failure codes a channel closes a query with (architecture §3.5.2).
 var channelFailureCodes = map[string]bool{"undelivered": true, "unanswered": true}
 
-// Publish closes one of the node's tasks with what the Logic Container decides.
-// It returns once the Bus confirms the event.
+// Publish emits what the Logic Container decides on one of its tasks: a
+// subtask, a query or the close. It returns once the event is in the outbox
+// (implementation §3, The publication requests).
 func (sv *service) Publish(ctx context.Context, req *nriv1.PublishRequest) (*nriv1.PublishAck, error) {
+	var o *opening
+	switch body := req.GetBody().(type) {
+	case *nriv1.PublishRequest_Announce:
+		o = &opening{topic: body.Announce.GetTopic(), data: body.Announce.GetData(), previous: body.Announce.GetPreviousAttempt()}
+	case *nriv1.PublishRequest_Ask:
+		o = &opening{ask: true, data: body.Ask.GetData(), previous: body.Ask.GetPreviousAttempt()}
+	}
+	if o != nil {
+		o.taskID = req.GetTaskId()
+		taskID, err := sv.n.open(*o)
+		if err != nil {
+			return nil, err
+		}
+		return &nriv1.PublishAck{TaskId: taskID}, nil
+	}
 	t := sv.n.begin(req.GetTaskId())
 	if t == nil {
 		return nil, status.Error(codes.FailedPrecondition, "the node holds no task "+req.GetTaskId()+" open to close")
 	}
-	ack, err := sv.close(ctx, t, req)
+	ack, err := sv.close(t, req)
 	if err != nil {
 		sv.n.abort(t)
 	}
 	return ack, err
 }
 
-func (sv *service) close(ctx context.Context, t *task, req *nriv1.PublishRequest) (*nriv1.PublishAck, error) {
+func (sv *service) close(t *task, req *nriv1.PublishRequest) (*nriv1.PublishAck, error) {
 	var typ string
 	var data map[string]any
 	var err error
@@ -142,10 +162,8 @@ func (sv *service) close(ctx context.Context, t *task, req *nriv1.PublishRequest
 	case *nriv1.PublishRequest_Fail:
 		typ = bus.TypeFailed
 		data, err = sv.failure(body.Fail)
-	case nil:
-		return nil, status.Error(codes.InvalidArgument, "the request names no act")
 	default:
-		return nil, status.Errorf(codes.Unimplemented, "%T is not served yet", body)
+		return nil, status.Error(codes.InvalidArgument, "the request names no act")
 	}
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -154,10 +172,11 @@ func (sv *service) close(ctx context.Context, t *task, req *nriv1.PublishRequest
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if err := bus.Publish(ctx, sv.n.js, subject, e); err != nil {
-		return nil, status.Error(codes.Unavailable, err.Error())
+	sent, err := sv.n.out.put(&pending{Subject: subject, Event: e})
+	if err != nil {
+		return nil, outboxError(err)
 	}
-	sv.n.closed(t)
+	sv.n.closed(t, sent)
 	return &nriv1.PublishAck{}, nil
 }
 

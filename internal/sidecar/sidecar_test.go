@@ -57,6 +57,46 @@ type fixture struct {
 	// broker publishes as the Task Broker when it does not run.
 	broker *nats.Conn
 	pub    *nats.Conn
+
+	startup             *sidecar.Startup
+	path, shared, state string
+	speaks              sidecar.Range
+	nc                  *nats.Conn
+	stop                context.CancelFunc
+}
+
+// start runs the Integration Sidecar until the test ends or stop.
+func (f *fixture) start() {
+	ctx, stop := context.WithCancel(f.Ctx)
+	run := make(chan error, 1)
+	f.run, f.stop = run, stop
+	go func() {
+		run <- sidecar.Run(ctx, f.nc, f.startup, sidecar.Options{
+			Shared: f.shared, State: f.state, Speaks: f.speaks, StartupPath: f.path, ContextAddr: f.ContextAddr,
+		})
+	}()
+	f.t.Cleanup(func() {
+		stop()
+		select {
+		case err := <-run:
+			run <- err
+		case <-time.After(10 * time.Second):
+			f.t.Error("the Integration Sidecar did not stop")
+		}
+	})
+}
+
+// restart stops the Integration Sidecar and runs it again on the same volumes.
+func (f *fixture) restart() {
+	f.t.Helper()
+	f.stop()
+	select {
+	case err := <-f.run:
+		f.run <- err
+	case <-time.After(10 * time.Second):
+		f.t.Fatal("the Integration Sidecar did not stop")
+	}
+	f.start()
 }
 
 type options struct {
@@ -64,6 +104,9 @@ type options struct {
 	cap     signing.Capability
 	version string
 	speaks  sidecar.Range
+	// embeddings is the target of the embeddings endpoint, if the network has
+	// a vector space.
+	embeddings string
 }
 
 func newFixture(t *testing.T, o options) *fixture {
@@ -73,6 +116,12 @@ func newFixture(t *testing.T, o options) *fixture {
 			"auction_timeout": auction.Milliseconds(), "task_lease_ttl": lease.Milliseconds(),
 			"reannounce_backoff_base": 600, "max_reannounce_backoff": 2400, "network_admission": "open",
 		})
+		if o.embeddings != "" {
+			testnet.Set(v, map[string]any{
+				"egress_registry": map[string]any{"embeddings": map[string]any{"target": o.embeddings}},
+				"embedding_model": map[string]any{"entry": "embeddings", "model": "test", "document_prefix": "", "query_prefix": "q: "},
+			})
+		}
 	})
 	if o.cap.Topic == "" {
 		o.cap = signing.Capability{Topic: topic, ArtifactRef: "sha256:test", ModelID: modelID,
@@ -101,7 +150,7 @@ func newFixture(t *testing.T, o options) *fixture {
 	}
 	requester, _ := nkeys.CreateUser()
 	f := &fixture{
-		Net: n, t: t, topic: o.cap.Topic, socket: filepath.Join(dir, "nri.sock"), run: make(chan error, 1),
+		Net: n, t: t, topic: o.cap.Topic, socket: filepath.Join(dir, "nri.sock"),
 		pub: n.Conn(bus.PublishScope.Role, nil),
 	}
 	f.requester, _ = requester.PublicKey()
@@ -110,17 +159,9 @@ func newFixture(t *testing.T, o options) *fixture {
 	if !o.broker {
 		f.broker = n.Conn(bus.TaskBrokerScope.Role, nil)
 	}
-	ctx, stop := context.WithCancel(n.Ctx)
-	go func() { f.run <- sidecar.Run(ctx, nc, &st, sidecar.Options{Socket: f.socket, Speaks: o.speaks}) }()
-	t.Cleanup(func() {
-		stop()
-		select {
-		case <-f.run:
-		case <-time.After(10 * time.Second):
-			t.Error("the Integration Sidecar did not stop")
-		}
-		nc.Close()
-	})
+	f.startup, f.path, f.shared, f.state, f.speaks, f.nc = &st, path, dir, t.TempDir(), o.speaks, nc
+	t.Cleanup(nc.Close)
+	f.start()
 	return f
 }
 
@@ -129,6 +170,19 @@ type logic struct {
 	client nriv1.NodeRuntimeClient
 	stream nriv1.NodeRuntime_AttachClient
 	cut    context.CancelFunc
+	// msgs are the deliveries, read by a single reader; closed with the stream.
+	msgs chan *nriv1.SidecarMessage
+}
+
+func (l *logic) read() {
+	defer close(l.msgs)
+	for {
+		m, err := l.stream.Recv()
+		if err != nil {
+			return
+		}
+		l.msgs <- m
+	}
 }
 
 // attach dials the socket until it exists and opens the session with a Hello
@@ -157,7 +211,9 @@ func (f *fixture) attach(minor uint32) (*logic, error) {
 			if m.GetAccepted() == nil {
 				f.t.Fatalf("the session opened with %v", m)
 			}
-			return &logic{client: client, stream: stream, cut: cut}, nil
+			l := &logic{client: client, stream: stream, cut: cut, msgs: make(chan *nriv1.SidecarMessage, 64)}
+			go l.read()
+			return l, nil
 		}
 		if status.Code(err) != codes.Unavailable || f.Ctx.Err() != nil {
 			return nil, err
@@ -169,17 +225,8 @@ func (f *fixture) attach(minor uint32) (*logic, error) {
 // next is the next delivery, or nil if none arrives within d.
 func (l *logic) next(t *testing.T, d time.Duration) *nriv1.SidecarMessage {
 	t.Helper()
-	got := make(chan *nriv1.SidecarMessage, 1)
-	go func() {
-		m, err := l.stream.Recv()
-		if err != nil {
-			close(got)
-			return
-		}
-		got <- m
-	}()
 	select {
-	case m := <-got:
+	case m := <-l.msgs:
 		return m
 	case <-time.After(d):
 		return nil
@@ -511,11 +558,11 @@ func TestPublishRejected(t *testing.T) {
 		{"data that is not an object", complete(`[1]`), codes.InvalidArgument},
 		{"a key the sidecar stamps", complete(`{"topic":"other"}`), codes.InvalidArgument},
 		{"metrics", complete(`{"metrics":{}}`), codes.InvalidArgument},
+		{"more than the Bus carries", complete(`{"x":"` + strings.Repeat("a", 2<<20) + `"}`), codes.InvalidArgument},
 		{"a delivery_id without an Inbound", &nriv1.PublishRequest{TaskId: taskID, Body: &nriv1.PublishRequest_Complete{Complete: &nriv1.CompleteTask{DeliveryId: "x"}}}, codes.FailedPrecondition},
 		{"a failure without its reason", fail("", "", ""), codes.InvalidArgument},
 		{"a worker's failure_code", fail("broke", "unanswered", ""), codes.InvalidArgument},
 		{"a failure_code in data", fail("broke", "", `{"failure_code":"x"}`), codes.InvalidArgument},
-		{"an announcement", &nriv1.PublishRequest{TaskId: taskID, Body: &nriv1.PublishRequest_Announce{Announce: &nriv1.AnnounceTask{Topic: "other"}}}, codes.Unimplemented},
 	}
 	for _, tc := range cases {
 		if _, err := l.client.Publish(f.Ctx, tc.req); status.Code(err) != tc.code {

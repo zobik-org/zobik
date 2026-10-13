@@ -28,6 +28,9 @@ type config struct {
 	// lease and auction are task_lease_ttl and auction_timeout as of the last
 	// head read, in nanoseconds.
 	lease, auction atomic.Int64
+	// current is the last head read, whose embedding_model the announcements
+	// are embedded under (architecture §3.7.4).
+	current atomic.Pointer[globalconfig.Record]
 
 	mu sync.Mutex
 	// pinned caches similarity_precision_decimals by config_version: a
@@ -42,6 +45,7 @@ func newConfig(js jetstream.JetStream, head *globalconfig.Record) *config {
 }
 
 func (c *config) store(head *globalconfig.Record) {
+	c.current.Store(head)
 	// The head passed its schema when it was published.
 	var ms int64
 	_ = json.Unmarshal(head.Values["task_lease_ttl"], &ms)
@@ -68,6 +72,7 @@ func (c *config) follow(ctx context.Context) {
 	}
 }
 
+func (c *config) head() *globalconfig.Record    { return c.current.Load() }
 func (c *config) leaseTTL() time.Duration       { return time.Duration(c.lease.Load()) }
 func (c *config) auctionTimeout() time.Duration { return time.Duration(c.auction.Load()) }
 

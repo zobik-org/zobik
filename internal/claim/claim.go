@@ -80,6 +80,24 @@ type Assignment struct {
 	Started   time.Time
 }
 
+// Inherited is what the task's events inherit from its announcement:
+// workspace and origin_audience (architecture §3.6.1).
+func (a *Assignment) Inherited() map[string]any {
+	var d struct {
+		Workspace      *string `json:"workspace"`
+		OriginAudience *string `json:"origin_audience"`
+	}
+	_ = json.Unmarshal(a.Announcement.Data, &d) // a field of another type reads as absent
+	out := map[string]any{}
+	if d.Workspace != nil {
+		out["workspace"] = *d.Workspace
+	}
+	if d.OriginAudience != nil {
+		out["origin_audience"] = *d.OriginAudience
+	}
+	return out
+}
+
 // Assigned matches a task.assigned with the announcement it answers. It
 // returns false for one it did not propose on, or no longer retains.
 func (c *Claimant) Assigned(e *bus.Event) (*Assignment, bool) {
@@ -164,16 +182,8 @@ func (c *Claimant) Close(ctx context.Context, a *Assignment, typ string, data ma
 // (architecture §3.6.1), and returns it with the subject of its requester. The
 // metrics are those of a task that spent no tokens and no money (architecture §3.10).
 func (c *Claimant) Terminal(a *Assignment, typ string, data map[string]any) (*bus.Event, string, error) {
-	var inherited struct {
-		Workspace      *string `json:"workspace"`
-		OriginAudience *string `json:"origin_audience"`
-	}
-	_ = json.Unmarshal(a.Announcement.Data, &inherited) // a field of another type reads as absent
-	if inherited.Workspace != nil {
-		data["workspace"] = *inherited.Workspace
-	}
-	if inherited.OriginAudience != nil {
-		data["origin_audience"] = *inherited.OriginAudience
+	for k, v := range a.Inherited() {
+		data[k] = v
 	}
 	data["topic"] = c.topic
 	data["metrics"] = map[string]any{
