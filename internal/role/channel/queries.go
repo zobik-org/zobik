@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"zobik.org/zobik/internal/bus"
-	"zobik.org/zobik/internal/role"
+	"zobik.org/zobik/internal/claim"
 	channelv1 "zobik.org/zobik/proto/zobik/channel/v1"
 	nriv1 "zobik.org/zobik/proto/zobik/nri/v1"
 )
@@ -24,7 +24,7 @@ const (
 // query is a hitl_contact_* task the channel won and retains until the person
 // answers it, the window expires or, outside the final round, the session closes.
 type query struct {
-	a     *role.Assignment
+	a     *claim.Assignment
 	final bool
 	shown bool
 	// deliveryID names it before the console.
@@ -47,45 +47,26 @@ func (s *session) send(m *channelv1.ChannelMessage) {
 	}
 }
 
-// round is where in its lineage a query's announcement stands (architecture §3.5.2).
-type round struct {
-	CurrentAttempts *int   `json:"current_attempts"`
-	FinalRound      bool   `json:"final_round"`
-	OriginAudience  string `json:"origin_audience"`
-}
-
 // onAnnounced proposes on a query of its audience when it is its turn: its
 // attempt_window includes the round, and outside the final round, only with the
 // console attached. In round 1 of the trace's origin audience only the owner of
 // the TraceID proposes (architecture §3.5.2, implementation §6, The operator console).
 func (c *channel) onAnnounced(ctx context.Context, e *bus.Event) error {
-	var r round
-	_ = json.Unmarshal(e.Data, &r) // a field of another type reads as absent
-	attempts := 1
-	if r.CurrentAttempts != nil {
-		attempts = *r.CurrentAttempts
-	}
-	w := c.window
+	r := claim.ReadRound(e)
 	c.mu.Lock()
 	attached := c.session != nil
 	_, owner := c.open[bus.TraceID(e.TraceParent)]
 	_, retained := c.queries[e.Subject]
 	c.mu.Unlock()
 	switch {
-	case retained:
+	case retained, !claim.Admits(c.window, r):
 		return nil
-	case r.FinalRound:
-		if w.FinalRound != nil && !*w.FinalRound {
-			return nil
-		}
-	case w.From != nil && attempts < *w.From, w.To != nil && attempts > *w.To:
+	case !r.FinalRound && !attached:
 		return nil
-	case !attached:
-		return nil
-	case attempts == 1 && r.OriginAudience == c.audience && !owner:
+	case r.ReservedTo(c.audience) && !owner:
 		return nil
 	}
-	return c.claimant.Propose(ctx, e)
+	return c.claimant.Propose(ctx, e, nil)
 }
 
 // onAssigned retains a query it won, keeps its lease and shows it to the console.
@@ -94,8 +75,7 @@ func (c *channel) onAssigned(ctx context.Context, e *bus.Event) error {
 	if !ok {
 		return nil
 	}
-	var r round
-	_ = json.Unmarshal(a.Announcement.Data, &r) // a field of another type reads as absent
+	r := claim.ReadRound(a.Announcement)
 	window, err := c.responseWindow(ctx, a.Announcement.ConfigVersion)
 	if err != nil {
 		// Without the window, the query cannot be bounded: the lease is let

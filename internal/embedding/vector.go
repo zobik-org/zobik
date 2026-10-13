@@ -51,3 +51,16 @@ func Similarity(a, b []float32) (float64, error) {
 	}
 	return dot, nil
 }
+
+// Round expresses s in units of 10^-decimals, which is the resolution the
+// network declares it distinguishes similarities at: whoever compares a
+// similarity against a floor, or two similarities, compares them rounded
+// (architecture §3.7.5, step 4).
+func Round(s float64, decimals int) int64 {
+	return int64(math.Round(s * math.Pow10(decimals)))
+}
+
+// Scaled is a rounded similarity back in its own units.
+func Scaled(score int64, decimals int) float64 {
+	return float64(score) / math.Pow10(decimals)
+}

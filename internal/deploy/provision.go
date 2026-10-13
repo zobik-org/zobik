@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -125,8 +124,6 @@ const (
 	codeEmbeddingUnavailable = "embedding_unavailable"
 )
 
-var nriVersion = regexp.MustCompile(`^[1-9][0-9]*\.(0|[1-9][0-9]*)$`)
-
 // Provision executes the act. A failed act removes what it created.
 func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issuer, req ProvisionRequest) (node *Node, err error) {
 	b := req.Blueprint
@@ -178,9 +175,16 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	if len(img.Volumes) > 0 {
 		return nil, refuse(codeRequestInvalid, "the image declares volumes %v", img.Volumes)
 	}
-	version := img.Labels[LabelNRIVersion]
-	if !nriVersion.MatchString(version) {
-		return nil, refuse(codeRuntimeUnsupported, "the image declares %s %q, not <major>.<minor>", LabelNRIVersion, version)
+	version, err := sidecar.ParseVersion(img.Labels[LabelNRIVersion])
+	if err != nil {
+		return nil, refuse(codeRuntimeUnsupported, "the image's %s: %v", LabelNRIVersion, err)
+	}
+	supported, err := sidecar.ReadRange(head.Values["runtime_interface_range"])
+	if err != nil {
+		return nil, fmt.Errorf("deploy: %w", err)
+	}
+	if !supported.Fits(version) {
+		return nil, refuse(codeRuntimeUnsupported, "the image declares NRI %s, outside runtime_interface_range %v", version, supported)
 	}
 
 	user, err := nkeys.CreateUser()
@@ -217,7 +221,7 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 		BusJWT:     token,
 		Credential: credential,
 		Root:       iss.Root,
-		NRIVersion: version,
+		NRIVersion: version.String(),
 	})
 	if err != nil {
 		return nil, err

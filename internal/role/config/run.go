@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/claim"
 	"zobik.org/zobik/internal/configschema"
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role"
@@ -70,7 +71,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 
 	s := &store{
 		rt: rt, js: js, schema: schema,
-		claimant: role.NewClaimant(rt, js, nc, Topic),
+		claimant: claim.New(rt.ID, rt.Credential, js, nc, Topic),
 		context:  contextv1.NewContextStoreClient(conn),
 	}
 	s.leaseTTL.Store(int64(leaseTTL(head)))
@@ -82,7 +83,7 @@ type store struct {
 	rt       *role.Runtime
 	js       jetstream.JetStream
 	schema   *globalconfig.Schema
-	claimant *role.Claimant
+	claimant *claim.Claimant
 	context  contextv1.ContextStoreClient
 	// leaseTTL is task_lease_ttl as of the last head read, in nanoseconds.
 	leaseTTL atomic.Int64
@@ -113,7 +114,7 @@ func (s *store) handle(ctx context.Context, m jetstream.Msg) {
 	switch e.Type {
 	case bus.TypeAnnounced:
 		// Deterministic routing: the only instance always proposes (architecture §3.7.7).
-		if err := s.claimant.Propose(opCtx, &e); err != nil {
+		if err := s.claimant.Propose(opCtx, &e, nil); err != nil {
 			log.Printf("config: proposing on %s: %v", e.Subject, err)
 			m.NakWithDelay(time.Second)
 			return
@@ -131,7 +132,7 @@ func (s *store) handle(ctx context.Context, m jetstream.Msg) {
 // apply runs an edit while it keeps its lease, and closes it. A failure of the
 // Bus or of the Context Store leaves the task without closing: the lease
 // expires and the task comes back with its re-announcement.
-func (s *store) apply(ctx context.Context, a *role.Assignment) {
+func (s *store) apply(ctx context.Context, a *claim.Assignment) {
 	stop := s.claimant.KeepLease(a, func() time.Duration { return time.Duration(s.leaseTTL.Load()) })
 	defer stop()
 	version, rej, err := s.validateAndPublish(ctx, a)
@@ -186,7 +187,7 @@ type payload struct {
 // validateAndPublish validates in layers—the request's shape, the proof, the
 // payload, base_version against the head and the assignments against the
 // schema—and publishes the resulting snapshot (architecture §3.14.4).
-func (s *store) validateAndPublish(ctx context.Context, a *role.Assignment) (string, *rejection, error) {
+func (s *store) validateAndPublish(ctx context.Context, a *claim.Assignment) (string, *rejection, error) {
 	ann := a.Announcement
 	if err := ann.ValidateTopic(); err != nil {
 		return "", reject(codeRequestInvalid, "%v", err), nil

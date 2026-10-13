@@ -1,5 +1,11 @@
 package sidecar
 
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+)
+
 // The Integration Sidecar's paths, which the act of provisioning mounts and
 // writes (implementation §1.2.4, §2.1).
 const (
@@ -30,4 +36,17 @@ type Startup struct {
 	// NRIVersion is the io.zobik.nri.version label of the Logic Container's
 	// image (implementation §3, The interface version).
 	NRIVersion string `json:"nri_version"`
+}
+
+// LoadStartup reads the startup configuration at path.
+func LoadStartup(path string) (*Startup, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("sidecar: startup configuration: %w", err)
+	}
+	var s Startup
+	if err := json.Unmarshal(b, &s); err != nil {
+		return nil, fmt.Errorf("sidecar: startup configuration: %w", err)
+	}
+	return &s, nil
 }

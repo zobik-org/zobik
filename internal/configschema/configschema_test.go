@@ -29,6 +29,7 @@ func TestV0(t *testing.T) {
 		"egress_registry":               `{}`,
 		"task_similarity_floor":         `0.6`,
 		"default_memory_required":       `256`,
+		"runtime_interface_range":       `{"1":0}`,
 	}
 	v0 := s.V0()
 	if len(v0) != len(want) {

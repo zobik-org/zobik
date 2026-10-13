@@ -249,3 +249,16 @@ func (rt *Runtime) Account() (*jwt.AccountClaims, error) {
 	}
 	return rpcauth.AccountFromJWT(strings.TrimSpace(string(b)), rt.Root)
 }
+
+// RPCCredentials authenticate the role to an off-Bus interface with its
+// platform identity, reading its JWT from the volume on each connection
+// (implementation §6, The off-Bus interfaces).
+func (rt *Runtime) RPCCredentials() *rpcauth.Client {
+	return &rpcauth.Client{
+		JWT: func() (string, error) {
+			b, err := os.ReadFile(filepath.Join(rt.dir, FileBusJWT))
+			return strings.TrimSpace(string(b)), err
+		},
+		Key: rt.key,
+	}
+}

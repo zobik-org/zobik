@@ -1,6 +1,17 @@
 {
   "description": "The Global Configuration keys the Integration Sidecar reads (architecture §2.3, implementation §1.2.5).",
   "properties": {
+    "runtime_interface_range": {
+      "description": "The Node Runtime Interface versions the deployed Integration Sidecar supports: for each major, the highest minor it serves (architecture §2.3, §3.6.1). It comes with the Integration Sidecar, and its default is what the binary speaks.",
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0},
+      "default": {"1": 0},
+      "query_class": "current",
+      "storage": "versioned",
+      "preconditions": [
+        {"rule": "config.runtime_interface_range.all(k, k.matches('^[1-9][0-9]{0,8}$') && config.runtime_interface_range[k] <= 999999999)", "message": "runtime_interface_range maps each major, a positive integer, to its highest minor (architecture §2.3)"}
+      ]
+    },
     "embedding_model": {
       "description": "The network's vector space: the egress_registry entry the Embedding Model is reached through, the model requested from it and its prefix convention. It has no default: the network is born without a vector space (architecture §2.3, implementation §1.2.15).",
       "type": "object",

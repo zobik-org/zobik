@@ -319,6 +319,8 @@ func TestProvisionRefused(t *testing.T) {
 		{"an image that declares a volume", Blueprint{ArtifactRef: f.image(t, ctx, "LABEL "+LabelNRIVersion+"=1.0", "VOLUME /data")}, codeRequestInvalid},
 		{"memory under the engine's limit", Blueprint{Requires: map[string]json.RawMessage{"memory_required": json.RawMessage(`1`)}}, codeRequestInvalid},
 		{"an image without its NRI version", Blueprint{ArtifactRef: f.unnamed}, codeRuntimeUnsupported},
+		{"an image of a minor the sidecar does not speak", Blueprint{ArtifactRef: f.image(t, ctx, "LABEL "+LabelNRIVersion+"=1.1", `CMD ["sleep", "3600"]`)}, codeRuntimeUnsupported},
+		{"an image of another major", Blueprint{ArtifactRef: f.image(t, ctx, "LABEL "+LabelNRIVersion+"=2.0", `CMD ["sleep", "3600"]`)}, codeRuntimeUnsupported},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
