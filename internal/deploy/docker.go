@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/netip"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -86,6 +87,11 @@ type File struct {
 	Path string
 	Mode int64
 	Data []byte
+	// Dir makes it a directory, with no Data. Copying one onto a volume's mount
+	// point sets the volume's owner and mode.
+	Dir bool
+	// UID owns it, with the group of the same number; zero is root.
+	UID int
 }
 
 // EnsureNetwork creates the network's Docker bridge network if it does not exist.
@@ -130,7 +136,8 @@ func (e *Engine) WriteVolume(ctx context.Context, volume, image, dir string, fil
 	defer e.discard(ctx, res.ID)
 	rooted := make([]File, len(files))
 	for i, f := range files {
-		rooted[i] = File{Path: path.Join(dir, f.Path), Mode: f.Mode, Data: f.Data}
+		f.Path = path.Join(dir, f.Path)
+		rooted[i] = f
 	}
 	archive, err := tarFiles(rooted)
 	if err != nil {
@@ -156,6 +163,48 @@ func (e *Engine) EnsureImage(ctx context.Context, ref string) error {
 	return resp.Wait(ctx)
 }
 
+// Image is what the act of provisioning reads of an image the engine has.
+type Image struct {
+	ID     string
+	Labels map[string]string
+	// Volumes are the paths the image declares with VOLUME, each of which the
+	// engine would mount on a volume of its own.
+	Volumes []string
+}
+
+// InspectImage reads an image the engine has.
+func (e *Engine) InspectImage(ctx context.Context, ref string) (*Image, error) {
+	img, err := e.c.ImageInspect(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	out := &Image{ID: img.ID}
+	if img.Config != nil {
+		out.Labels = img.Config.Labels
+		for v := range img.Config.Volumes {
+			out.Volumes = append(out.Volumes, v)
+		}
+		slices.Sort(out.Volumes)
+	}
+	return out, nil
+}
+
+// Remove removes the containers and then the volumes; one that does not exist is no error.
+func (e *Engine) Remove(ctx context.Context, containers, volumes []string) error {
+	var errs []error
+	for _, c := range containers {
+		if _, err := e.c.ContainerRemove(ctx, c, client.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+			errs = append(errs, err)
+		}
+	}
+	for _, v := range volumes {
+		if _, err := e.c.VolumeRemove(ctx, v, client.VolumeRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // Spec is a container of the network.
 type Spec struct {
 	Name    string
@@ -173,6 +222,16 @@ type Spec struct {
 	// Publish maps a container port, like 7002/tcp, to a host port on
 	// 127.0.0.1 (implementation §6, The off-Bus interfaces).
 	Publish map[string]string
+	// User is the UID:GID the process runs as; empty is the image's.
+	User string
+	// Memory is the memory limit in bytes, with no swap beyond it
+	// (implementation §1.2.4); zero is none.
+	Memory int64
+	// Confined is the Logic Container's spec (implementation §2.2): no network,
+	// no capability, no privilege escalation, the image's filesystem read-only
+	// with /tmp in memory, and relaunch on any exit (implementation §2.4). It
+	// overrides Network, Alias, Publish and Restart.
+	Confined bool
 }
 
 // bindings is s.Publish as the engine takes it.
@@ -348,9 +407,22 @@ func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
 	if s.Restart {
 		host.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}
 	}
+	if s.Memory > 0 {
+		host.Memory, host.MemorySwap = s.Memory, s.Memory
+	}
 	endpoint := &network.EndpointSettings{}
 	if s.Alias != "" {
 		endpoint.Aliases = []string{s.Alias}
+	}
+	networking := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{s.Network: endpoint}}
+	if s.Confined {
+		host.NetworkMode = network.NetworkNone
+		host.PortBindings, exposed, networking = nil, nil, nil
+		host.CapDrop = []string{"ALL"}
+		host.SecurityOpt = []string{"no-new-privileges"}
+		host.ReadonlyRootfs = true
+		host.Tmpfs = map[string]string{"/tmp": ""}
+		host.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyAlways}
 	}
 	res, err := e.c.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: s.Name,
@@ -360,9 +432,10 @@ func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
 			Labels:       s.Labels,
 			Healthcheck:  s.Healthcheck,
 			ExposedPorts: exposed,
+			User:         s.User,
 		},
 		HostConfig:       host,
-		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{s.Network: endpoint}},
+		NetworkingConfig: networking,
 	})
 	if err != nil {
 		return "", err
@@ -422,20 +495,31 @@ func (e *Engine) output(ctx context.Context, id string) ([]byte, error) {
 func tarFiles(files []File) (io.Reader, error) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	dirs := map[string]bool{}
+	dirs, explicit := map[string]bool{}, map[string]bool{}
 	now := time.Now()
 	for _, f := range files {
+		if f.Dir {
+			explicit[f.Path] = true
+		}
 		for d := path.Dir(f.Path); d != "/" && d != "." && !dirs[d]; d = path.Dir(d) {
 			dirs[d] = true
 		}
 	}
+	// Parents first, so an explicit directory's owner is not overwritten.
 	for d := range dirs {
+		if explicit[d] {
+			continue
+		}
 		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: d[1:] + "/", Mode: 0o755, ModTime: now}); err != nil {
 			return nil, err
 		}
 	}
 	for _, f := range files {
-		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: f.Path[1:], Mode: f.Mode, Size: int64(len(f.Data)), ModTime: now}); err != nil {
+		h := &tar.Header{Typeflag: tar.TypeReg, Name: f.Path[1:], Mode: f.Mode, Size: int64(len(f.Data)), Uid: f.UID, Gid: f.UID, ModTime: now}
+		if f.Dir {
+			h.Typeflag, h.Name, h.Size = tar.TypeDir, f.Path[1:]+"/", 0
+		}
+		if err := tw.WriteHeader(h); err != nil {
 			return nil, err
 		}
 		if _, err := tw.Write(f.Data); err != nil {

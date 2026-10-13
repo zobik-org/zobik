@@ -1,0 +1,22 @@
+{
+  "description": "The Global Configuration keys the Spawner reads (architecture §2.3, implementation §1.2.5).",
+  "properties": {
+    "task_similarity_floor": {
+      "description": "The similarity floor a node is provisioned with when its entry has no eligible row in the floor history (architecture §2.3, §3.13.3).",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.6,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "default_memory_required": {
+      "description": "The memory reservation of a Logic Container whose entry declares no memory_required, in MB (architecture §3.13.10).",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "default": 256,
+      "query_class": "current",
+      "storage": "versioned"
+    }
+  }
+}

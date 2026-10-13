@@ -134,5 +134,28 @@ var ChannelScope = Scope{
 	Subscribe: inboxSub,
 }
 
+// SpawnerScope is the Spawner's: it reads the configuration a node is
+// provisioned under and creates and deletes the nodes' durable consumers
+// (architecture §3.13.1, implementation §1.2.1).
+var SpawnerScope = Scope{
+	Role: "spawner",
+	Publish: join(configRead, []string{
+		"$JS.API.CONSUMER.CREATE.task.>",
+		"$JS.API.CONSUMER.DELETE.task.>",
+	}),
+	Subscribe: inboxSub,
+}
+
 // RoleScopes are the scopes zobik init registers for the structural roles.
-var RoleScopes = []Scope{ConfigScope, TaskBrokerScope, ContextScope, ChannelScope}
+var RoleScopes = []Scope{ConfigScope, TaskBrokerScope, ContextScope, ChannelScope, SpawnerScope}
+
+// NodeScope is every node's: it announces, proposes and renews under its own
+// identity, closes the tasks of any destination and pulls from its consumer
+// (implementation §1.2.1). Its signing key is not the console's: the Spawner
+// keeps it in its volume and issues the fleet's identities with it
+// (implementation §6, The root and the split Operator Channel).
+var NodeScope = Scope{
+	Role:      "node",
+	Publish:   join(consumerPub, configRead, participant, []string{"task.announced.>"}),
+	Subscribe: inboxSub,
+}

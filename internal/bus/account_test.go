@@ -188,3 +188,33 @@ func TestRegisterScopesConverges(t *testing.T) {
 		t.Fatalf("account has %d signing keys, %v", len(c.SigningKeys), err)
 	}
 }
+
+// Rotating a scope leaves the account with one key for it, the new one.
+func TestRotateScope(t *testing.T) {
+	root, _ := nkeys.CreateOperator()
+	a, err := NewAccount(root, "test", []Scope{ConsoleScope, harnessScope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _ := a.SigningKeys[harnessScope.Role].PublicKey()
+	updated, kp, err := RotateScope(root, a.JWT, harnessScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := kp.PublicKey()
+	ac, err := jwt.DecodeAccountClaims(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := map[string][]string{}
+	for _, k := range ac.SigningKeys.Keys() {
+		s, _ := ac.SigningKeys.GetScope(k)
+		roles[s.(*jwt.UserScope).Role] = append(roles[s.(*jwt.UserScope).Role], k)
+	}
+	if got := roles[harnessScope.Role]; len(got) != 1 || got[0] != fresh || fresh == old {
+		t.Errorf("harness keys %v, rotated from %s to %s", got, old, fresh)
+	}
+	if len(roles[ConsoleScope.Role]) != 1 {
+		t.Errorf("console keys %v", roles[ConsoleScope.Role])
+	}
+}

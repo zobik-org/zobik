@@ -27,6 +27,8 @@ func TestV0(t *testing.T) {
 		"hitl_response_window":          `86400000`,
 		"result_delivery":               `{"audiences":{"user":"acceptance"},"default":"ack"}`,
 		"egress_registry":               `{}`,
+		"task_similarity_floor":         `0.6`,
+		"default_memory_required":       `256`,
 	}
 	v0 := s.V0()
 	if len(v0) != len(want) {

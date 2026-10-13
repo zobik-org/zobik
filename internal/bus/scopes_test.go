@@ -41,7 +41,7 @@ func connectRole(t *testing.T, s *server.Server, a *Account, scope string) *role
 func roleAccount(t *testing.T) *Account {
 	t.Helper()
 	root, _ := nkeys.CreateOperator()
-	a, err := NewAccount(root, "test", append([]Scope{ConsoleScope, TapScope}, RoleScopes...))
+	a, err := NewAccount(root, "test", append([]Scope{ConsoleScope, TapScope, NodeScope}, RoleScopes...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,5 +188,81 @@ func TestRoleConsumers(t *testing.T) {
 
 	if _, err := js.Consumer(ctx, "task", other.id); err == nil {
 		t.Error("config bound another identity's consumer")
+	}
+}
+
+// The Spawner creates a node's consumer; the node pulls from it and publishes
+// what implementation §1.2.1 gives a node, and nothing a role reserves.
+func TestNodeScope(t *testing.T) {
+	a := roleAccount(t)
+	s := startServer(t, a)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	console, _, err := connect(t, s, a, ConsoleScope.Role, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, _ := jetstream.New(console)
+	if err := EnsureStreams(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	tapConn, _, err := connect(t, s, a, TapScope.Role, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tap := make(chan *nats.Msg, 16)
+	if _, err := tapConn.ChanSubscribe("prop.>", tap); err != nil {
+		t.Fatal(err)
+	}
+	tapConn.Flush()
+
+	node := connectRole(t, s, a, NodeScope.Role)
+	sp := connectRole(t, s, a, SpawnerScope.Role)
+	spjs, _ := jetstream.New(sp.nc)
+	if err := NodeConsumer(ctx, spjs, node.id, "echo"); err != nil {
+		t.Fatalf("spawner creating the node's consumer: %v", err)
+	}
+	sp.denied(t, "task.announced.echo")
+
+	tb := connectRole(t, s, a, TaskBrokerScope.Role)
+	tbjs, _ := jetstream.New(tb.nc)
+	if _, err := tbjs.Publish(ctx, "task.announced.echo", []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	js, _ := jetstream.New(node.nc)
+	c, err := js.Consumer(ctx, "task", node.id)
+	if err != nil {
+		t.Fatalf("node binding its consumer: %v", err)
+	}
+	msgs, err := c.Fetch(1, jetstream.FetchMaxWait(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := 0
+	for m := range msgs.Messages() {
+		if err := m.DoubleAck(ctx); err != nil {
+			t.Errorf("node acknowledging: %v", err)
+		}
+		got++
+	}
+	if got != 1 {
+		t.Fatalf("node fetched %d messages: %v", got, msgs.Error())
+	}
+
+	node.publishes(t, tap, "prop."+node.id+".echo")
+	node.denied(t, "prop.UOTHER.echo")
+	node.denied(t, "task.assigned."+node.id)
+	node.denied(t, "task.rejected."+node.id)
+
+	// zobik init leaves the node's consumer alone.
+	if err := EnsureConsumers(ctx, admin, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Consumer(ctx, "task", node.id); err != nil {
+		t.Errorf("zobik init deleted the node's consumer: %v", err)
+	}
+	if err := DeleteNodeConsumer(ctx, spjs, node.id); err != nil {
+		t.Errorf("spawner deleting the node's consumer: %v", err)
 	}
 }
