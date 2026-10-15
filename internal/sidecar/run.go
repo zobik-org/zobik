@@ -148,7 +148,9 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	}
 	n := newNode(id, startup.Credential, cred, js, nc, cfg, st, out, o.Shared)
 	n.clearAreas()
-	g := grpc.NewServer(grpc.KeepaliveParams(keepaliveServer), grpc.KeepaliveEnforcementPolicy(keepalivePolicy))
+	// Stopping waits for the handlers, so none writes to the outbox after it drains.
+	g := grpc.NewServer(grpc.KeepaliveParams(keepaliveServer), grpc.KeepaliveEnforcementPolicy(keepalivePolicy),
+		grpc.WaitForHandlers(true))
 	nriv1.RegisterNodeRuntimeServer(g, &service{
 		n: n, store: contextv1.NewContextStoreClient(conn),
 		speaks: o.Speaks, declared: declared,
@@ -177,6 +179,7 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	case <-stopped:
 	case <-time.After(stopTimeout):
 		g.Stop()
+		<-stopped
 	}
 	// What those requests left in the outbox goes out with the rest.
 	out.drain(drainTimeout)

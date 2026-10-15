@@ -109,9 +109,6 @@ func (sv *service) Attach(stream nriv1.NodeRuntime_AttachServer) error {
 		case err := <-recvErr:
 			return err
 		case <-ctx.Done():
-			if err := stream.Context().Err(); err != nil {
-				return status.FromContextError(err).Err()
-			}
 			return status.Error(codes.Unavailable, "the session was cut")
 		}
 	}

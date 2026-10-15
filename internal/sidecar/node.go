@@ -46,9 +46,9 @@ type node struct {
 
 	mu      sync.Mutex
 	session *session
-	// closing is set when the process ends: it takes no new session.
-	closing bool
-	tasks   map[string]*task // by TaskID
+	// stopping is set when the process ends: it takes no new session.
+	stopping bool
+	tasks    map[string]*task // by TaskID
 	// held are the deliveries waiting for the Logic Container's Received, by
 	// delivery_id: the Bus's message is acknowledged on it (implementation §3,
 	// The session).
@@ -395,7 +395,7 @@ func (n *node) attach(s *session) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	switch {
-	case n.closing:
+	case n.stopping:
 		return status.Error(codes.Unavailable, "the Integration Sidecar is stopping")
 	case n.session != nil:
 		return status.Error(codes.FailedPrecondition, "a session is already open")
@@ -446,7 +446,7 @@ func (n *node) cut(s *session) {
 // cutOpen cuts the open session, if there is one, and takes no other.
 func (n *node) cutOpen() {
 	n.mu.Lock()
-	n.closing = true
+	n.stopping = true
 	s := n.session
 	n.mu.Unlock()
 	if s != nil {
