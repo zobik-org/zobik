@@ -10,6 +10,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/claim"
@@ -44,6 +46,8 @@ type node struct {
 
 	mu      sync.Mutex
 	session *session
+	// closing is set when the process ends: it takes no new session.
+	closing bool
 	tasks   map[string]*task // by TaskID
 	// held are the deliveries waiting for the Logic Container's Received, by
 	// delivery_id: the Bus's message is acknowledged on it (implementation §3,
@@ -386,15 +390,18 @@ func (n *node) closed(t *task, sent <-chan struct{}) {
 	}()
 }
 
-// attach starts a session, unless one is open.
-func (n *node) attach(s *session) bool {
+// attach starts a session, unless one is open or the process is ending.
+func (n *node) attach(s *session) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.session != nil {
-		return false
+	switch {
+	case n.closing:
+		return status.Error(codes.Unavailable, "the Integration Sidecar is stopping")
+	case n.session != nil:
+		return status.Error(codes.FailedPrecondition, "a session is already open")
 	}
 	n.session = s
-	return true
+	return nil
 }
 
 // cut ends the session: it closes each task with task.failed, stops renewing
@@ -407,7 +414,7 @@ func (n *node) cut(s *session) {
 		return
 	}
 	n.session = nil
-	close(s.cut)
+	s.unbind()
 	n.waiting = ""
 	tasks := n.tasks
 	n.tasks = map[string]*task{}
@@ -436,9 +443,10 @@ func (n *node) cut(s *session) {
 	}
 }
 
-// cutOpen cuts the open session, if there is one.
+// cutOpen cuts the open session, if there is one, and takes no other.
 func (n *node) cutOpen() {
 	n.mu.Lock()
+	n.closing = true
 	s := n.session
 	n.mu.Unlock()
 	if s != nil {

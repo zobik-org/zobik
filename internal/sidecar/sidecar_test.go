@@ -186,7 +186,7 @@ func (l *logic) read() {
 	}
 }
 
-// attach dials the socket until it exists, for up to thirty seconds, and opens
+// attach dials the socket until it exists, for up to ten seconds, and opens
 // the session with a Hello of minor; it returns the error of the first answer.
 func (f *fixture) attach(minor uint32) (*logic, error) {
 	f.t.Helper()
@@ -204,7 +204,7 @@ func (f *fixture) attach(minor uint32) (*logic, error) {
 	f.t.Cleanup(cut)
 	client := nriv1.NewNodeRuntimeClient(conn)
 	var stream nriv1.NodeRuntime_AttachClient
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		stream, err = client.Attach(ctx)
 		if err == nil {
