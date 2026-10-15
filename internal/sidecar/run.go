@@ -168,20 +168,18 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	// sends its status, so a Logic Container whose version ends the process
 	// reads why (implementation §3, The interface version). stopTimeout bounds
 	// a request that does not finish.
-	// The outbox drains meanwhile.
 	stopped := make(chan struct{})
 	go func() {
 		g.GracefulStop()
 		close(stopped)
 	}()
-	bound := time.NewTimer(stopTimeout)
-	defer bound.Stop()
-	out.drain(drainTimeout)
 	select {
 	case <-stopped:
-	case <-bound.C:
+	case <-time.After(stopTimeout):
 		g.Stop()
 	}
+	// What those requests left in the outbox goes out with the rest.
+	out.drain(drainTimeout)
 	if err := context.Cause(ctx); !errors.Is(err, context.Canceled) {
 		return err
 	}
