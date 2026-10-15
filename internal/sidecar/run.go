@@ -164,8 +164,10 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	// A session still open is cut: its tasks fail before the process ends
 	// (implementation §2.4).
 	n.cutOpen()
-	// The streams ending get a moment to send their status, so a Logic
-	// Container whose version ends the process reads why.
+	// The cut ended the session's Attach; what is still in flight finishes and
+	// sends its status, so a Logic Container whose version ends the process
+	// reads why (implementation §3, The interface version). stopTimeout bounds
+	// a request that does not finish.
 	stopped := make(chan struct{})
 	go func() {
 		g.GracefulStop()
@@ -184,10 +186,10 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 }
 
 // drainTimeout is how long the end of the process waits for the outbox, and
-// stopTimeout for the streams still open.
+// stopTimeout for the requests still in flight.
 const (
 	drainTimeout = 3 * time.Second
-	stopTimeout  = time.Second
+	stopTimeout  = 3 * time.Second
 )
 
 // prune forgets the old delivered ids, at startup and every hour.

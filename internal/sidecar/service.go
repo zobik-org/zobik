@@ -19,6 +19,8 @@ import (
 type session struct {
 	out  chan *nriv1.SidecarMessage
 	done chan struct{}
+	// cut is closed when the node cuts the session, which ends its Attach.
+	cut chan struct{}
 }
 
 func (s *session) send(m *nriv1.SidecarMessage) {
@@ -68,7 +70,7 @@ func (sv *service) Attach(stream nriv1.NodeRuntime_AttachServer) error {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 
-	s := &session{out: make(chan *nriv1.SidecarMessage, 64), done: make(chan struct{})}
+	s := &session{out: make(chan *nriv1.SidecarMessage, 64), done: make(chan struct{}), cut: make(chan struct{})}
 	if !sv.n.attach(s) {
 		return status.Error(codes.FailedPrecondition, "a session is already open")
 	}
@@ -104,6 +106,8 @@ func (sv *service) Attach(stream nriv1.NodeRuntime_AttachServer) error {
 			}
 		case err := <-recvErr:
 			return err
+		case <-s.cut:
+			return status.Error(codes.Unavailable, "the session was cut")
 		}
 	}
 }

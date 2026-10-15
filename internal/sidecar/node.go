@@ -407,6 +407,7 @@ func (n *node) cut(s *session) {
 		return
 	}
 	n.session = nil
+	close(s.cut)
 	n.waiting = ""
 	tasks := n.tasks
 	n.tasks = map[string]*task{}

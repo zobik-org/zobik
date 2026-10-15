@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
@@ -185,11 +186,16 @@ func (l *logic) read() {
 	}
 }
 
-// attach dials the socket until it exists, for up to ten seconds, and opens
+// attach dials the socket until it exists, for up to thirty seconds, and opens
 // the session with a Hello of minor; it returns the error of the first answer.
 func (f *fixture) attach(minor uint32) (*logic, error) {
 	f.t.Helper()
-	conn, err := grpc.NewClient("unix://"+f.socket, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// A short backoff, so the socket is dialed soon after it appears.
+	conn, err := grpc.NewClient("unix://"+f.socket, grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff:           backoff.Config{BaseDelay: 50 * time.Millisecond, Multiplier: 1.6, MaxDelay: 200 * time.Millisecond},
+			MinConnectTimeout: time.Second,
+		}))
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -198,7 +204,7 @@ func (f *fixture) attach(minor uint32) (*logic, error) {
 	f.t.Cleanup(cut)
 	client := nriv1.NewNodeRuntimeClient(conn)
 	var stream nriv1.NodeRuntime_AttachClient
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		stream, err = client.Attach(ctx)
 		if err == nil {
