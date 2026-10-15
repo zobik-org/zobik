@@ -121,6 +121,7 @@ type commonData struct {
 	Topic         *string         `json:"topic"`
 	TaskEmbedding *string         `json:"task_embedding"`
 	TaskText      *string         `json:"task_text"`
+	Requester     *string         `json:"requester_identity"`
 	FailureReason *string         `json:"failure_reason"`
 	Metrics       json.RawMessage `json:"metrics"`
 }
@@ -161,6 +162,10 @@ func (e *Event) Validate() error {
 		return errors.New("data: only task.announced carries task_embedding")
 	case d.TaskText != nil && e.Type != TypeAnnounced:
 		return errors.New("data: only task.announced carries task_text")
+	// architecture §3.6.1: the terminal event of a task travels toward the
+	// identity its announcement declares, as a token of its subject.
+	case e.Type == TypeAnnounced && (d.Requester == nil || !singleTerm(*d.Requester)):
+		return errors.New("data.requester_identity: required in task.announced, as a single term")
 	// architecture §3.3, §3.10.
 	case e.Type == TypeFailed && d.FailureReason == nil:
 		return errors.New("data.failure_reason: required in task.failed")

@@ -38,6 +38,11 @@ func subjectShape(typ string) (prefix []string, tokens, topicAt int, err error) 
 	return nil, 0, 0, fmt.Errorf("bus: unknown type %q", typ)
 }
 
+// singleTerm reports whether t can be one token of a subject.
+func singleTerm(t string) bool {
+	return t != "" && !strings.ContainsAny(t, ".*> \t\r\n")
+}
+
 // checkSubject checks that subject has the shape of e's type, that each variable
 // token is a single term, and that it names the same topic as data.topic.
 func checkSubject(subject string, e *Event) error {
@@ -56,7 +61,7 @@ func checkSubject(subject string, e *Event) error {
 			}
 			continue
 		}
-		if t == "" || strings.ContainsAny(t, "*> \t\r\n") {
+		if !singleTerm(t) {
 			return fmt.Errorf("bus: subject %q: %q is not a single term", subject, t)
 		}
 	}

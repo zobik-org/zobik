@@ -1,0 +1,5 @@
+{
+  "artifact_ref": "zobik-echo:dev",
+  "capability_text": "Repeats back the text of the task it receives.",
+  "requires": {"memory_required": 128}
+}
