@@ -167,9 +167,9 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	// (implementation §2.4).
 	n.cutOpen()
 	// The cut ended the session's Attach; what is still in flight finishes and
-	// sends its status, so a Logic Container whose version ends the process
-	// reads why (implementation §3, The interface version). stopTimeout bounds
-	// a request that does not finish.
+	// sends its status, so a Logic Container whose Hello ends the process
+	// receives its FAILED_PRECONDITION. After stopTimeout the connections are
+	// closed, and the handlers still running are awaited all the same.
 	stopped := make(chan struct{})
 	go func() {
 		g.GracefulStop()
@@ -190,7 +190,7 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 }
 
 // drainTimeout is how long the end of the process waits for the outbox, and
-// stopTimeout for the requests still in flight.
+// stopTimeout how long the requests in flight keep their connections.
 const (
 	drainTimeout = 3 * time.Second
 	stopTimeout  = 3 * time.Second
