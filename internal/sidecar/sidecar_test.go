@@ -185,8 +185,8 @@ func (l *logic) read() {
 	}
 }
 
-// attach dials the socket until it exists and opens the session with a Hello
-// of minor; it returns the error of the first answer.
+// attach dials the socket until it exists, for up to ten seconds, and opens
+// the session with a Hello of minor; it returns the error of the first answer.
 func (f *fixture) attach(minor uint32) (*logic, error) {
 	f.t.Helper()
 	conn, err := grpc.NewClient("unix://"+f.socket, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -198,8 +198,9 @@ func (f *fixture) attach(minor uint32) (*logic, error) {
 	f.t.Cleanup(cut)
 	client := nriv1.NewNodeRuntimeClient(conn)
 	var stream nriv1.NodeRuntime_AttachClient
+	deadline := time.Now().Add(10 * time.Second)
 	for {
-		stream, err = client.Attach(ctx, grpc.WaitForReady(true))
+		stream, err = client.Attach(ctx)
 		if err == nil {
 			err = stream.Send(&nriv1.LogicMessage{Body: &nriv1.LogicMessage_Hello{Hello: &nriv1.Hello{Minor: minor}}})
 		}
@@ -215,7 +216,7 @@ func (f *fixture) attach(minor uint32) (*logic, error) {
 			go l.read()
 			return l, nil
 		}
-		if status.Code(err) != codes.Unavailable || f.Ctx.Err() != nil {
+		if status.Code(err) != codes.Unavailable || f.Ctx.Err() != nil || time.Now().After(deadline) {
 			return nil, err
 		}
 		time.Sleep(50 * time.Millisecond)

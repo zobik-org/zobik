@@ -164,7 +164,18 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	// A session still open is cut: its tasks fail before the process ends
 	// (implementation §2.4).
 	n.cutOpen()
-	g.Stop()
+	// The streams ending get a moment to send their status, so a Logic
+	// Container whose version ends the process reads why.
+	stopped := make(chan struct{})
+	go func() {
+		g.GracefulStop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(stopTimeout):
+		g.Stop()
+	}
 	out.drain(drainTimeout)
 	if err := context.Cause(ctx); !errors.Is(err, context.Canceled) {
 		return err
@@ -172,8 +183,12 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	return nil
 }
 
-// drainTimeout is how long the end of the process waits for the outbox.
-const drainTimeout = 3 * time.Second
+// drainTimeout is how long the end of the process waits for the outbox, and
+// stopTimeout for the streams still open.
+const (
+	drainTimeout = 3 * time.Second
+	stopTimeout  = time.Second
+)
 
 // prune forgets the old delivered ids, at startup and every hour.
 func prune(ctx context.Context, st *state) {
