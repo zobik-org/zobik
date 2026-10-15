@@ -14,6 +14,9 @@ const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
 func announced(t *testing.T, data map[string]any) *Event {
 	t.Helper()
+	if _, ok := data["requester_identity"]; !ok {
+		data["requester_identity"] = "node-a"
+	}
 	e, err := NewEvent(TypeAnnounced, "node-a", "task-1", data)
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +41,8 @@ func TestValidate(t *testing.T) {
 		"configversion alone":         {func(e *Event) { e.ConfigVersion = "" }, "configversion"},
 		"data not an object":          {func(e *Event) { e.Data = json.RawMessage(`"x"`) }, "data: expected object"},
 		"null field":                  {func(e *Event) { e.Data = json.RawMessage(`{"topic":null}`) }, "data: topic: null"},
+		"announcement to no one":      {func(e *Event) { e.Data = json.RawMessage(`{"topic":"echo"}`) }, "requester_identity"},
+		"requester of two terms":      {func(e *Event) { e.Data = json.RawMessage(`{"topic":"echo","requester_identity":"a.b"}`) }, "requester_identity"},
 		"wrong field type":            {func(e *Event) { e.Data = json.RawMessage(`{"current_attempts":"2"}`) }, "current_attempts"},
 		"embedding outside announced": {func(e *Event) { e.Type = TypeProposed }, "task_embedding"},
 		"text outside announced": {func(e *Event) {

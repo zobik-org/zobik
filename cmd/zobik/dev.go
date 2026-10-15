@@ -115,6 +115,7 @@ func publishCmd(ctx context.Context, args []string) error {
 	task := fs.String("task", "", "the event's subject: the TaskID (default: a new one)")
 	source := fs.String("source", "zobik-publish", "the event's source")
 	data := fs.String("data", "{}", "the event's data, as a JSON object")
+	requester := fs.String("requester", "zobik-publish", "the announcement's requester_identity, toward which its terminal event travels")
 	text := fs.String("text", "", "the announcement's task_text, whose task_embedding is generated in the current vector space")
 	traceparent := fs.String("traceparent", "", "the W3C traceparent (default: a new trace for task.* events)")
 	configVersion := fs.String("configversion", "v0", "the configversion, stamped with traceparent")
@@ -134,6 +135,9 @@ func publishCmd(ctx context.Context, args []string) error {
 	}
 	if *text != "" {
 		d["task_text"] = *text
+	}
+	if _, ok := d["requester_identity"]; !ok && *typ == bus.TypeAnnounced {
+		d["requester_identity"] = *requester
 	}
 	if *topic != "" && *typ != bus.TypeAssigned && *typ != bus.TypeRejected {
 		if _, ok := d["topic"]; !ok {
