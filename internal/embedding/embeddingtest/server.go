@@ -22,39 +22,49 @@ type Request struct {
 	Input string
 }
 
-// Server is the fake endpoint. An input with a vector set answers with it; any
+// Handler is the fake endpoint. An input with a vector set answers with it; any
 // other, with one derived from its hash.
-type Server struct {
-	*httptest.Server
-
+type Handler struct {
 	mu       sync.Mutex
 	vectors  map[string][]float32
 	requests []Request
 }
 
+// NewHandler returns the endpoint with no vector set.
+func NewHandler() *Handler {
+	return &Handler{vectors: map[string][]float32{}}
+}
+
+// Server is the endpoint served on a local port.
+type Server struct {
+	*httptest.Server
+	*Handler
+}
+
 // NewServer starts the endpoint and stops it when the test ends.
 func NewServer(t testing.TB) *Server {
-	s := &Server{vectors: map[string][]float32{}}
-	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
+	h := NewHandler()
+	s := &Server{Server: httptest.NewServer(h), Handler: h}
 	t.Cleanup(s.Close)
 	return s
 }
 
 // Set fixes the vector the endpoint answers input with, prefix included.
-func (s *Server) Set(input string, v []float32) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.vectors[input] = v
+func (h *Handler) Set(input string, v []float32) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.vectors[input] = v
 }
 
 // Requests returns the calls received so far.
-func (s *Server) Requests() []Request {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]Request(nil), s.requests...)
+func (h *Handler) Requests() []Request {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]Request(nil), h.requests...)
 }
 
-func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP answers POST /v1/embeddings.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost || r.URL.Path != "/v1/embeddings" {
 		http.NotFound(w, r)
 		return
@@ -73,16 +83,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		Embedding []float32 `json:"embedding"`
 	}
 	data := make([]datum, len(req.Input))
-	s.mu.Lock()
+	h.mu.Lock()
 	for i, in := range req.Input {
-		s.requests = append(s.requests, Request{Model: req.Model, Input: in})
-		v, ok := s.vectors[in]
+		h.requests = append(h.requests, Request{Model: req.Model, Input: in})
+		v, ok := h.vectors[in]
 		if !ok {
 			v = derive(in)
 		}
 		data[i] = datum{Object: "embedding", Index: i, Embedding: v}
 	}
-	s.mu.Unlock()
+	h.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"object": "list",

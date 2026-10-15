@@ -130,8 +130,12 @@ func cycle(t *testing.T, events <-chan tapEvent, trace string) {
 	timeout := time.After(time.Minute)
 	for len(want) > 0 || !closed {
 		var e tapEvent
+		var ok bool
 		select {
-		case e = <-events:
+		case e, ok = <-events:
+			if !ok {
+				t.Fatalf("trace %s: zobik tap ended, missing %v, root closed: %v", trace, want, closed)
+			}
 		case <-timeout:
 			t.Fatalf("trace %s: missing %v, root closed: %v", trace, want, closed)
 		}

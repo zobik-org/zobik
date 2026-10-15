@@ -45,6 +45,7 @@ func TestBus(t *testing.T) {
 
 type network struct {
 	name, dir, bin string
+	root           string // the repository, where images are built from
 }
 
 func newNetwork(t *testing.T, ctx context.Context) *network {
@@ -55,13 +56,9 @@ func newNetwork(t *testing.T, ctx context.Context) *network {
 	}
 	suffix := make([]byte, 4)
 	rand.Read(suffix)
-	z := &network{name: "e2e" + hex.EncodeToString(suffix), dir: t.TempDir(), bin: filepath.Join(t.TempDir(), "zobik")}
+	z := &network{name: "e2e" + hex.EncodeToString(suffix), dir: t.TempDir(), bin: filepath.Join(t.TempDir(), "zobik"), root: root}
 
-	build := exec.CommandContext(ctx, "docker", "build", "-q", "-f", "images/zobik.Dockerfile", "--build-arg", "TAGS=dev", "-t", "zobik:dev", ".")
-	build.Dir = root
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building the image: %v\n%s", err, out)
-	}
+	z.build(t, ctx, "images/zobik.Dockerfile", "zobik:dev", "--build-arg", "TAGS=dev")
 	gobuild := exec.CommandContext(ctx, "go", "build", "-tags", "dev", "-o", z.bin, "./cmd/zobik")
 	gobuild.Dir = root
 	if out, err := gobuild.CombinedOutput(); err != nil {
@@ -71,11 +68,21 @@ func newNetwork(t *testing.T, ctx context.Context) *network {
 	return z
 }
 
+// build builds an image from a Dockerfile of the repository.
+func (z *network) build(t *testing.T, ctx context.Context, dockerfile, tag string, args ...string) {
+	t.Helper()
+	build := exec.CommandContext(ctx, "docker", append(append([]string{"build", "-q", "-f", dockerfile, "-t", tag}, args...), ".")...)
+	build.Dir = z.root
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building %s: %v\n%s", tag, err, out)
+	}
+}
+
 // cmd runs a subcommand on the test's network. The network's flags go right
 // after the command's words, before the arguments the command parses itself.
 func (z *network) cmd(ctx context.Context, stdin string, args ...string) *exec.Cmd {
 	words := 1
-	if args[0] == "config" {
+	if args[0] == "config" || args[0] == "node" {
 		words = 2
 	}
 	full := append(append([]string{}, args[:words]...), "--network", z.name, "--dir", z.dir)

@@ -22,6 +22,6 @@ updates:
       python:
         patterns: ["*"]
   - package-ecosystem: docker
-    directory: /images
+    directories: [/images, /test/e2e/embeddings]
     schedule:
       interval: weekly
