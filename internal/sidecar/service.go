@@ -19,6 +19,9 @@ import (
 type session struct {
 	out  chan *nriv1.SidecarMessage
 	done chan struct{}
+	// unbind ends the Attach and unbinds the node from its consumer; the cut
+	// calls it.
+	unbind context.CancelFunc
 }
 
 func (s *session) send(m *nriv1.SidecarMessage) {
@@ -68,11 +71,12 @@ func (sv *service) Attach(stream nriv1.NodeRuntime_AttachServer) error {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 
-	s := &session{out: make(chan *nriv1.SidecarMessage, 64), done: make(chan struct{})}
-	if !sv.n.attach(s) {
-		return status.Error(codes.FailedPrecondition, "a session is already open")
-	}
 	ctx, unbind := context.WithCancel(stream.Context())
+	s := &session{out: make(chan *nriv1.SidecarMessage, 64), done: make(chan struct{}), unbind: unbind}
+	if err := sv.n.attach(s); err != nil {
+		unbind()
+		return err
+	}
 	defer func() {
 		unbind()
 		close(s.done)
@@ -104,6 +108,8 @@ func (sv *service) Attach(stream nriv1.NodeRuntime_AttachServer) error {
 			}
 		case err := <-recvErr:
 			return err
+		case <-ctx.Done():
+			return status.Error(codes.Unavailable, "the session was cut")
 		}
 	}
 }

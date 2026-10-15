@@ -148,7 +148,9 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	}
 	n := newNode(id, startup.Credential, cred, js, nc, cfg, st, out, o.Shared)
 	n.clearAreas()
-	g := grpc.NewServer(grpc.KeepaliveParams(keepaliveServer), grpc.KeepaliveEnforcementPolicy(keepalivePolicy))
+	// Stopping waits for the handlers, so none writes to the outbox after it drains.
+	g := grpc.NewServer(grpc.KeepaliveParams(keepaliveServer), grpc.KeepaliveEnforcementPolicy(keepalivePolicy),
+		grpc.WaitForHandlers(true))
 	nriv1.RegisterNodeRuntimeServer(g, &service{
 		n: n, store: contextv1.NewContextStoreClient(conn),
 		speaks: o.Speaks, declared: declared,
@@ -164,7 +166,22 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	// A session still open is cut: its tasks fail before the process ends
 	// (implementation §2.4).
 	n.cutOpen()
-	g.Stop()
+	// The cut ended the session's Attach; what is still in flight finishes and
+	// sends its status, so a Logic Container whose Hello ends the process
+	// receives its FAILED_PRECONDITION. After stopTimeout the connections are
+	// closed, and the handlers still running are awaited all the same.
+	stopped := make(chan struct{})
+	go func() {
+		g.GracefulStop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(stopTimeout):
+		g.Stop()
+		<-stopped
+	}
+	// What those requests left in the outbox goes out with the rest.
 	out.drain(drainTimeout)
 	if err := context.Cause(ctx); !errors.Is(err, context.Canceled) {
 		return err
@@ -172,8 +189,12 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	return nil
 }
 
-// drainTimeout is how long the end of the process waits for the outbox.
-const drainTimeout = 3 * time.Second
+// drainTimeout is how long the end of the process waits for the outbox, and
+// stopTimeout how long the requests in flight keep their connections.
+const (
+	drainTimeout = 3 * time.Second
+	stopTimeout  = 3 * time.Second
+)
 
 // prune forgets the old delivered ids, at startup and every hour.
 func prune(ctx context.Context, st *state) {
