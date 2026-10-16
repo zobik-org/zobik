@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zobik.org/schemas/trace_query.reconstruction.schema.json",
-  "description": "The portion reconstruction the Tracing Collector writes in answer to a trace_query (architecture §3.10, implementation §1.2.6, §10.1). It is the list of what passes: the structure, topics, outcomes and metrics of the trace, without node identities.",
+  "description": "The portion reconstruction the Tracing Collector writes in answer to a trace_query (architecture §3.10, implementation §1.2.6, §10.1). It is the list of what passes: the structure of the trace, the topic and text of each task, its outcomes and metrics, without node identities.",
   "type": "object",
   "required": ["trace_id", "tasks"],
   "properties": {
@@ -14,14 +14,18 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["task_id", "outcome", "started_at"],
+        "required": ["task_id", "span_id", "outcome", "started_at"],
         "properties": {
           "task_id": {
             "description": "The task's TaskID; in the root, the TraceID.",
             "type": "string"
           },
-          "parent_task_id": {
-            "description": "The task it was announced from. Absent in the root.",
+          "span_id": {
+            "description": "The span's ID (implementation §1.2.6). A reassigned task has one per assignment.",
+            "type": "string"
+          },
+          "parent_span_id": {
+            "description": "The span of the task it was announced from. Absent in the root.",
             "type": "string"
           },
           "topic": {
@@ -29,7 +33,7 @@
             "type": "string"
           },
           "task_text": {
-            "description": "The announcement's text (architecture §3.7.4).",
+            "description": "The announcement's text (architecture §3.7.4, §3.10).",
             "type": "string"
           },
           "current_attempts": {
@@ -42,7 +46,7 @@
             "type": "string"
           },
           "outcome": {
-            "description": "How the span ended (implementation §1.2.6). Known values: open, completed, failed, aborted, lease_expired.",
+            "description": "How the span ended (implementation §1.2.6), or open if it is still open. Known values: open, completed, failed, aborted, lease_expired.",
             "type": "string"
           },
           "failure_code": {

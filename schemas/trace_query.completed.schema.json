@@ -6,14 +6,9 @@
   "required": ["context_ref"],
   "properties": {
     "context_ref": {
-      "description": "Where the reconstruction is in the Context Store: the portion reconstruction of the query task's section.",
+      "description": "Where the reconstruction is in the Context Store: the portion reconstruction of the query task's section. Its fields are those of data.schema.json.",
       "type": "object",
-      "required": ["trace_id", "task_id", "name"],
-      "properties": {
-        "trace_id": {"type": "string"},
-        "task_id": {"type": "string"},
-        "name": {"type": "string"}
-      }
+      "properties": {}
     }
   }
 }
