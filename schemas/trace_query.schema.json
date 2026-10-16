@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/trace_query.schema.json",
+  "description": "The data of a task.announced on trace_query (architecture §3.10, implementation §10.1). It carries no fields of its own: the queried trace is the one of the announcement's traceparent. The common fields are in data.schema.json.",
+  "type": "object",
+  "properties": {}
+}

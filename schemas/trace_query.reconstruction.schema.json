@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/trace_query.reconstruction.schema.json",
+  "description": "The portion reconstruction the Tracing Collector writes in answer to a trace_query (architecture §3.10, implementation §1.2.6, §10.1). It is the list of what passes: the structure, topics, outcomes and metrics of the trace, without node identities.",
+  "type": "object",
+  "required": ["trace_id", "tasks"],
+  "properties": {
+    "trace_id": {
+      "description": "The queried trace.",
+      "type": "string"
+    },
+    "tasks": {
+      "description": "One entry per span of the trace, the root included (architecture §3.2).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "outcome", "started_at"],
+        "properties": {
+          "task_id": {
+            "description": "The task's TaskID; in the root, the TraceID.",
+            "type": "string"
+          },
+          "parent_task_id": {
+            "description": "The task it was announced from. Absent in the root.",
+            "type": "string"
+          },
+          "topic": {
+            "description": "The topic it was announced on. Absent in the root.",
+            "type": "string"
+          },
+          "task_text": {
+            "description": "The announcement's text (architecture §3.7.4).",
+            "type": "string"
+          },
+          "current_attempts": {
+            "description": "That of the announcement (architecture §3.3).",
+            "type": "integer",
+            "minimum": 1
+          },
+          "previous_attempt": {
+            "description": "The TaskID of the attempt it reopens (architecture §3.3).",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "How the span ended (implementation §1.2.6). Known values: open, completed, failed, aborted, lease_expired.",
+            "type": "string"
+          },
+          "failure_code": {
+            "description": "That of the task.failed (architecture §3.3).",
+            "type": "string"
+          },
+          "failure_reason": {
+            "description": "That of the task.failed (architecture §3.3).",
+            "type": "string"
+          },
+          "metrics": {
+            "description": "Those of the terminal event (architecture §3.10).",
+            "type": "object",
+            "required": ["tokens_in", "tokens_out", "cost", "duration_ms"],
+            "properties": {
+              "tokens_in": {"type": "integer", "minimum": 0},
+              "tokens_out": {"type": "integer", "minimum": 0},
+              "cost": {"type": "number", "minimum": 0},
+              "duration_ms": {"type": "integer", "minimum": 0}
+            }
+          },
+          "started_at": {
+            "description": "When the span opened.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "description": "When the span ended. Absent while open.",
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}
