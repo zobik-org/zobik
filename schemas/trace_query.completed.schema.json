@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/trace_query.completed.schema.json",
+  "description": "The data of the task.completed with which the Tracing Collector closes a trace_query (architecture §3.10, implementation §10.1). The reconstruction travels by Claim-Check in context_ref, with the shape of trace_query.reconstruction.schema.json. The common fields are in data.schema.json.",
+  "type": "object",
+  "required": ["context_ref"],
+  "properties": {
+    "context_ref": {
+      "description": "Where the reconstruction is in the Context Store: the portion reconstruction of the query task's section. Its fields are those of data.schema.json.",
+      "type": "object",
+      "properties": {}
+    }
+  }
+}
