@@ -56,6 +56,8 @@ type Role struct {
 	Consumers func(id string) []bus.Consumer
 	// Args are its invocation after zobik run.
 	Args []string
+	// NamesNetwork adds the network's name to Args, as --network.
+	NamesNetwork bool
 	// WaitsFor are the units it waits for besides the NATS server
 	// (implementation §6, The roles of the binary).
 	WaitsFor []string
@@ -101,6 +103,18 @@ var Roles = []Role{
 		WaitsFor: []string{"config"}, Data: true,
 		Consumers: func(id string) []bus.Consumer {
 			return []bus.Consumer{{Stream: "task", Name: id, Filters: []string{"task.completed.>", "task.failed.>", "task.aborted.>"}}}
+		}},
+	// The Tracing Collector observes every event that carries traceparent, on
+	// the three families, and keeps the live traces in its data volume
+	// (architecture §3.2, implementation §1.2.6).
+	{Unit: "tracing_collector", Scope: bus.TracingCollectorScope,
+		Args: []string{"--role=tracing_collector"}, NamesNetwork: true, WaitsFor: []string{"config"}, Data: true,
+		Consumers: func(id string) []bus.Consumer {
+			return []bus.Consumer{
+				{Stream: "task", Name: id, Filters: []string{"task.>"}},
+				{Stream: "prop", Name: id, Filters: []string{"prop.>"}},
+				{Stream: "notice", Name: id, Filters: []string{"notice.>"}},
+			}
 		}},
 	// The Spawner's container comes with its decisions; until then the act of
 	// provisioning runs with its material (Provision).
@@ -324,13 +338,17 @@ func roleSpec(n names, r Role, image, port string) Spec {
 	if r.Data {
 		mounts = append(mounts, mount.Mount{Type: mount.TypeVolume, Source: n.volume(r.Unit + "_data"), Target: role.DataDir})
 	}
+	cmd := append([]string{"run"}, r.Args...)
+	if r.NamesNetwork {
+		cmd = append(cmd, "--network="+n.network)
+	}
 	return Spec{
 		Name:        n.container(r.Unit),
 		Alias:       r.Unit,
 		Network:     n.dockerNetwork(),
 		Labels:      n.labels(),
 		Image:       image,
-		Cmd:         append([]string{"run"}, r.Args...),
+		Cmd:         cmd,
 		Mounts:      mounts,
 		Restart:     true,
 		Healthcheck: roleHealthcheck,
