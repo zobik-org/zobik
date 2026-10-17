@@ -76,6 +76,21 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// A task's span derives from its task.assigned, and what is emitted from the
+// task keeps the trace and the flags.
+func TestSpan(t *testing.T) {
+	span := SpanID("4f1c2a8e-6d3b-4c7a-9e2f-1b5d8a0c3e71")
+	if span != "44c4e484077266a1" {
+		t.Errorf("SpanID = %s", span)
+	}
+	if got, want := WithParent(traceparent, span), "00-4bf92f3577b34da6a3ce929d0e0e4736-44c4e484077266a1-01"; got != want {
+		t.Errorf("WithParent = %s, want %s", got, want)
+	}
+	if got := WithParent("not-a-traceparent", span); got != "" {
+		t.Errorf("WithParent of a malformed traceparent = %q", got)
+	}
+}
+
 func TestCheckSubject(t *testing.T) {
 	e := announced(t, map[string]any{"topic": "echo"})
 	for subject, ok := range map[string]bool{

@@ -118,17 +118,23 @@ func TestSubtask(t *testing.T) {
 	ep := newEndpoint(t)
 	f := newFixture(t, options{embeddings: ep.URL})
 	announced := f.Tap(bus.SubjectAnnounced(subtopic))
+	assigned := f.Tap(bus.SubjectAddressed(bus.TypeAssigned, f.id))
 	l, err := f.attach(0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	parent := f.take(l, nil)
+	a := await(t, assigned, 5*time.Second)
 
 	ack, err := l.client.Publish(f.Ctx, announceReq(parent, subtopic, "", `{"task_text":"find it","detail":1}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := await(t, announced, 5*time.Second)
+	// The subtask names as its parent the span of the task it is announced from (architecture §3.2).
+	if want := "00-" + bus.TraceID(a.TraceParent) + "-" + bus.SpanID(a.ID) + "-01"; e.TraceParent != want {
+		t.Errorf("traceparent %s, want %s", e.TraceParent, want)
+	}
 	d := dataOf(t, e)
 	if e.Subject != ack.GetTaskId() || e.Source != f.id || d["requester_identity"] != f.id || d["workspace"] != "repo" ||
 		d["task_embedding"] == nil || d["model_id"] == nil || d["detail"] != 1.0 || d["current_attempts"] != nil {
