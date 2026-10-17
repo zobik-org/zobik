@@ -146,8 +146,16 @@ var SpawnerScope = Scope{
 	Subscribe: inboxSub,
 }
 
+// TracingCollectorScope is the Tracing Collector's: it observes every event that
+// carries traceparent (architecture §3.2), and publishes no event.
+var TracingCollectorScope = Scope{
+	Role:      "tracing_collector",
+	Publish:   join(consumerPub, configRead),
+	Subscribe: inboxSub,
+}
+
 // RoleScopes are the scopes zobik init registers for the structural roles.
-var RoleScopes = []Scope{ConfigScope, TaskBrokerScope, ContextScope, ChannelScope, SpawnerScope}
+var RoleScopes = []Scope{ConfigScope, TaskBrokerScope, ContextScope, ChannelScope, SpawnerScope, TracingCollectorScope}
 
 // NodeScope is every node's: it announces, proposes and renews under its own
 // identity, closes the tasks of any destination and pulls from its consumer

@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func applySubstrate(t *testing.T, ctx context.Context, js jetstream.JetStream, i
 	return &s
 }
 
-var testIDs = map[string]string{"config": "UCONFIG", "task_broker": "UBROKER", "context": "UCONTEXT", "channel_operator": "UCHANNEL"}
+var testIDs = map[string]string{"config": "UCONFIG", "task_broker": "UBROKER", "context": "UCONTEXT", "channel_operator": "UCHANNEL", "tracing_collector": "UTRACING"}
 
 func TestSubstrate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -84,14 +85,17 @@ func TestSubstrate(t *testing.T) {
 	}
 
 	want := map[string][]string{
-		"task/UCONFIG":  {"task.announced.config_change", "task.assigned.UCONFIG", "task.rejected.UCONFIG"},
-		"task/UBROKER":  {"task.announced.>", "task.completed.>", "task.failed.>", "task.aborted.>"},
-		"prop/UBROKER":  {"prop.>"},
-		"task/UCONTEXT": {"task.completed.>", "task.failed.>", "task.aborted.>"},
-		"task/UCHANNEL": {"task.announced.hitl_contact_operator", "task.assigned.UCHANNEL", "task.rejected.UCHANNEL", "task.completed.UCHANNEL.>", "task.failed.UCHANNEL.>", "task.aborted.UCHANNEL.>"},
+		"task/UCONFIG":    {"task.announced.config_change", "task.assigned.UCONFIG", "task.rejected.UCONFIG"},
+		"task/UBROKER":    {"task.announced.>", "task.completed.>", "task.failed.>", "task.aborted.>"},
+		"prop/UBROKER":    {"prop.>"},
+		"task/UCONTEXT":   {"task.completed.>", "task.failed.>", "task.aborted.>"},
+		"task/UCHANNEL":   {"task.announced.hitl_contact_operator", "task.assigned.UCHANNEL", "task.rejected.UCHANNEL", "task.completed.UCHANNEL.>", "task.failed.UCHANNEL.>", "task.aborted.UCHANNEL.>"},
+		"task/UTRACING":   {"task.>"},
+		"prop/UTRACING":   {"prop.>"},
+		"notice/UTRACING": {"notice.>"},
 	}
 	for key, filters := range want {
-		stream, name := key[:4], key[5:]
+		stream, name, _ := strings.Cut(key, "/")
 		c, err := js.Consumer(ctx, stream, name)
 		if err != nil {
 			t.Errorf("%s: %v", key, err)

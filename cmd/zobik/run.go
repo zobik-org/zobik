@@ -8,21 +8,24 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"zobik.org/zobik/internal/deploy"
 	"zobik.org/zobik/internal/role"
 	"zobik.org/zobik/internal/role/channel"
 	"zobik.org/zobik/internal/role/config"
 	"zobik.org/zobik/internal/role/contextstore"
 	"zobik.org/zobik/internal/role/taskbroker"
+	"zobik.org/zobik/internal/role/tracingcollector"
 )
 
 // zobik run --role=<role> is what each role container runs; the invocation uses
 // the role's identifier (implementation §6, The roles of the binary).
 func runCmd(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	name := fs.String("role", "", "the role: config, task_broker, context or channel")
+	name := fs.String("role", "", "the role: config, task_broker, context, channel or tracing_collector")
 	audience := fs.String("audience", "", "the audience a channel serves: operator or user")
 	storeSize := fs.Int64("store-size", 0, "context: the ceiling of the content volume, in bytes (context_store_size)")
 	traceSize := fs.Int64("trace-size", 0, "context: the ceiling of one trace, in bytes (context_trace_size)")
+	network := fs.String("network", "", "tracing_collector: the network's name, the spans' service.name")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -48,6 +51,19 @@ func runCmd(ctx context.Context, args []string) error {
 		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
 			return channel.Run(ctx, rt, nc, channel.Options{
 				Audience: *audience, Listen: ":" + role.PortChannel, ContextAddr: role.AddrContext,
+			})
+		}
+	case "tracing_collector":
+		if *network == "" {
+			return fmt.Errorf("the tracing_collector role needs --network")
+		}
+		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
+			backend, err := tracingcollector.Dial(ctx, deploy.TracingAlias+":"+deploy.TracingOTLP)
+			if err != nil {
+				return err
+			}
+			return tracingcollector.Run(ctx, rt, nc, tracingcollector.Options{
+				Network: *network, Backend: backend, DataDir: role.DataDir,
 			})
 		}
 	default:

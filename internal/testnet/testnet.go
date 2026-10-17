@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -171,6 +172,15 @@ func (n *Net) Credential(unit string) string {
 // ready. It stops when the test ends.
 func (n *Net) Start(unit string, body role.Body) *role.Runtime {
 	n.T.Helper()
+	rt, _ := n.StartStoppable(unit, body)
+	return rt
+}
+
+// StartStoppable is Start, and also returns stop, which ends the role and
+// waits for its body to return: a role can be started again over the same
+// volume, as its restart does.
+func (n *Net) StartStoppable(unit string, body role.Body) (*role.Runtime, func()) {
+	n.T.Helper()
 	rt, err := role.Load(unit, n.dirs[unit])
 	if err != nil {
 		n.T.Fatal(err)
@@ -187,7 +197,9 @@ func (n *Net) Start(unit string, body role.Body) *role.Runtime {
 			n.T.Errorf("%s: %v", unit, err)
 		}
 	}()
-	n.T.Cleanup(func() { stop(); <-done; nc.Close() })
+	var once sync.Once
+	end := func() { once.Do(func() { stop(); <-done; nc.Close() }) }
+	n.T.Cleanup(end)
 	for !rt.Ready() {
 		select {
 		case <-n.Ctx.Done():
@@ -195,7 +207,7 @@ func (n *Net) Start(unit string, body role.Body) *role.Runtime {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	return rt
+	return rt, end
 }
 
 // MintNode does what the act of provisioning does for a node's identity

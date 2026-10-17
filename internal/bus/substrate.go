@@ -20,7 +20,7 @@ type Consumer struct {
 
 // consumerStreams are the streams whose durable consumers are zobik init's,
 // except the nodes'.
-var consumerStreams = []string{"task", "prop"}
+var consumerStreams = []string{"task", "prop", "notice"}
 
 // metaNode marks a node's consumer, which the Spawner creates and deletes with
 // the node and zobik init leaves alone.
