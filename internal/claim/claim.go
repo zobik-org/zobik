@@ -98,6 +98,13 @@ func (a *Assignment) Inherited() map[string]any {
 	return out
 }
 
+// ChildTraceParent is the traceparent of what is emitted from the task—a
+// subtask's announcement or a notice—: the task's trace, naming as the parent
+// the span its task.assigned derives (architecture §3.2, implementation §1.2.6).
+func (a *Assignment) ChildTraceParent() string {
+	return bus.WithParent(a.Assigned.TraceParent, bus.SpanID(a.Assigned.ID))
+}
+
 // Assigned matches a task.assigned with the announcement it answers. It
 // returns false for one it did not propose on, or no longer retains.
 func (c *Claimant) Assigned(e *bus.Event) (*Assignment, bool) {

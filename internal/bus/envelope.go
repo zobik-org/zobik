@@ -2,6 +2,9 @@ package bus
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -233,4 +236,27 @@ func TraceID(traceparent string) string {
 		return ""
 	}
 	return parts[1]
+}
+
+// SpanID is the span of the task a task.assigned awards, from that event's id:
+// the first 8 bytes of its SHA-256, or the next 8 if those are all zero, which
+// W3C does not admit (implementation §1.2.6).
+func SpanID(eventID string) string {
+	sum := sha256.Sum256([]byte(eventID))
+	span := sum[:8]
+	if binary.BigEndian.Uint64(span) == 0 {
+		span = sum[8:16]
+	}
+	return hex.EncodeToString(span)
+}
+
+// WithParent returns traceparent naming span as the parent, on the same trace
+// and with the same flags, or "" if traceparent is not one.
+func WithParent(traceparent, span string) string {
+	parts := strings.Split(traceparent, "-")
+	if len(parts) != 4 || len(parts[1]) != 32 {
+		return ""
+	}
+	parts[2] = span
+	return strings.Join(parts, "-")
 }

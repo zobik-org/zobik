@@ -156,7 +156,7 @@ func (n *node) emit(t *task, taskID string, data map[string]any, embed, schema b
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
-	e.TraceParent, e.ConfigVersion = t.a.Assigned.TraceParent, t.a.Assigned.ConfigVersion
+	e.TraceParent, e.ConfigVersion = t.a.ChildTraceParent(), t.a.Assigned.ConfigVersion
 	if err := e.Validate(); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
