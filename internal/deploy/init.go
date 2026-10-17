@@ -24,6 +24,13 @@ type Options struct {
 	Image string
 	// Scopes are the roles the account issues for.
 	Scopes []bus.Scope
+	// Tenant names a tenant on this host for the network to join; empty creates
+	// a new one (implementation §6, The deployment parameters).
+	Tenant string
+	// TracingUI is the host port on 127.0.0.1 where a new tracing backend
+	// publishes its query service, or none if empty. Only a development binary
+	// publishes it, because the UI does not authenticate.
+	TracingUI string
 }
 
 // actIdentityLifetime bounds the identity an ephemeral act connects with: it
@@ -40,6 +47,10 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 		return err
 	}
 	if err := e.CheckOwner(ctx, names{o.Network, root}); err != nil {
+		return err
+	}
+	t, err := chooseTenant(ctx, e, o.Dir, o.Tenant)
+	if err != nil {
 		return err
 	}
 	m, err := loadOrMint(o.Dir, o.Network, o.User, o.Password, o.Scopes)
@@ -93,6 +104,14 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 		return err
 	}
 	if err := runAct(ctx, e, n, o.Image, actSubstrate, consoleCreds, File{Path: actSubstratePath, Mode: 0o600, Data: substrate}); err != nil {
+		return err
+	}
+
+	// The tenant-wide pieces (implementation §6, Installation and zobik init).
+	if err := recordTenant(o.Dir, t); err != nil {
+		return err
+	}
+	if err := ensureTracing(ctx, e, n, t, o.TracingUI); err != nil {
 		return err
 	}
 	return startRoles(ctx, e, n, o.Dir, o.Image)

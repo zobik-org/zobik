@@ -298,6 +298,123 @@ func (e *Engine) EnsureCurrent(ctx context.Context, s Spec) error {
 	return e.EnsureRunning(ctx, s)
 }
 
+// EnsureShared is EnsureCurrent for a container that the networks of a tenant
+// share (implementation §6, The Docker network): it also connects it to
+// s.Network with s.Alias. One replaced for its image keeps the ports it
+// published and is connected again to every network it was on, so s.Publish
+// applies only to a new container.
+func (e *Engine) EnsureShared(ctx context.Context, s Spec) error {
+	info, err := e.c.ContainerInspect(ctx, s.Name, client.ContainerInspectOptions{})
+	var attached map[string]*network.EndpointSettings
+	if err == nil {
+		img, err := e.c.ImageInspect(ctx, s.Image)
+		if err != nil {
+			return err
+		}
+		if info.Container.Image != img.ID {
+			s.Publish = published(info.Container.HostConfig)
+			if info.Container.NetworkSettings != nil {
+				attached = info.Container.NetworkSettings.Networks
+			}
+			if _, err := e.c.ContainerRemove(ctx, s.Name, client.ContainerRemoveOptions{Force: true}); err != nil {
+				return err
+			}
+		}
+	} else if !cerrdefs.IsNotFound(err) {
+		return err
+	}
+	if err := e.EnsureRunning(ctx, s); err != nil {
+		return err
+	}
+	for net, ep := range attached {
+		if err := e.connect(ctx, s.Name, net, ep.Aliases); err != nil {
+			return err
+		}
+	}
+	return e.connect(ctx, s.Name, s.Network, []string{s.Alias})
+}
+
+// connect connects a container to a Docker network with aliases, unless it is
+// connected already.
+func (e *Engine) connect(ctx context.Context, name, net string, aliases []string) error {
+	info, err := e.c.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		return err
+	}
+	if ns := info.Container.NetworkSettings; ns != nil && ns.Networks[net] != nil {
+		return nil
+	}
+	_, err = e.c.NetworkConnect(ctx, net, client.NetworkConnectOptions{
+		Container:      name,
+		EndpointConfig: &network.EndpointSettings{Aliases: aliases},
+	})
+	return err
+}
+
+// RemoveNetwork removes a network's Docker network, disconnecting first the
+// containers of the tenant still connected to it: removing a network leaves its
+// tenant's pieces (implementation §6, The Docker network).
+func (e *Engine) RemoveNetwork(ctx context.Context, name string) error {
+	net, err := e.c.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+	if cerrdefs.IsNotFound(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	for id := range net.Network.Containers {
+		if _, err := e.c.NetworkDisconnect(ctx, name, client.NetworkDisconnectOptions{Container: id, Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+			return err
+		}
+	}
+	_, err = e.c.NetworkRemove(ctx, name, client.NetworkRemoveOptions{})
+	return err
+}
+
+// exists says whether the engine has a container by that name.
+func (e *Engine) exists(ctx context.Context, name string) (bool, error) {
+	_, ok, err := e.containerLabels(ctx, name)
+	return ok, err
+}
+
+// containerLabels returns a container's labels, and whether it exists.
+func (e *Engine) containerLabels(ctx context.Context, name string) (map[string]string, bool, error) {
+	info, err := e.c.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if cerrdefs.IsNotFound(err) {
+		return nil, false, nil
+	} else if err != nil {
+		return nil, false, err
+	}
+	if info.Container.Config == nil {
+		return nil, true, nil
+	}
+	return info.Container.Config.Labels, true, nil
+}
+
+// volumeLabels returns a volume's labels, and whether it exists.
+func (e *Engine) volumeLabels(ctx context.Context, name string) (map[string]string, bool, error) {
+	v, err := e.c.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
+	if cerrdefs.IsNotFound(err) {
+		return nil, false, nil
+	} else if err != nil {
+		return nil, false, err
+	}
+	return v.Volume.Labels, true, nil
+}
+
+// published is the Publish of a container, as its host configuration binds it.
+func published(host *container.HostConfig) map[string]string {
+	if host == nil || len(host.PortBindings) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for p, b := range host.PortBindings {
+		if len(b) > 0 {
+			out[p.String()] = b[0].HostPort
+		}
+	}
+	return out
+}
+
 // WaitHealthy waits until the container's health check reports it ready, and
 // fails if the container stops or timeout passes.
 func (e *Engine) WaitHealthy(ctx context.Context, name string, timeout time.Duration) error {
