@@ -86,6 +86,10 @@ func (z *network) cmd(ctx context.Context, stdin string, args ...string) *exec.C
 		words = 2
 	}
 	full := append(append([]string{}, args[:words]...), "--network", z.name, "--dir", z.dir)
+	if args[0] == "init" {
+		// The tenant's UI would take the port of the developer's own tenant.
+		full = append(full, "--tracing-ui=")
+	}
 	full = append(full, args[words:]...)
 	c := exec.CommandContext(ctx, z.bin, full...)
 	c.Stdin = strings.NewReader(stdin)
@@ -150,8 +154,14 @@ func waitFor(t *testing.T, lines <-chan string, re *regexp.Regexp) {
 	}
 }
 
-// remove takes down what the test brought up, found by the network's label.
+// remove takes down what the test brought up, found by the network's label,
+// and the tenant init created for it.
 func (z *network) remove(t *testing.T) {
+	if tenant, err := os.ReadFile(filepath.Join(z.dir, "tenant")); err == nil {
+		tracing := "zobik-tenant-" + string(tenant) + "-tracing"
+		exec.Command("docker", "rm", "-f", tracing).Run()
+		exec.Command("docker", "volume", "rm", tracing).Run()
+	}
 	label := "label=org.zobik.network=" + z.name
 	ids, _ := exec.Command("docker", "ps", "-aq", "--filter", label).Output()
 	if f := strings.Fields(string(ids)); len(f) > 0 {

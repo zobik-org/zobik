@@ -109,17 +109,25 @@ func newProvisionFixture(t *testing.T, ctx context.Context) *provisionFixture {
 // image commits testBase with changes, and removes it when the test ends.
 func (f *provisionFixture) image(t *testing.T, ctx context.Context, changes ...string) string {
 	t.Helper()
-	c, err := f.e.c.ContainerCreate(ctx, client.ContainerCreateOptions{Config: &container.Config{Image: testBase}})
+	return testImage(t, ctx, f.e, changes...)
+}
+
+func testImage(t *testing.T, ctx context.Context, e *Engine, changes ...string) string {
+	t.Helper()
+	if err := e.EnsureImage(ctx, testBase); err != nil {
+		t.Fatal(err)
+	}
+	c, err := e.c.ContainerCreate(ctx, client.ContainerCreateOptions{Config: &container.Config{Image: testBase}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.e.discard(ctx, c.ID)
-	img, err := f.e.c.ContainerCommit(ctx, c.ID, client.ContainerCommitOptions{Changes: changes})
+	defer e.discard(ctx, c.ID)
+	img, err := e.c.ContainerCommit(ctx, c.ID, client.ContainerCommitOptions{Changes: changes})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		f.e.c.ImageRemove(context.Background(), img.ID, client.ImageRemoveOptions{Force: true})
+		e.c.ImageRemove(context.Background(), img.ID, client.ImageRemoveOptions{Force: true})
 	})
 	return img.ID
 }
