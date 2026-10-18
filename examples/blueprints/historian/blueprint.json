@@ -1,0 +1,5 @@
+{
+  "artifact_ref": "zobik-historian:dev",
+  "capability_text": "Reports the history of the trace its task belongs to.",
+  "requires": {"memory_required": 128}
+}
