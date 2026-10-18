@@ -78,7 +78,7 @@ func newFixture(t *testing.T, b *backend, edit func(globalconfig.Values)) *fixtu
 
 func (f *fixture) start() func() {
 	_, stop := f.StartStoppable("tracing_collector", func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
-		return tracingcollector.Run(ctx, rt, nc, tracingcollector.Options{Network: "prueba", Backend: f.backend, DataDir: f.data})
+		return tracingcollector.Run(ctx, rt, nc, tracingcollector.Options{Network: "prueba", Backend: f.backend, DataDir: f.data, ContextAddr: f.ContextAddr})
 	})
 	return stop
 }

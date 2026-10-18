@@ -182,9 +182,7 @@ func (c *channel) followHead(ctx context.Context, l *role.Loop) {
 }
 
 func (c *channel) leaseTTL() time.Duration {
-	var ms int64
-	_ = json.Unmarshal(c.head.Load().Values["task_lease_ttl"], &ms) // the head passed its schema when it was published
-	return time.Duration(ms) * time.Millisecond
+	return c.head.Load().Duration("task_lease_ttl")
 }
 
 // responseWindow is hitl_response_window as the trace pinned it (architecture §2.3).

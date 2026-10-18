@@ -31,6 +31,14 @@ type Record struct {
 	Values Values `json:"values"`
 }
 
+// Duration reads a key the schema declares in milliseconds; the record passed
+// its schema when it was published.
+func (r *Record) Duration(key string) time.Duration {
+	var ms int64
+	_ = json.Unmarshal(r.Values[key], &ms)
+	return time.Duration(ms) * time.Millisecond
+}
+
 // V0Version is the version zobik init writes.
 const V0Version = "v0"
 
