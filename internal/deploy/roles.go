@@ -106,8 +106,9 @@ var Roles = []Role{
 		}},
 	// The Tracing Collector observes every event that carries traceparent, on
 	// the three families, and keeps the live traces in its data volume
-	// (architecture §3.2, implementation §1.2.6).
-	{Unit: "tracing_collector", Scope: bus.TracingCollectorScope,
+	// (architecture §3.2, implementation §1.2.6). Its consumer of the task
+	// family also brings it the cycle of trace_query (architecture §3.10).
+	{Unit: "tracing_collector", Scope: bus.TracingCollectorScope, Topic: "trace_query",
 		Args: []string{"--role=tracing_collector"}, NamesNetwork: true, WaitsFor: []string{"config"}, Data: true,
 		Consumers: func(id string) []bus.Consumer {
 			return []bus.Consumer{

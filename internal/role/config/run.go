@@ -74,7 +74,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 		claimant: claim.New(rt.ID, rt.Credential, js, nc, Topic),
 		context:  contextv1.NewContextStoreClient(conn),
 	}
-	s.leaseTTL.Store(int64(leaseTTL(head)))
+	s.leaseTTL.Store(int64(head.Duration("task_lease_ttl")))
 	rt.SetReady(true)
 	return s.serve(ctx, l, consumer)
 }
@@ -87,12 +87,6 @@ type store struct {
 	context  contextv1.ContextStoreClient
 	// leaseTTL is task_lease_ttl as of the last head read, in nanoseconds.
 	leaseTTL atomic.Int64
-}
-
-func leaseTTL(head *globalconfig.Record) time.Duration {
-	var ms int64
-	_ = json.Unmarshal(head.Values["task_lease_ttl"], &ms) // the head passed its schema when it was published
-	return time.Duration(ms) * time.Millisecond
 }
 
 // serve pulls the announcements of config_change and the answers to its
@@ -241,7 +235,7 @@ func (s *store) publish(ctx context.Context, taskID string, p payload) (string, 
 	if err != nil {
 		return "", nil, err
 	}
-	s.leaseTTL.Store(int64(leaseTTL(head)))
+	s.leaseTTL.Store(int64(head.Duration("task_lease_ttl")))
 	// The edit is already the head: a previous attempt of this same task
 	// published it and did not get to close.
 	if head.TaskID == taskID {

@@ -63,7 +63,7 @@ func runCmd(ctx context.Context, args []string) error {
 				return err
 			}
 			return tracingcollector.Run(ctx, rt, nc, tracingcollector.Options{
-				Network: *network, Backend: backend, DataDir: role.DataDir,
+				Network: *network, Backend: backend, DataDir: role.DataDir, ContextAddr: role.AddrContext,
 			})
 		}
 	default:

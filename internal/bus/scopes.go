@@ -147,10 +147,11 @@ var SpawnerScope = Scope{
 }
 
 // TracingCollectorScope is the Tracing Collector's: it observes every event that
-// carries traceparent (architecture §3.2), and publishes no event.
+// carries traceparent (architecture §3.2), and claims and closes trace_query
+// (architecture §3.10).
 var TracingCollectorScope = Scope{
 	Role:      "tracing_collector",
-	Publish:   join(consumerPub, configRead),
+	Publish:   join(consumerPub, configRead, participant),
 	Subscribe: inboxSub,
 }
 

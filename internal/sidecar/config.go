@@ -46,12 +46,8 @@ func newConfig(js jetstream.JetStream, head *globalconfig.Record) *config {
 
 func (c *config) store(head *globalconfig.Record) {
 	c.current.Store(head)
-	// The head passed its schema when it was published.
-	var ms int64
-	_ = json.Unmarshal(head.Values["task_lease_ttl"], &ms)
-	c.lease.Store(int64(time.Duration(ms) * time.Millisecond))
-	_ = json.Unmarshal(head.Values["auction_timeout"], &ms)
-	c.auction.Store(int64(time.Duration(ms) * time.Millisecond))
+	c.lease.Store(int64(head.Duration("task_lease_ttl")))
+	c.auction.Store(int64(head.Duration("auction_timeout")))
 }
 
 // follow reads the head every few seconds until ctx ends.

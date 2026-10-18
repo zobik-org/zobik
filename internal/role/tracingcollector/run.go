@@ -6,16 +6,20 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"google.golang.org/grpc"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/claim"
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role"
+	contextv1 "zobik.org/zobik/proto/zobik/context/v1"
 )
 
 // Options are what the role runs with.
@@ -25,6 +29,9 @@ type Options struct {
 	Backend Backend
 	// DataDir is the volume where it keeps the live traces.
 	DataDir string
+	// ContextAddr is the Context Store's address, where it writes the answers
+	// to trace_query (implementation §6, The Docker network).
+	ContextAddr string
 }
 
 // families are the streams it reads: every family whose events carry
@@ -55,12 +62,21 @@ type collector struct {
 	// read is, per family, the server's time before which every stored event
 	// has been applied.
 	read map[string]time.Time
+
+	// The half that answers trace_query (architecture §3.10).
+	id        string
+	claimant  *claim.Claimant
+	context   contextv1.ContextStoreClient
+	answering sync.WaitGroup
+	// leaseTTL is task_lease_ttl as of the last head read, in nanoseconds.
+	leaseTTL atomic.Int64
 }
 
 // Run is the tracing_collector role: it rebuilds the traces from what crosses
-// the Bus and exports them (architecture §3.2, implementation §1.2.6). It is
-// ready once it reads the Global Configuration, binds its consumers, loads the
-// live traces and reaches the tracing backend.
+// the Bus and exports them, and answers trace_query from them (architecture
+// §3.2, §3.10, implementation §1.2.6). It is ready once it reads the Global
+// Configuration, binds its consumers, loads the live traces and reaches the
+// tracing backend.
 func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error {
 	js, err := jetstream.New(nc)
 	if err != nil {
@@ -71,7 +87,8 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 		return err
 	}
 	l := rt.MainLoop()
-	if _, err := role.AwaitHead(ctx, l, js); err != nil {
+	head, err := role.AwaitHead(ctx, l, js)
+	if err != nil {
 		return err
 	}
 	consumers := map[string]jetstream.Consumer{}
@@ -91,10 +108,21 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	if err := role.Retry(ctx, l, opTimeout, o.Backend.Reach); err != nil {
 		return err
 	}
-	c := &collector{store: store, backend: o.Backend, res: res, traces: loaded, read: map[string]time.Time{}}
-	// The role returns once its readers have stopped, so a new instance over
-	// the same volume never shares the consumers with one still applying.
+	conn, err := grpc.NewClient(o.ContextAddr, grpc.WithTransportCredentials(rt.RPCCredentials()))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	c := &collector{
+		store: store, backend: o.Backend, res: res, traces: loaded, read: map[string]time.Time{},
+		id: rt.ID, claimant: claim.New(rt.ID, rt.Credential, js, nc, Topic), context: contextv1.NewContextStoreClient(conn),
+	}
+	c.leaseTTL.Store(int64(head.Duration("task_lease_ttl")))
+	// The role returns once its readers and its answers have stopped, so a new
+	// instance over the same volume never shares the consumers with one still
+	// applying.
 	var readers sync.WaitGroup
+	defer c.answering.Wait()
 	defer readers.Wait()
 	for f, cons := range consumers {
 		readers.Go(func() { c.consume(ctx, rt.Loop(f, time.Minute), f, cons) })
@@ -142,7 +170,7 @@ func (c *collector) consume(ctx context.Context, l *role.Loop, family string, co
 				m.Nak() // for whoever reads next
 				continue
 			}
-			c.handle(m)
+			c.handle(ctx, m)
 		}
 		if err := batch.Error(); err != nil {
 			if ctx.Err() == nil {
@@ -158,9 +186,10 @@ func (c *collector) consume(ctx context.Context, l *role.Loop, family string, co
 	}
 }
 
-// handle applies one event and acknowledges it once it is on disk. What is not
-// an event of a trace is acknowledged and left out.
-func (c *collector) handle(m jetstream.Msg) {
+// handle applies one event and acknowledges it once it is on disk and, if it
+// belongs to the cycle of trace_query, once the role has taken part. What is
+// not an event of a trace is acknowledged and left out.
+func (c *collector) handle(ctx context.Context, m jetstream.Msg) {
 	var e bus.Event
 	if err := json.Unmarshal(m.Data(), &e); err != nil || e.Validate() != nil {
 		m.Ack()
@@ -179,6 +208,11 @@ func (c *collector) handle(m jetstream.Msg) {
 	if err := c.apply(traceID, f); err != nil {
 		log.Printf("tracing_collector: keeping %s: %v", e.ID, err)
 		m.Nak()
+		return
+	}
+	if err := c.claimEvent(ctx, &e, f, m.Subject()); err != nil {
+		log.Printf("tracing_collector: proposing on %s: %v", e.Subject, err)
+		m.NakWithDelay(time.Second)
 		return
 	}
 	m.Ack()
@@ -308,6 +342,7 @@ func (c *collector) sweep(ctx context.Context, js jetstream.JetStream, now time.
 		return fmt.Errorf("context_retention_grace: %w", err)
 	}
 	grace := time.Duration(graceMs) * time.Millisecond
+	c.leaseTTL.Store(int64(head.Duration("task_lease_ttl")))
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for id, t := range c.traces {
