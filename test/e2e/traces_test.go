@@ -33,11 +33,11 @@ func TestTraces(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	z := newNetwork(t, ctx)
-	z.tracingUI = freePort(t)
 	z.build(t, ctx, "images/zobik-sidecar.Dockerfile", "zobik-sidecar:dev")
 	z.build(t, ctx, "images/zobik-python.Dockerfile", "zobik-python:dev")
 	z.build(t, ctx, "examples/blueprints/historian/Dockerfile", "zobik-historian:dev")
 	z.build(t, ctx, "test/e2e/embeddings/Dockerfile", embeddingsImage)
+	z.tracingUI = freePort(t)
 	z.run(t, ctx, credentials, "init")
 	jaeger := "http://127.0.0.1:" + z.tracingUI
 
@@ -210,7 +210,11 @@ func jaegerTrace(t *testing.T, ctx context.Context, jaeger, trace string, names 
 		if time.Now().After(deadline) {
 			t.Fatalf("Jaeger has no spans %v of the trace %s; last answer: %s", names, trace, last)
 		}
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for the trace %s in Jaeger: %v", trace, ctx.Err())
+		case <-time.After(2 * time.Second):
+		}
 	}
 }
 
