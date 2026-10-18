@@ -46,6 +46,10 @@ func TestBus(t *testing.T) {
 type network struct {
 	name, dir, bin string
 	root           string // the repository, where images are built from
+	// tracingUI is the port on 127.0.0.1 where init publishes the tenant's
+	// Jaeger, or none if empty: the default would take the port of the
+	// developer's own tenant.
+	tracingUI string
 }
 
 func newNetwork(t *testing.T, ctx context.Context) *network {
@@ -87,8 +91,7 @@ func (z *network) cmd(ctx context.Context, stdin string, args ...string) *exec.C
 	}
 	full := append(append([]string{}, args[:words]...), "--network", z.name, "--dir", z.dir)
 	if args[0] == "init" {
-		// The tenant's UI would take the port of the developer's own tenant.
-		full = append(full, "--tracing-ui=")
+		full = append(full, "--tracing-ui="+z.tracingUI)
 	}
 	full = append(full, args[words:]...)
 	c := exec.CommandContext(ctx, z.bin, full...)

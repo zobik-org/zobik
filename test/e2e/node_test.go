@@ -92,8 +92,8 @@ func (z *network) embeddings(t *testing.T, ctx context.Context, fixed map[string
 
 // lifecycle waits for task to walk announced → proposed → assigned → completed,
 // and for its completion to carry the context_ref of the portion result of its
-// section.
-func lifecycle(t *testing.T, events <-chan tapEvent, task string) {
+// section. It returns the id of the task.assigned.
+func lifecycle(t *testing.T, events <-chan tapEvent, task string) (assigned string) {
 	t.Helper()
 	want := map[string]bool{bus.TypeAnnounced: true, bus.TypeProposed: true, bus.TypeAssigned: true, bus.TypeCompleted: true}
 	timeout := time.After(2 * time.Minute)
@@ -112,6 +112,8 @@ func lifecycle(t *testing.T, events <-chan tapEvent, task string) {
 			continue
 		}
 		switch e.Type {
+		case bus.TypeAssigned:
+			assigned = e.ID
 		case bus.TypeFailed:
 			t.Fatalf("task %s failed: %s", task, e.Data)
 		case bus.TypeCompleted:
@@ -127,4 +129,5 @@ func lifecycle(t *testing.T, events <-chan tapEvent, task string) {
 		}
 		delete(want, e.Type)
 	}
+	return assigned
 }
