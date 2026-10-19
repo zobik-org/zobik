@@ -15,7 +15,7 @@ import (
 	"zobik.org/zobik/internal/embedding/embeddingtest"
 )
 
-const model = `{"entry":"embeddings","model":"nomic-embed-text","document_prefix":"search_document: ","query_prefix":"search_query: "}`
+const model = `{"entry":"embeddings","model":"nomic-embed-text","document_prefix":"search_document: ","query_prefix":"search_query: ","max_text_size":8192}`
 
 func values(target string) map[string]json.RawMessage {
 	return map[string]json.RawMessage{
@@ -33,17 +33,25 @@ func TestResolve(t *testing.T) {
 		t.Errorf("space: %+v", s)
 	}
 
-	// The model_id is the digest of embedding_model in its canonical form, so
-	// another spelling of the same value gives the same one (implementation §1.2.15).
+	// The model_id is the digest of the fields that define the space in their
+	// canonical form, so another spelling of the same value gives the same one
+	// (implementation §1.2.15).
 	spelled := values("http://llama:8080")
-	spelled["embedding_model"] = json.RawMessage(`{ "query_prefix":"search_query: ", "model":"nomic-embed-text", "entry":"embeddings", "document_prefix":"search_document: " }`)
+	spelled["embedding_model"] = json.RawMessage(`{ "query_prefix":"search_query: ", "model":"nomic-embed-text", "entry":"embeddings", "document_prefix":"search_document: ", "max_text_size":8192 }`)
 	other, err := embedding.Resolve(spelled)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := digest.JSON([]byte(model))
+	want, _ := digest.JSON([]byte(`{"entry":"embeddings","model":"nomic-embed-text","document_prefix":"search_document: ","query_prefix":"search_query: "}`))
 	if s.ModelID != want || other.ModelID != want {
 		t.Errorf("model_id %s and %s, want %s", s.ModelID, other.ModelID, want)
+	}
+
+	// max_text_size bounds what is embedded without changing the space.
+	bounded := values("http://llama:8080")
+	bounded["embedding_model"] = json.RawMessage(strings.Replace(model, "8192", "2048", 1))
+	if b, err := embedding.Resolve(bounded); err != nil || b.ModelID != want || b.MaxTextSize != 2048 {
+		t.Errorf("another max_text_size: %+v %v", b, err)
 	}
 
 	// The target is not part of the space.
@@ -92,6 +100,16 @@ func TestGenerate(t *testing.T) {
 	b, _ := s.Query(ctx, embedding.Client(), "anything")
 	if sim, _ := embedding.Similarity(a, b); math.Abs(sim-1) > 1e-6 {
 		t.Errorf("the same text gave vectors at similarity %v", sim)
+	}
+
+	// A text longer than max_text_size, prefix included, never reaches the
+	// endpoint (implementation §1.2.15).
+	long := strings.Repeat("x", 8192-len("search_query: ")+1)
+	if s.FitsQuery(long) || !s.FitsQuery(long[1:]) {
+		t.Error("FitsQuery does not count the prefix")
+	}
+	if _, err := s.Query(ctx, embedding.Client(), long); !errors.Is(err, embedding.ErrTooLong) {
+		t.Errorf("a text too long: %v", err)
 	}
 
 	got := fake.Requests()

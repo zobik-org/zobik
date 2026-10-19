@@ -46,7 +46,7 @@ func TestV0(t *testing.T) {
 }
 
 var (
-	model    = `{"entry":"embeddings","model":"nomic-embed-text","document_prefix":"search_document: ","query_prefix":"search_query: "}`
+	model    = `{"entry":"embeddings","model":"nomic-embed-text","document_prefix":"search_document: ","query_prefix":"search_query: ","max_text_size":8192}`
 	registry = `{"embeddings":{"target":"http://llama:8080"}}`
 )
 

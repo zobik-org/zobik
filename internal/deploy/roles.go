@@ -121,16 +121,26 @@ var Roles = []Role{
 	// provisioning runs with its material (Provision).
 	{Unit: "spawner", Scope: bus.SpawnerScope, Certificate: signing.RoleSpawner, Issues: &bus.NodeScope, Unstarted: true},
 	// The panel's channels go first and last in their audience (implementation §6,
-	// The operator console). A channel also receives the closes of the tasks it opens.
-	{Unit: "channel_operator", Scope: bus.ChannelScope, Topic: "hitl_contact_operator",
+	// The operator console). The Entry Node reaches the embeddings endpoint
+	// without a credential until the secrets role enters, so it waits only for
+	// config.
+	panelChannel("user"),
+	panelChannel("operator"),
+}
+
+// panelChannel is the channel role of one of the panel's audiences. A channel
+// also receives the closes of the tasks it opens.
+func panelChannel(audience string) Role {
+	topic := signing.HITLPrefix + audience
+	return Role{Unit: "channel_" + audience, Scope: bus.ChannelScope, Topic: topic,
 		AttemptWindow: &signing.AttemptWindow{From: ptr(1), To: ptr(1), FinalRound: ptr(true)},
-		Args:          []string{"--role=channel", "--audience=operator"}, WaitsFor: []string{"config"},
+		Args:          []string{"--role=channel", "--audience=" + audience}, WaitsFor: []string{"config"},
 		ServesConsole: true,
 		Consumers: func(id string) []bus.Consumer {
-			c := claimant("hitl_contact_operator")(id)
+			c := claimant(topic)(id)
 			c[0].Filters = append(c[0].Filters, "task.completed."+id+".>", "task.failed."+id+".>", "task.aborted."+id+".>")
 			return c
-		}},
+		}}
 }
 
 // claimant listens to a topic's announcements and to the award and rejection

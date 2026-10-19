@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,7 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/claim"
+	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role"
 	"zobik.org/zobik/internal/rpcauth"
@@ -101,8 +103,8 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	c := &channel{
 		rt: rt, js: js, audience: o.Audience, topic: topic,
 		claimant: claim.New(rt.ID, rt.Credential, js, nc, topic),
-		context:  contextv1.NewContextStoreClient(conn),
-		roots:    store, open: open,
+		context:  contextv1.NewContextStoreClient(conn), http: embedding.Client(),
+		roots: store, open: open,
 		byEntry: map[string]string{}, byDelivery: map[string]string{},
 		queries: map[string]*query{}, windows: map[string]time.Duration{},
 	}
@@ -125,6 +127,13 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	c.ctx = ctx
+	// What a previous run left pending goes out now.
+	for _, r := range open {
+		if r.Pending != nil {
+			go c.send(r)
+		}
+	}
 	role.ServeRPC(cancel, g, ln)
 	defer g.Stop()
 
@@ -139,14 +148,18 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 // channel is the role's state: the roots it opened, the queries it retains and
 // the console's session.
 type channel struct {
+	// ctx is the role's: the pending announcements stop retrying with it.
+	ctx      context.Context
 	rt       *role.Runtime
 	js       jetstream.JetStream
 	audience string
 	topic    string
 	claimant *claim.Claimant
 	context  contextv1.ContextStoreClient
-	window   *signing.AttemptWindow
-	roots    *roots
+	// http calls the embeddings endpoint.
+	http   *http.Client
+	window *signing.AttemptWindow
+	roots  *roots
 	// head is the Global Configuration as last read.
 	head atomic.Pointer[globalconfig.Record]
 

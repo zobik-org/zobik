@@ -13,14 +13,15 @@
       ]
     },
     "embedding_model": {
-      "description": "The network's vector space: the egress_registry entry the Embedding Model is reached through, the model requested from it and its prefix convention. It has no default: the network is born without a vector space (architecture §2.3, implementation §1.2.15).",
+      "description": "The network's vector space: the egress_registry entry the Embedding Model is reached through, the model requested from it, its prefix convention and the longest text it accepts. It has no default: the network is born without a vector space (architecture §2.3, implementation §1.2.15).",
       "type": "object",
-      "required": ["entry", "model", "document_prefix", "query_prefix"],
+      "required": ["entry", "model", "document_prefix", "query_prefix", "max_text_size"],
       "properties": {
         "entry": {"description": "The egress_registry key of the Embedding Model.", "type": "string", "minLength": 1, "query_class": "current"},
         "model": {"description": "The model requested from the entry.", "type": "string", "minLength": 1, "query_class": "current"},
         "document_prefix": {"description": "The prefix of the capability_text side; empty in a model without prefixes.", "type": "string", "query_class": "current"},
-        "query_prefix": {"description": "The prefix of the task's text, the querying side (architecture §3.7.4); empty in a model without prefixes.", "type": "string", "query_class": "current"}
+        "query_prefix": {"description": "The prefix of the task's text, the querying side (architecture §3.7.4); empty in a model without prefixes.", "type": "string", "query_class": "current"},
+        "max_text_size": {"description": "The longest text the model accepts, prefix included, in bytes of UTF-8; it stays out of the model_id (implementation §1.2.15).", "type": "integer", "exclusiveMinimum": 0, "query_class": "current"}
       },
       "storage": "versioned",
       "preconditions": [

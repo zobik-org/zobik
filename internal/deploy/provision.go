@@ -156,6 +156,9 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	if err != nil {
 		return nil, refuse(codeEmbeddingUnavailable, "%v", err)
 	}
+	if !space.FitsDocument(b.CapabilityText) {
+		return nil, refuse(codeRequestInvalid, "the capability_text exceeds the max_text_size of embedding_model")
+	}
 	vector, err := space.Document(ctx, embedding.Client(), b.CapabilityText)
 	if err != nil {
 		return nil, refuse(codeEmbeddingUnavailable, "%v", err)
