@@ -97,7 +97,11 @@ func (c *channel) trySend(r *root) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	r.Pending, r.Vector, r.ModelID = nil, vector, modelID
+	// A reopen may have replaced the attempt meanwhile; that one is still to send.
+	if r.Pending != nil && r.Pending.ID == e.ID {
+		r.Pending = nil
+	}
+	r.Vector, r.ModelID = vector, modelID
 	if err := c.roots.save(r); err != nil {
 		// Published already: a restart that finds it pending publishes it again
 		// under the same id, which the stream deduplicates.

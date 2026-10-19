@@ -67,10 +67,6 @@ func (o *outbox) resume() error {
 // produced it is rejected instead of retried forever.
 var errTooLarge = errors.New("the event exceeds the Bus's largest message")
 
-// embeddingRoom is what a task_embedding adds to an event: a 4096-dimension
-// vector in base64, with its model_id.
-const embeddingRoom = 24 << 10
-
 // put persists p and starts sending it. The channel closes when the Bus
 // confirms it.
 func (o *outbox) put(p *pending) (<-chan struct{}, error) {
@@ -80,7 +76,7 @@ func (o *outbox) put(p *pending) (<-chan struct{}, error) {
 	}
 	size := int64(len(b))
 	if p.Embed {
-		size += embeddingRoom
+		size += embedding.Room
 	}
 	if size > o.js.Conn().MaxPayload() {
 		return nil, errTooLarge

@@ -48,7 +48,7 @@ func newEndpoint(t *testing.T) *endpoint {
 	return e
 }
 
-// entryFixture is a network with an open vector space, the Config Store, the
+// entryFixture is a network, with an open vector space if it has one, the Config Store, the
 // Task Broker and the Entry Node running, and the console played by the test.
 type entryFixture struct {
 	*fixture
@@ -60,15 +60,18 @@ type entryFixture struct {
 	maxBytes int
 }
 
-func newEntryFixture(t *testing.T) *entryFixture {
+func newEntryFixture(t *testing.T, space bool) *entryFixture {
 	ep := newEndpoint(t)
 	const maxBytes = 64
 	n := testnet.New(t, func(v globalconfig.Values) {
-		testnet.Set(v, map[string]any{
-			"auction_timeout": 200, "network_admission": "open",
-			"egress_registry": map[string]any{"embeddings": map[string]any{"target": ep.URL}},
-			"embedding_model": map[string]any{"entry": "embeddings", "model": "test", "document_prefix": "", "query_prefix": "q: ", "max_text_size": maxBytes},
-		})
+		testnet.Set(v, map[string]any{"auction_timeout": 200})
+		if space {
+			testnet.Set(v, map[string]any{
+				"network_admission": "open",
+				"egress_registry":   map[string]any{"embeddings": map[string]any{"target": ep.URL}},
+				"embedding_model":   map[string]any{"entry": "embeddings", "model": "test", "document_prefix": "", "query_prefix": "q: ", "max_text_size": maxBytes},
+			})
+		}
 	})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -169,7 +172,7 @@ func dataOf(t *testing.T, e *bus.Event) map[string]any {
 // its model_id, and Open rejects what no retry would embed (implementation §6,
 // The service between the console and the channels).
 func TestIntake(t *testing.T) {
-	f := newEntryFixture(t)
+	f := newEntryFixture(t, true)
 	c := f.client(f.ConsoleKey)
 	traceID, entry := f.request(c, "find it")
 	e := f.announced(5*time.Second, subject(entry))
@@ -201,7 +204,7 @@ func TestIntake(t *testing.T) {
 // With the embeddings endpoint down, Open returns and the announcement waits
 // in the role's volume, across a restart, until the endpoint answers.
 func TestIntakeWaits(t *testing.T) {
-	f := newEntryFixture(t)
+	f := newEntryFixture(t, true)
 	f.ep.down.Store(true)
 	_, entry := f.request(f.client(f.ConsoleKey), "find it")
 	if e := f.announced(time.Second, subject(entry)); e != nil {
@@ -222,7 +225,7 @@ func TestIntakeWaits(t *testing.T) {
 // new attempt's outcome is delivered again; a reject without its reason is
 // silence, and the root closes (architecture §3.5.4).
 func TestReject(t *testing.T) {
-	f := newEntryFixture(t)
+	f := newEntryFixture(t, true)
 	c := f.client(f.ConsoleKey)
 	session, err := c.Attach(f.Ctx)
 	if err != nil {
@@ -267,5 +270,15 @@ func TestReject(t *testing.T) {
 	}
 	if e := f.rootClose(traceID, 5*time.Second); e == nil || e.Type != bus.TypeCompleted {
 		t.Errorf("root close %+v", e)
+	}
+}
+
+// Without a vector space nothing bounds or embeds the request's text, so Open
+// on intake fails instead of waiting (implementation §6, The service between
+// the console and the channels).
+func TestIntakeWithoutSpace(t *testing.T) {
+	f := newEntryFixture(t, false)
+	if _, err := f.open(f.client(f.ConsoleKey), `{"task_text":"find it"}`); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("Open without a vector space: %v", err)
 	}
 }

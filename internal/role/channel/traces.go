@@ -44,6 +44,9 @@ func (e errInvalid) Error() string { return e.msg }
 
 func invalid(format string, a ...any) error { return errInvalid{fmt.Sprintf(format, a...)} }
 
+// errPrecondition is a request the network cannot take in its current state.
+type errPrecondition struct{ error }
+
 // trace is a trace being opened: the root's identifiers and its token.
 type trace struct {
 	id, entryTaskID, token string
@@ -133,9 +136,13 @@ func (c *channel) announce(t *trace, topic, workspace string, raw []byte, payloa
 		if text == "" {
 			return invalid("an announcement on %s carries its task_text", topic)
 		}
-		// No retry would embed a text the model does not accept; without a
-		// vector space yet, the announcement waits for one (implementation §1.2.15).
-		if space, err := embedding.Resolve(c.head.Load().Values); err == nil && !space.FitsQuery(text) {
+		// Without a vector space nothing bounds or embeds the text, and no
+		// retry would embed one the model does not accept (implementation §1.2.15).
+		space, err := embedding.Resolve(c.head.Load().Values)
+		if err != nil {
+			return errPrecondition{err}
+		}
+		if !space.FitsQuery(text) {
 			return invalid("%v", embedding.ErrTooLong)
 		}
 	}
@@ -180,6 +187,19 @@ func (c *channel) announce(t *trace, topic, workspace string, raw []byte, payloa
 	}
 	if err := e.ValidateTopic(); err != nil {
 		return invalid("%v", err)
+	}
+	// An announcement the Bus would refuse every time is rejected instead of
+	// retried forever (implementation §3).
+	b, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	size := int64(len(b))
+	if embedded(topic) {
+		size += embedding.Room
+	}
+	if size > c.js.Conn().MaxPayload() {
+		return invalid("the announcement exceeds the Bus's largest message")
 	}
 	r := &root{
 		TraceID: t.id, EntryTaskID: t.entryTaskID, EntryTopic: topic, Token: t.token,
@@ -342,8 +362,11 @@ func (c *channel) delivered(ctx context.Context, r *root, e *bus.Event) error {
 	_ = json.Unmarshal(e.Data, &d) // a field of another type reads as absent
 	if e.Type == bus.TypeCompleted {
 		// A reject outside the options, or without its reason, does not fit
-		// the contract: it is silence (architecture §3.5.2).
-		if d.Decision == decisionReject && slices.Contains(r.Options, decisionReject) && d.FailureReason != "" && r.Entry != nil {
+		// the contract: it is silence (architecture §3.5.2). Neither does that
+		// of a signed act, whose proof covers the TaskID and the data a reopen
+		// would change (architecture §3.14.2).
+		if d.Decision == decisionReject && slices.Contains(r.Options, decisionReject) && d.FailureReason != "" &&
+			r.Entry != nil && !signedActs[r.EntryTopic] {
 			return c.reopen(r, d.FailureReason, d.FailureCode)
 		}
 		return c.closeRoot(ctx, r, bus.TypeCompleted, "", "")

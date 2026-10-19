@@ -181,6 +181,10 @@ func (s *service) Open(stream channelv1.Channel_OpenServer) error {
 	if errors.As(err, &bad) {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
+	var pre errPrecondition
+	if errors.As(err, &pre) {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
 	if err != nil {
 		return status.Error(codes.Unavailable, err.Error())
 	}
