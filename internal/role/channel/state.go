@@ -24,6 +24,17 @@ type root struct {
 	TraceParent string    `json:"traceparent"`
 	Version     string    `json:"config_version"`
 	OpenedAt    time.Time `json:"opened_at"`
+	// Entry is the announcement of the entry subtask's first attempt, which a
+	// reopen repeats; EntryAttempts, the attempts of its lineage
+	// (architecture §3.3).
+	Entry         *bus.Event `json:"entry"`
+	EntryAttempts int        `json:"entry_attempts"`
+	// Pending is the attempt not yet published, with its task_embedding still
+	// to stamp; Vector is the last one generated for the entry's text, under
+	// ModelID, which a reopen in the same space reuses (architecture §3.7.4).
+	Pending *bus.Event `json:"pending,omitempty"`
+	Vector  string     `json:"vector,omitempty"`
+	ModelID string     `json:"model_id,omitempty"`
 	// Outcome is the terminal event of the entry subtask, once it arrives.
 	Outcome *bus.Event `json:"outcome,omitempty"`
 	// Delivery is the TaskID of the outcome delivery's last attempt, its
@@ -31,6 +42,8 @@ type root struct {
 	Delivery   string `json:"delivery,omitempty"`
 	Attempts   int    `json:"attempts,omitempty"`
 	FinalRound bool   `json:"final_round,omitempty"`
+	// Options are those of the delivery's last attempt.
+	Options []string `json:"options,omitempty"`
 }
 
 // roots keeps each root in a file of its own, roots/<TraceID>.json.

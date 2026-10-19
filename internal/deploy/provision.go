@@ -157,6 +157,9 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 		return nil, refuse(codeEmbeddingUnavailable, "%v", err)
 	}
 	vector, err := space.Document(ctx, embedding.Client(), b.CapabilityText)
+	if errors.Is(err, embedding.ErrTooLong) {
+		return nil, refuse(codeRequestInvalid, "%v", err)
+	}
 	if err != nil {
 		return nil, refuse(codeEmbeddingUnavailable, "%v", err)
 	}

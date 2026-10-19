@@ -176,10 +176,14 @@ func (s *service) Open(stream channelv1.Channel_OpenServer) error {
 	if len(bodies) > 0 && bodies[len(bodies)-1].portion == nil {
 		return status.Error(codes.InvalidArgument, "a body without content")
 	}
-	err = c.announce(ctx, t, h.GetTopic(), h.GetWorkspace(), h.GetData(), payload, bodies)
+	err = c.announce(t, h.GetTopic(), h.GetWorkspace(), h.GetData(), payload, bodies)
 	var bad errInvalid
 	if errors.As(err, &bad) {
 		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	var pre errPrecondition
+	if errors.As(err, &pre) {
+		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 	if err != nil {
 		return status.Error(codes.Unavailable, err.Error())

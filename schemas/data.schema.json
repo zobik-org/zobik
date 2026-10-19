@@ -99,12 +99,12 @@
       "type": "string"
     },
     "failure_reason": {
-      "description": "Mandatory in every task.failed (architecture §3.3).",
+      "description": "Mandatory in every task.failed (architecture §3.3), and in the task.announced that reopens a rejected result, with the rejection's (architecture §3.5.4).",
       "type": "string",
       "minLength": 1
     },
     "failure_code": {
-      "description": "In the task.failed whose cause the architecture fixes (architecture §3.3). Known values: unanswered, undelivered, stale_vector_space, redundant_topic, not_derivable, logic_container_lost, channel_retired, proof_invalid, base_version_stale, request_invalid, artifact_vetoed, runtime_interface_unsupported, egress_slot_unbound, ingress_slot_unbound, blueprint_muted, capacity_exhausted, embedding_unavailable, admission_failed, acquisition_denied, no_forge (implementation §10.1). A requester that does not know the value reads the failure_reason.",
+      "description": "In the task.failed whose cause the architecture fixes (architecture §3.3), and in the task.announced that reopens a result a network component rejected, with the rejection's (architecture §3.5.4). Known values: unanswered, undelivered, stale_vector_space, redundant_topic, not_derivable, logic_container_lost, channel_retired, proof_invalid, base_version_stale, request_invalid, artifact_vetoed, runtime_interface_unsupported, egress_slot_unbound, ingress_slot_unbound, blueprint_muted, capacity_exhausted, embedding_unavailable, admission_failed, acquisition_denied, no_forge (implementation §10.1). A requester that does not know the value reads the failure_reason.",
       "type": "string"
     },
     "suggested_topic": {

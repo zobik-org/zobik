@@ -120,7 +120,7 @@ func newFixture(t *testing.T, o options) *fixture {
 		if o.embeddings != "" {
 			testnet.Set(v, map[string]any{
 				"egress_registry": map[string]any{"embeddings": map[string]any{"target": o.embeddings}},
-				"embedding_model": map[string]any{"entry": "embeddings", "model": "test", "document_prefix": "", "query_prefix": "q: "},
+				"embedding_model": map[string]any{"entry": "embeddings", "model": "test", "document_prefix": "", "query_prefix": "q: ", "max_text_size": 64},
 			})
 		}
 	})

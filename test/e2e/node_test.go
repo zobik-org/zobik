@@ -54,7 +54,7 @@ func TestNode(t *testing.T) {
 
 	z.run(t, ctx, credentials, "config", "set",
 		`egress_registry={"embeddings":{"target":"http://embeddings:8080"}}`,
-		`embedding_model={"entry":"embeddings","model":"fake","document_prefix":"`+documentPrefix+`","query_prefix":"`+queryPrefix+`"}`)
+		`embedding_model={"entry":"embeddings","model":"fake","document_prefix":"`+documentPrefix+`","query_prefix":"`+queryPrefix+`","max_text_size":8192}`)
 	z.run(t, ctx, credentials, "config", "set", "network_admission=open")
 
 	lines := z.start(t, ctx, "tap")

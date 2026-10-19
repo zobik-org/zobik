@@ -58,7 +58,7 @@ func TestTraces(t *testing.T) {
 
 	out := z.run(t, ctx, credentials, "config", "set",
 		`egress_registry={"embeddings":{"target":"http://embeddings:8080"}}`,
-		`embedding_model={"entry":"embeddings","model":"fake","document_prefix":"`+documentPrefix+`","query_prefix":"`+queryPrefix+`"}`)
+		`embedding_model={"entry":"embeddings","model":"fake","document_prefix":"`+documentPrefix+`","query_prefix":"`+queryPrefix+`","max_text_size":8192}`)
 	trace := regexp.MustCompile(`trace (\S+)`).FindStringSubmatch(out)
 	if trace == nil {
 		t.Fatalf("config set named no trace: %s", out)

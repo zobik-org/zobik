@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/signing"
 	nriv1 "zobik.org/zobik/proto/zobik/nri/v1"
 )
@@ -79,6 +80,10 @@ func (n *node) open(o opening) (string, error) {
 		// awarded by similarity nobody could win it (architecture §3.7.4).
 		case text == "" && !bus.StructuralTopics[o.topic]:
 			return "", status.Error(codes.InvalidArgument, "an announcement carries its task_text")
+		}
+		// No retry would embed a text the model does not accept (implementation §1.2.15).
+		if space, err := embedding.Resolve(n.cfg.head().Values); err == nil && text != "" && !bus.StructuralTopics[o.topic] && !space.FitsQuery(text) {
+			return "", status.Error(codes.InvalidArgument, embedding.ErrTooLong.Error())
 		}
 	}
 

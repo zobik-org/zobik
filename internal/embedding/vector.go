@@ -11,6 +11,10 @@ import (
 // (implementation §1.2.1). The task_embedding and the capability_embedding of a
 // credential share it (implementation §9.2).
 
+// Room is what a task_embedding adds to an event: a 4096-dimension vector in
+// base64, with its model_id.
+const Room = 24 << 10
+
 // Encode returns v in its wire form.
 func Encode(v []float32) string {
 	b := make([]byte, 4*len(v))

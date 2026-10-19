@@ -55,7 +55,7 @@ func applySubstrate(t *testing.T, ctx context.Context, js jetstream.JetStream, i
 	return &s
 }
 
-var testIDs = map[string]string{"config": "UCONFIG", "task_broker": "UBROKER", "context": "UCONTEXT", "channel_operator": "UCHANNEL", "tracing_collector": "UTRACING"}
+var testIDs = map[string]string{"config": "UCONFIG", "task_broker": "UBROKER", "context": "UCONTEXT", "channel_user": "UENTRY", "channel_operator": "UCHANNEL", "tracing_collector": "UTRACING"}
 
 func TestSubstrate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -89,6 +89,7 @@ func TestSubstrate(t *testing.T) {
 		"task/UBROKER":    {"task.announced.>", "task.completed.>", "task.failed.>", "task.aborted.>"},
 		"prop/UBROKER":    {"prop.>"},
 		"task/UCONTEXT":   {"task.completed.>", "task.failed.>", "task.aborted.>"},
+		"task/UENTRY":     {"task.announced.hitl_contact_user", "task.assigned.UENTRY", "task.rejected.UENTRY", "task.completed.UENTRY.>", "task.failed.UENTRY.>", "task.aborted.UENTRY.>"},
 		"task/UCHANNEL":   {"task.announced.hitl_contact_operator", "task.assigned.UCHANNEL", "task.rejected.UCHANNEL", "task.completed.UCHANNEL.>", "task.failed.UCHANNEL.>", "task.aborted.UCHANNEL.>"},
 		"task/UTRACING":   {"task.>"},
 		"prop/UTRACING":   {"prop.>"},

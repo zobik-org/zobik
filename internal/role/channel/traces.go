@@ -10,12 +10,15 @@ import (
 	"fmt"
 	"hash"
 	"log"
+	"slices"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/signing"
 	contextv1 "zobik.org/zobik/proto/zobik/context/v1"
 	nriv1 "zobik.org/zobik/proto/zobik/nri/v1"
@@ -40,6 +43,9 @@ type errInvalid struct{ msg string }
 func (e errInvalid) Error() string { return e.msg }
 
 func invalid(format string, a ...any) error { return errInvalid{fmt.Sprintf(format, a...)} }
+
+// errPrecondition is a request the network cannot take in its current state.
+type errPrecondition struct{ error }
 
 // trace is a trace being opened: the root's identifiers and its token.
 type trace struct {
@@ -108,17 +114,36 @@ type body struct {
 }
 
 // announce assembles the entry subtask with what the console sent and the
-// references to what the role wrote, persists the root and publishes the
-// announcement (architecture §3.5.1, implementation §6, The service between the
+// references to what the role wrote, and keeps the root with the announcement
+// pending: send publishes it, with its task_embedding on a topic awarded by
+// similarity (architecture §3.5.1, implementation §6, The service between the
 // console and the channels).
-func (c *channel) announce(ctx context.Context, t *trace, topic, workspace string, raw []byte, payload *portion, bodies []body) error {
+func (c *channel) announce(t *trace, topic, workspace string, raw []byte, payload *portion, bodies []body) error {
 	var data map[string]any
+	if !utf8.Valid(raw) {
+		return invalid("data is not valid UTF-8")
+	}
 	if err := json.Unmarshal(raw, &data); err != nil || data == nil {
 		return invalid("data is not a JSON object")
 	}
-	for _, k := range []string{"context_ref", "bodies", "current_attempts", "previous_attempt", "final_round"} {
+	for _, k := range []string{"context_ref", "bodies", "current_attempts", "previous_attempt", "final_round", "task_embedding", "model_id"} {
 		if _, ok := data[k]; ok {
 			return invalid("data carries %s, which the role stamps", k)
+		}
+	}
+	if embedded(topic) {
+		text, _ := data["task_text"].(string)
+		if text == "" {
+			return invalid("an announcement on %s carries its task_text", topic)
+		}
+		// Without a vector space nothing bounds or embeds the text, and no
+		// retry would embed one the model does not accept (implementation §1.2.15).
+		space, err := embedding.Resolve(c.head.Load().Values)
+		if err != nil {
+			return errPrecondition{err}
+		}
+		if !space.FitsQuery(text) {
+			return invalid("%v", embedding.ErrTooLong)
 		}
 	}
 	// The fields a signed act's proof covers come in the data the console
@@ -163,23 +188,35 @@ func (c *channel) announce(ctx context.Context, t *trace, topic, workspace strin
 	if err := e.ValidateTopic(); err != nil {
 		return invalid("%v", err)
 	}
+	// An announcement the Bus would refuse every time is rejected instead of
+	// retried forever (implementation §3).
+	b, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	size := int64(len(b))
+	if embedded(topic) {
+		size += embedding.Room
+	}
+	if size > c.js.Conn().MaxPayload() {
+		return invalid("the announcement exceeds the Bus's largest message")
+	}
 	r := &root{
 		TraceID: t.id, EntryTaskID: t.entryTaskID, EntryTopic: topic, Token: t.token,
 		TraceParent: e.TraceParent, Version: e.ConfigVersion, OpenedAt: time.Now().UTC(),
+		Entry: e, EntryAttempts: 1, Pending: e,
 	}
-	// The root is kept before the announcement, so the entry subtask's terminal
-	// event always finds it.
+	// The root is kept with its announcement before anything is published, so
+	// the announcement survives a restart and the entry subtask's terminal
+	// event always finds the root.
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err := c.roots.save(r); err != nil {
 		return err
 	}
-	c.mu.Lock()
 	c.open[r.TraceID] = r
 	c.byEntry[r.EntryTaskID] = r.TraceID
-	c.mu.Unlock()
-	if err := bus.Publish(ctx, c.js, bus.SubjectAnnounced(topic), e); err != nil {
-		c.forget(r)
-		return err
-	}
+	go c.send(r)
 	return nil
 }
 
@@ -212,7 +249,9 @@ func (c *channel) onTerminal(ctx context.Context, e *bus.Event) error {
 	case r == nil:
 		return nil
 	case isEntry && r.Outcome == nil:
+		c.mu.Lock()
 		r.Outcome = e
+		c.mu.Unlock()
 		return c.deliver(ctx, r)
 	case isDelivery && e.Subject == r.Delivery:
 		return c.delivered(ctx, r, e)
@@ -276,7 +315,8 @@ func (c *channel) deliver(ctx context.Context, r *root) error {
 		"requester_identity": c.rt.ID, "origin_audience": c.audience,
 		"current_attempts": r.Attempts + 1,
 	}
-	if mode := deliveryOptions[c.deliveryMode()]; mode.options != nil {
+	mode := deliveryOptions[c.deliveryMode()]
+	if mode.options != nil {
 		data["options"], data["outcome_if_silent"] = mode.options, mode.silence
 	}
 	if r.Delivery != "" {
@@ -293,31 +333,44 @@ func (c *channel) deliver(ctx context.Context, r *root) error {
 	if err := e.ValidateTopic(); err != nil {
 		return err
 	}
+	c.mu.Lock()
 	prev := r.Delivery
-	r.Delivery, r.Attempts = e.Subject, r.Attempts+1
-	if err := c.roots.save(r); err != nil {
+	r.Delivery, r.Attempts, r.Options = e.Subject, r.Attempts+1, mode.options
+	err = c.roots.save(r)
+	if err == nil {
+		delete(c.byDelivery, prev)
+		c.byDelivery[r.Delivery] = r.TraceID
+	}
+	c.mu.Unlock()
+	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	delete(c.byDelivery, prev)
-	c.byDelivery[r.Delivery] = r.TraceID
-	c.mu.Unlock()
 	return bus.Publish(ctx, c.js, bus.SubjectAnnounced(c.topic), e)
 }
 
-// delivered reads how the delivery closed: an answer, or unanswered with its
-// outcome_if_silent, delivered the outcome and the root closes; undelivered
-// opens the next round, and once the final round closes without delivering,
-// the root closes undelivered (architecture §3.5.4).
+// delivered reads how the delivery closed: a reject reopens the entry
+// subtask; any other answer, or unanswered with its outcome_if_silent,
+// delivered the outcome and the root closes; undelivered opens the next round,
+// and once the final round closes without delivering, the root closes
+// undelivered (architecture §3.5.4).
 func (c *channel) delivered(ctx context.Context, r *root, e *bus.Event) error {
-	if e.Type == bus.TypeCompleted {
-		return c.closeRoot(ctx, r, bus.TypeCompleted, "", "")
-	}
 	var d struct {
+		Decision      string `json:"decision"`
 		FailureCode   string `json:"failure_code"`
 		FailureReason string `json:"failure_reason"`
 	}
 	_ = json.Unmarshal(e.Data, &d) // a field of another type reads as absent
+	if e.Type == bus.TypeCompleted {
+		// A reject outside the options, or without its reason, does not fit
+		// the contract: it is silence (architecture §3.5.2). Neither does that
+		// of a signed act, whose proof covers the TaskID and the data a reopen
+		// would change (architecture §3.14.2).
+		if d.Decision == decisionReject && slices.Contains(r.Options, decisionReject) && d.FailureReason != "" &&
+			r.Entry != nil && !signedActs[r.EntryTopic] {
+			return c.reopen(r, d.FailureReason, d.FailureCode)
+		}
+		return c.closeRoot(ctx, r, bus.TypeCompleted, "", "")
+	}
 	switch {
 	case d.FailureCode == codeUnanswered:
 		return c.closeRoot(ctx, r, bus.TypeCompleted, "", "")

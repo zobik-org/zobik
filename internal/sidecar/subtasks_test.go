@@ -168,6 +168,7 @@ func TestSubtask(t *testing.T) {
 		{"no topic", announceReq(parent, "", "", `{"task_text":"x"}`), codes.InvalidArgument},
 		{"a topic of the hitl_contact_* family", announceReq(parent, "hitl_contact_user", "", `{"task_text":"x"}`), codes.InvalidArgument},
 		{"no task_text", announceReq(parent, subtopic, "", `{}`), codes.InvalidArgument},
+		{"a task_text longer than max_text_size", announceReq(parent, subtopic, "", `{"task_text":"`+strings.Repeat("x", 64)+`"}`), codes.InvalidArgument},
 		{"a requester_identity", announceReq(parent, subtopic, "", `{"task_text":"x","requester_identity":"me"}`), codes.InvalidArgument},
 		{"a previous_attempt in data", announceReq(parent, subtopic, "", `{"task_text":"x","previous_attempt":"y"}`), codes.InvalidArgument},
 		{"a query in a trace without origin_audience", askReq(parent, "", `{}`), codes.FailedPrecondition},

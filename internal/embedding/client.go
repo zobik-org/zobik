@@ -18,13 +18,16 @@ import (
 // Space is the network's vector space: the value of embedding_model with the
 // target of the egress_registry entry it names (architecture §2.3, §3.7.3).
 type Space struct {
-	// ModelID identifies the space: the digest of embedding_model
-	// (implementation §1.2.15).
+	// ModelID identifies the space: the digest of the fields of
+	// embedding_model that define it (implementation §1.2.15).
 	ModelID        string
 	Target         string
 	Model          string
 	DocumentPrefix string
 	QueryPrefix    string
+	// MaxTextSize is the longest text the model accepts, prefix included, in
+	// bytes of UTF-8.
+	MaxTextSize int
 
 	// endpoint is the operation's URL under Target.
 	endpoint string
@@ -45,9 +48,13 @@ func Resolve(values map[string]json.RawMessage) (*Space, error) {
 		Model          string `json:"model"`
 		DocumentPrefix string `json:"document_prefix"`
 		QueryPrefix    string `json:"query_prefix"`
+		MaxTextSize    int    `json:"max_text_size"`
 	}
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil, fmt.Errorf("embedding: embedding_model: %w", err)
+	}
+	if m.MaxTextSize <= 0 {
+		return nil, errors.New("embedding: embedding_model carries no max_text_size")
 	}
 	var registry map[string]struct {
 		Target string `json:"target"`
@@ -65,7 +72,15 @@ func Resolve(values map[string]json.RawMessage) (*Space, error) {
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
 		return nil, fmt.Errorf("embedding: target %q is not an http or https URL", entry.Target)
 	}
-	id, err := digest.JSON(raw)
+	// max_text_size bounds what is embedded without changing the space, so it
+	// stays out of the model_id (implementation §1.2.15).
+	space, err := json.Marshal(map[string]string{
+		"entry": m.Entry, "model": m.Model, "document_prefix": m.DocumentPrefix, "query_prefix": m.QueryPrefix,
+	})
+	if err != nil {
+		return nil, err
+	}
+	id, err := digest.JSON(space)
 	if err != nil {
 		return nil, fmt.Errorf("embedding: model_id: %w", err)
 	}
@@ -75,18 +90,37 @@ func Resolve(values map[string]json.RawMessage) (*Space, error) {
 		Model:          m.Model,
 		DocumentPrefix: m.DocumentPrefix,
 		QueryPrefix:    m.QueryPrefix,
+		MaxTextSize:    m.MaxTextSize,
 		endpoint:       base.JoinPath("v1", "embeddings").String(),
 	}, nil
+}
+
+// ErrTooLong is a text the model does not accept: the endpoint would reject it
+// on every retry (implementation §1.2.15).
+var ErrTooLong = errors.New("embedding: the text exceeds the max_text_size of embedding_model")
+
+// FitsQuery reports whether a task's text, with its prefix, fits in max_text_size.
+func (s *Space) FitsQuery(text string) bool { return len(s.QueryPrefix)+len(text) <= s.MaxTextSize }
+
+// FitsDocument reports whether a capability_text, with its prefix, fits in max_text_size.
+func (s *Space) FitsDocument(text string) bool {
+	return len(s.DocumentPrefix)+len(text) <= s.MaxTextSize
 }
 
 // Query generates the embedding of a task's text, the querying side of the
 // matching (architecture §3.7.4).
 func (s *Space) Query(ctx context.Context, c *http.Client, text string) ([]float32, error) {
+	if !s.FitsQuery(text) {
+		return nil, ErrTooLong
+	}
 	return s.generate(ctx, c, s.QueryPrefix+text)
 }
 
 // Document generates the embedding of a capability_text (architecture §3.7.3).
 func (s *Space) Document(ctx context.Context, c *http.Client, text string) ([]float32, error) {
+	if !s.FitsDocument(text) {
+		return nil, ErrTooLong
+	}
 	return s.generate(ctx, c, s.DocumentPrefix+text)
 }
 
