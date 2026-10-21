@@ -2,7 +2,7 @@ module zobik.org/zobik
 
 go 1.27
 
-toolchain go1.27.2
+toolchain go1.27.3
 
 require (
 	cel.dev/cel-go v0.32.0
