@@ -427,3 +427,26 @@ func ConsolePort(dir, unit string) (string, error) {
 	}
 	return port, os.WriteFile(path, []byte(port), 0o600)
 }
+
+// unitPanel names, among the ports, the one where the console serves the panel
+// and its API (implementation §6, The deployment parameters).
+const unitPanel = "panel"
+
+// PanelPort is the host port on 127.0.0.1 where the console serves the panel:
+// the first zobik init chooses it, and it stays fixed.
+func PanelPort(dir string) (string, error) { return ConsolePort(dir, unitPanel) }
+
+// ErrNoPanel is a directory where zobik init has not chosen the panel's port.
+var ErrNoPanel = errors.New("deploy: no network here: run zobik init")
+
+// KnownPanelPort is the panel's port zobik init chose, without choosing one.
+func KnownPanelPort(dir string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, dirPorts, unitPanel))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", ErrNoPanel
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
+}

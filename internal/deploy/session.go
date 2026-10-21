@@ -14,20 +14,16 @@ import (
 	"zobik.org/zobik/internal/bus"
 )
 
-// sessionLifetime bounds the console identity's JWT in a session, which lasts as
-// long as a command (implementation §6, The service between the console and the channels).
-const sessionLifetime = 30 * time.Minute
-
-// Session is what a console command holds while it runs: the root and the
-// console's platform identity, both opened with the operator's password
-// (implementation §6, The root and the split Operator Channel).
+// Session is what a sign-in opens: the root and the console's platform
+// identity, both with the operator's password (implementation §6, The root and
+// the split Operator Channel).
 type Session struct {
 	Root    nkeys.KeyPair
 	Console nkeys.KeyPair
-	// ConsoleJWT is the console identity's user JWT, issued under the console's
-	// scoped signing key; the channels authenticate it.
-	ConsoleJWT string
-	dir        string
+	// signingKey is the console's scoped signing key, which lives in the clear
+	// on the host, and account the account it signs under.
+	signingKey nkeys.KeyPair
+	account    string
 }
 
 // OpenSession opens the session with the operator's username and password.
@@ -56,15 +52,24 @@ func OpenSession(dir, user string, password []byte) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	pub, err := consoleKey.PublicKey()
+	return &Session{Root: root, Console: consoleKey, signingKey: signingKey, account: account.Subject}, nil
+}
+
+// ConsoleJWT issues the console identity's user JWT, valid until exp, under the
+// console's scoped signing key; the channels authenticate it.
+func (s *Session) ConsoleJWT(exp time.Time) (string, error) {
+	pub, err := s.Console.PublicKey()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	token, err := bus.IssueUser(signingKey, account.Subject, pub, bus.ConsoleScope.Role, time.Now().Add(sessionLifetime))
-	if err != nil {
-		return nil, err
+	return bus.IssueUser(s.signingKey, s.account, pub, bus.ConsoleScope.Role, exp)
+}
+
+// Close wipes the keys the session opened.
+func (s *Session) Close() {
+	for _, kp := range []nkeys.KeyPair{s.Root, s.Console} {
+		kp.Wipe()
 	}
-	return &Session{Root: root, Console: consoleKey, ConsoleJWT: token, dir: dir}, nil
 }
 
 // ErrNoChannel is a channel the network does not run.
@@ -72,15 +77,15 @@ var ErrNoChannel = errors.New("deploy: the network runs no such channel")
 
 // Channel returns the platform identity of the channel that unit runs and the
 // address where it serves the console, on the host's 127.0.0.1.
-func (s *Session) Channel(unit string) (id, addr string, err error) {
-	b, err := os.ReadFile(filepath.Join(s.dir, dirIdentities, unit+".pub"))
+func Channel(dir, unit string) (id, addr string, err error) {
+	b, err := os.ReadFile(filepath.Join(dir, dirIdentities, unit+".pub"))
 	if errors.Is(err, os.ErrNotExist) {
 		return "", "", ErrNoChannel
 	}
 	if err != nil {
 		return "", "", err
 	}
-	port, err := os.ReadFile(filepath.Join(s.dir, dirPorts, unit))
+	port, err := os.ReadFile(filepath.Join(dir, dirPorts, unit))
 	if err != nil {
 		return "", "", fmt.Errorf("deploy: the port of %s: %w", unit, err)
 	}

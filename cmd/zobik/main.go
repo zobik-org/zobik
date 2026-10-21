@@ -56,6 +56,8 @@ func run(ctx context.Context, args []string) error {
 		return healthCmd(ctx, rest)
 	case "config":
 		return configCmd(ctx, rest)
+	case "console":
+		return consoleCmd(ctx, rest)
 	case deploy.ActCommand:
 		if len(rest) != 1 {
 			return fmt.Errorf("usage: zobik %s <act>", deploy.ActCommand)
@@ -97,6 +99,7 @@ func initCmd(ctx context.Context, args []string) error {
 	n.register(fs)
 	var o deploy.Options
 	fs.StringVar(&o.Tenant, "tenant", "", "the identifier of a tenant on this host to join (default: a new tenant)")
+	idle := registerIdleTimeout(fs)
 	for _, f := range devInitFlags {
 		f(fs, &o)
 	}
@@ -106,6 +109,17 @@ func initCmd(ctx context.Context, args []string) error {
 	if err := n.resolve(); err != nil {
 		return err
 	}
+	// A console that already runs for the network stops zobik init before it
+	// touches anything.
+	port, err := deploy.PanelPort(n.dir)
+	if err != nil {
+		return err
+	}
+	ln, err := listenPanel(n, port)
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
 	_, statErr := os.Stat(filepath.Join(n.dir, "root.sealed"))
 	user, password, err := readCredentials(os.IsNotExist(statErr))
 	if err != nil {
@@ -115,10 +129,28 @@ func initCmd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer e.Close()
 	o.Network, o.Dir, o.User, o.Password, o.Image = n.network, n.dir, user, password, image
 	o.Scopes = append(append([]bus.Scope{bus.ConsoleScope}, bus.RoleScopes...), devScopes...)
-	return deploy.Init(ctx, e, o)
+	err = deploy.Init(ctx, e, o)
+	e.Close()
+	if err != nil {
+		return err
+	}
+
+	// It ends serving the console, with the session open and a single-use link
+	// to it (implementation §6, Installation and zobik init).
+	svc, err := newConsole(n.dir, *idle)
+	if err != nil {
+		return err
+	}
+	path, err := svc.Link(user, password)
+	if err != nil {
+		return err
+	}
+	url := "http://localhost:" + port + path
+	fmt.Printf("console: the network is up; the panel is at %s\n", url)
+	openBrowser(url)
+	return svc.Serve(ctx, ln)
 }
 
 // readCredentials asks for the operator's username and password on the
