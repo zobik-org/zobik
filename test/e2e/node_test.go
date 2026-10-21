@@ -33,7 +33,7 @@ func TestNode(t *testing.T) {
 	z.build(t, ctx, "images/zobik-python.Dockerfile", "zobik-python:dev")
 	z.build(t, ctx, "examples/blueprints/echo/Dockerfile", "zobik-echo:dev")
 	z.build(t, ctx, "test/e2e/embeddings/Dockerfile", embeddingsImage)
-	z.run(t, ctx, credentials, "init")
+	z.init(t, ctx)
 
 	blueprint := filepath.Join(z.root, "examples/blueprints/echo/blueprint.json")
 	raw, err := os.ReadFile(blueprint)

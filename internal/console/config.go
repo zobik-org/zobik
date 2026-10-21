@@ -4,37 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nkeys"
-	"google.golang.org/grpc"
 
 	"zobik.org/zobik/internal/configschema"
 	"zobik.org/zobik/internal/digest"
 	"zobik.org/zobik/internal/globalconfig"
-	"zobik.org/zobik/internal/rpcauth"
 	"zobik.org/zobik/internal/signing"
 	channelv1 "zobik.org/zobik/proto/zobik/channel/v1"
 )
 
 // The administration affordance of architecture §3.17.1: present the current
-// snapshot, accept assignments, emit config_change with the operator's proof,
-// and return the outcome. The console carries; it derives no value.
-
-// Dial connects to a channel's service as the console's platform identity
-// (implementation §6, The service between the console and the channels).
-func Dial(addr, consoleJWT string, key nkeys.KeyPair) (channelv1.ChannelClient, io.Closer, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(&rpcauth.Client{
-		JWT: func() (string, error) { return consoleJWT, nil }, Key: key,
-	}))
-	if err != nil {
-		return nil, nil, err
-	}
-	return channelv1.NewChannelClient(conn), conn, nil
-}
+// snapshot, accept assignments and emit config_change with the operator's
+// proof. The console carries; it derives no value.
 
 // Operator is the console's half of the Operator Channel: it signs with the
 // root, and the channel it names carries the act (implementation §6, The root
@@ -66,20 +51,17 @@ func (o *Operator) Snapshot(ctx context.Context) (*Snapshot, error) {
 	return out, nil
 }
 
-// Outcome is how a config_change closed, as its delivery brought it.
-type Outcome struct {
-	TraceID string
-	// ConfigVersion is the published version, on success.
-	ConfigVersion string
-	// FailureCode and FailureReason are the rejection's (architecture §3.14.4).
-	FailureCode, FailureReason string
+// Opened is a trace the console opened through a channel.
+type Opened struct {
+	TraceID     string `json:"trace_id"`
+	EntryTaskID string `json:"entry_task_id"`
 }
 
 // ConfigSet applies assignments on the snapshot of version base: it validates
-// them locally against the schema and its preconditions, signs the proof, opens
-// the config_change and waits for the delivery of its outcome, which it
-// confirms with received (architecture §3.14.4, §3.5.4).
-func (o *Operator) ConfigSet(ctx context.Context, base *Snapshot, assignments map[string]json.RawMessage) (*Outcome, error) {
+// them locally against the schema and its preconditions, signs the proof and
+// opens the config_change. Its outcome arrives as a delivery over the session
+// (architecture §3.14.4, §3.5.4).
+func (o *Operator) ConfigSet(ctx context.Context, base *Snapshot, assignments map[string]json.RawMessage) (*Opened, error) {
 	schema, err := configschema.Load()
 	if err != nil {
 		return nil, err
@@ -115,17 +97,6 @@ func (o *Operator) ConfigSet(ctx context.Context, base *Snapshot, assignments ma
 		return nil, err
 	}
 
-	// The session goes first: with the console attached, the channel takes the
-	// delivery in round 1 (implementation §6, The operator console).
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	session, err := o.Client.Attach(ctx)
-	if err != nil {
-		return nil, err
-	}
-	deliveries := make(chan delivery, 16)
-	go receiveDeliveries(session, deliveries)
-
 	open, err := o.Client.Open(ctx)
 	if err != nil {
 		return nil, err
@@ -143,77 +114,7 @@ func (o *Operator) ConfigSet(ctx context.Context, base *Snapshot, assignments ma
 	if err != nil {
 		return nil, err
 	}
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case d, ok := <-deliveries:
-			if !ok {
-				return nil, errors.New("console: the channel closed the session")
-			}
-			if d.Evidence.TaskID != ack.GetEntryTaskId() {
-				continue
-			}
-			// Showing the outcome is delivering it (implementation §6, The service
-			// between the console and the channels).
-			// Answer confirms the delivery; a broken session loses only the mark.
-			_ = session.Send(&channelv1.ConsoleMessage{Body: &channelv1.ConsoleMessage_Shown{Shown: &channelv1.Shown{TaskId: d.taskID}}})
-			if _, err := o.Client.Answer(ctx, &channelv1.AnswerRequest{TaskId: d.taskID, Data: []byte(`{"decision":"received"}`)}); err != nil {
-				return nil, fmt.Errorf("console: confirming the delivery: %w", err)
-			}
-			return &Outcome{
-				TraceID: ack.GetTraceId(), ConfigVersion: d.Details.Data.ConfigVersion,
-				FailureCode: d.Details.FailureCode, FailureReason: d.Details.FailureReason,
-			}, nil
-		}
-	}
+	return &Opened{TraceID: ack.GetTraceId(), EntryTaskID: ack.GetEntryTaskId()}, nil
 }
 
 const topicConfigChange = "config_change"
-
-// delivery is a result_delivery query as the console reads it (architecture §3.5.4).
-type delivery struct {
-	taskID   string
-	Kind     string `json:"kind"`
-	Evidence struct {
-		TaskID string `json:"task_id"`
-	} `json:"evidence"`
-	Details struct {
-		Type          string `json:"type"`
-		FailureCode   string `json:"failure_code"`
-		FailureReason string `json:"failure_reason"`
-		Data          struct {
-			ConfigVersion string `json:"config_version"`
-		} `json:"data"`
-	} `json:"details"`
-}
-
-// receiveDeliveries passes on the result deliveries the session brings.
-func receiveDeliveries(session channelv1.Channel_AttachClient, out chan<- delivery) {
-	defer close(out)
-	for {
-		m, err := session.Recv()
-		if err != nil {
-			return
-		}
-		c := m.GetConsultation()
-		if c == nil {
-			continue
-		}
-		var assigned struct {
-			Subject string `json:"subject"`
-		}
-		var announced struct {
-			Data json.RawMessage `json:"data"`
-		}
-		if json.Unmarshal(c.GetEvent(), &assigned) != nil || json.Unmarshal(c.GetAnnouncement(), &announced) != nil {
-			continue
-		}
-		var d delivery
-		if json.Unmarshal(announced.Data, &d) != nil || d.Kind != "result_delivery" {
-			continue
-		}
-		d.taskID = assigned.Subject
-		out <- d
-	}
-}

@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"zobik.org/zobik/internal/globalconfig"
@@ -56,10 +57,15 @@ type service struct {
 }
 
 // Attach is the console's session: the role sends what it retains and what it
-// wins, and receives what the panel showed and the expired it confirms.
+// wins, and receives what the panel showed and the expired it confirms. The
+// headers tell the console the session replaced the previous one, which it
+// closes then (implementation §6, The service between the console and the channels).
 func (s *service) Attach(stream channelv1.Channel_AttachServer) error {
 	sess := s.c.attach()
 	defer s.c.detach(sess)
+	if err := stream.SendHeader(metadata.MD{}); err != nil {
+		return err
+	}
 	errs := make(chan error, 1)
 	go func() {
 		for {

@@ -38,7 +38,7 @@ func TestTraces(t *testing.T) {
 	z.build(t, ctx, "examples/blueprints/historian/Dockerfile", "zobik-historian:dev")
 	z.build(t, ctx, "test/e2e/embeddings/Dockerfile", embeddingsImage)
 	z.tracingUI = freePort(t)
-	z.run(t, ctx, credentials, "init")
+	z.init(t, ctx)
 	jaeger := "http://127.0.0.1:" + z.tracingUI
 
 	blueprint := filepath.Join(z.root, "examples/blueprints/historian/blueprint.json")

@@ -11,13 +11,11 @@ import (
 	"time"
 
 	"zobik.org/zobik/internal/console"
-	"zobik.org/zobik/internal/deploy"
-	"zobik.org/zobik/internal/globalconfig"
 )
 
 // zobik config get and zobik config set are the administration affordance on
-// the command line: they open the session in the same process, and talk to the
-// Operator Channel (architecture §3.17.1, implementation §6, The operator console).
+// the command line: a client of the console, which signs in at its start and
+// out at its end (architecture §3.17.1, implementation §6, The operator console).
 func configCmd(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: zobik config get | set <key>=<value> [<key>=<value> ...]")
@@ -25,7 +23,7 @@ func configCmd(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("config "+args[0], flag.ContinueOnError)
 	var n networkFlags
 	n.register(fs)
-	base := fs.String("base", "", "set: the config_version edited on (default: the head it reads)")
+	base := fs.String("base", "", "set: the config_version edited on (default: the head)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -47,54 +45,56 @@ func configCmd(ctx context.Context, args []string) error {
 		return fmt.Errorf("unknown config command %q", args[0])
 	}
 
-	user, password, err := readCredentials(false)
-	if err != nil {
-		return err
-	}
-	session, err := deploy.OpenSession(n.dir, user, password)
-	if err != nil {
-		return fmt.Errorf("opening the session: %w", err)
-	}
-	id, addr, err := session.Channel("channel_operator")
-	if err != nil {
-		return err
-	}
-	client, conn, err := console.Dial(addr, session.ConsoleJWT, session.Console)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	op := &console.Operator{Root: session.Root, ChannelID: id, Client: client}
-
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	snap, err := op.Snapshot(ctx)
+	c, err := consoleClient(ctx, n)
 	if err != nil {
-		return fmt.Errorf("reading the configuration: %w", err)
+		return err
 	}
+	defer func() { _ = c.SignOut(context.WithoutCancel(ctx)) }()
+
 	if args[0] == "get" {
+		snap, err := c.Config(ctx)
+		if err != nil {
+			return fmt.Errorf("reading the configuration: %w", err)
+		}
 		printSnapshot(snap)
 		return nil
 	}
-	if *base != "" && *base != snap.ConfigVersion {
-		// An edit made on another version: the Config Store judges it (architecture §3.14.4).
-		snap.ConfigVersion = *base
-	}
-	fmt.Printf("editing on %s\n", snap.ConfigVersion)
-	out, err := op.ConfigSet(ctx, snap, assignments)
-	var invalid *globalconfig.InvalidError
-	if errors.As(err, &invalid) {
-		return fmt.Errorf("not sent: %w", invalid)
-	}
+	// The outcome arrives over the event stream, which opens before the act.
+	outcomes, err := c.Outcomes(ctx)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("trace %s\n", out.TraceID)
-	if out.FailureCode != "" {
-		return fmt.Errorf("rejected, %s: %s", out.FailureCode, out.FailureReason)
+	opened, err := c.ConfigSet(ctx, *base, assignments)
+	if err != nil {
+		return err
 	}
-	fmt.Printf("published %s\n", out.ConfigVersion)
-	return nil
+	fmt.Printf("trace %s\n", opened.TraceID)
+	for o := range outcomes {
+		if o.TraceID != opened.TraceID {
+			continue
+		}
+		var d struct {
+			FailureCode   string `json:"failure_code"`
+			FailureReason string `json:"failure_reason"`
+			Data          struct {
+				ConfigVersion string `json:"config_version"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(o.Details, &d); err != nil {
+			return fmt.Errorf("the outcome: %w", err)
+		}
+		if d.FailureCode != "" {
+			return fmt.Errorf("rejected, %s: %s", d.FailureCode, d.FailureReason)
+		}
+		fmt.Printf("published %s\n", d.Data.ConfigVersion)
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("waiting for the outcome: %w", err)
+	}
+	return errors.New("the console closed the event stream before the outcome")
 }
 
 // parseAssignments reads key=value pairs. A value is JSON, and one that is not
@@ -118,7 +118,7 @@ func parseAssignments(args []string) (map[string]json.RawMessage, error) {
 	return out, nil
 }
 
-func printSnapshot(s *console.Snapshot) {
+func printSnapshot(s *console.SnapshotJSON) {
 	fmt.Printf("%s, published %s\n\n", s.ConfigVersion, s.PublishedAt)
 	keys := make([]string, 0, len(s.Values))
 	for k := range s.Values {

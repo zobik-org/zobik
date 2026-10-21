@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -25,8 +26,9 @@ func TestBus(t *testing.T) {
 	defer cancel()
 	z := newNetwork(t, ctx)
 
-	z.run(t, ctx, credentials, "init")
-	z.run(t, ctx, credentials, "init") // converges
+	_, stop := z.init(t, ctx)
+	stop()
+	z.init(t, ctx) // converges
 
 	lines := z.start(t, ctx, "tap")
 	waitFor(t, lines, regexp.MustCompile(`^tap: listening`))
@@ -108,11 +110,29 @@ func (z *network) run(t *testing.T, ctx context.Context, stdin string, args ...s
 	return string(out)
 }
 
+// init runs zobik init, which ends serving the console in the foreground, and
+// returns once the network is up, with the panel's single-use link; stop stops
+// that console.
+func (z *network) init(t *testing.T, ctx context.Context) (link string, stop func()) {
+	t.Helper()
+	lines, stop := z.startWith(t, ctx, credentials, "init")
+	m := waitWithin(t, lines, regexp.MustCompile(`the panel is at (\S+)`), 8*time.Minute)
+	return m[1], stop
+}
+
 // start runs a long-lived subcommand and streams its output lines; the test's
 // end interrupts it, which removes its container.
 func (z *network) start(t *testing.T, ctx context.Context, args ...string) <-chan string {
 	t.Helper()
-	c := z.cmd(ctx, "", args...)
+	lines, _ := z.startWith(t, ctx, "", args...)
+	return lines
+}
+
+// startWith is start with stdin, and returns too a stop that interrupts the
+// subcommand and waits for it.
+func (z *network) startWith(t *testing.T, ctx context.Context, stdin string, args ...string) (<-chan string, func()) {
+	t.Helper()
+	c := z.cmd(ctx, stdin, args...)
 	c.Cancel = func() error { return c.Process.Signal(os.Interrupt) }
 	c.WaitDelay = 15 * time.Second
 	stdout, err := c.StdoutPipe()
@@ -132,24 +152,34 @@ func (z *network) start(t *testing.T, ctx context.Context, args ...string) <-cha
 			lines <- s.Text()
 		}
 	}()
-	t.Cleanup(func() {
-		c.Process.Signal(syscall.SIGINT)
-		c.Wait()
-	})
-	return lines
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			c.Process.Signal(syscall.SIGINT)
+			c.Wait()
+		})
+	}
+	t.Cleanup(stop)
+	return lines, stop
 }
 
 func waitFor(t *testing.T, lines <-chan string, re *regexp.Regexp) {
 	t.Helper()
-	timeout := time.After(time.Minute)
+	waitWithin(t, lines, re, time.Minute)
+}
+
+// waitWithin waits for a line matching re and returns its submatches.
+func waitWithin(t *testing.T, lines <-chan string, re *regexp.Regexp, within time.Duration) []string {
+	t.Helper()
+	timeout := time.After(within)
 	for {
 		select {
 		case l, ok := <-lines:
 			if !ok {
 				t.Fatalf("output ended before %s", re)
 			}
-			if re.MatchString(l) {
-				return
+			if m := re.FindStringSubmatch(l); m != nil {
+				return m
 			}
 		case <-timeout:
 			t.Fatalf("no line matching %s", re)

@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -15,14 +16,27 @@ import (
 
 const credentials = "operator\npw-e2e\n"
 
-// La asignación: zobik config set walks in zobik tap the cycle announced →
-// proposed → assigned → completed on config_change, the same cycle of the
-// delivery on hitl_contact_operator and the task.completed that closes the root.
+// La asignación: zobik config set, a client of the console that zobik init
+// leaves running, walks in zobik tap the cycle announced → proposed → assigned
+// → completed on config_change, the same cycle of the delivery on
+// hitl_contact_operator and the task.completed that closes the root.
 func TestAssignment(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	z := newNetwork(t, ctx)
-	z.run(t, ctx, credentials, "init")
+	link, _ := z.init(t, ctx)
+	// The link of zobik init leaves the browser in a session, once.
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for _, want := range []int{http.StatusSeeOther, http.StatusUnauthorized} {
+		resp, err := noRedirect.Get(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("the panel's link answered %d, want %d", resp.StatusCode, want)
+		}
+	}
 
 	lines := z.start(t, ctx, "tap")
 	waitFor(t, lines, regexp.MustCompile(`^tap: listening`))

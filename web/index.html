@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zobik</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 28rem; margin: 4rem auto; padding: 0 1rem; }
+  form { display: grid; gap: .5rem; }
+  [hidden] { display: none; }
+</style>
+</head>
+<body>
+<h1>Zobik</h1>
+<form id="signin" hidden>
+  <input name="username" placeholder="Username" autocomplete="username" required>
+  <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+  <button>Sign in</button>
+  <p id="error"></p>
+</form>
+<div id="signed" hidden>
+  <p>Signed in, on <span id="version"></span>.</p>
+  <button id="signout">Sign out</button>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function show() {
+  const r = await fetch("/api/config");
+  $("signin").hidden = r.ok;
+  $("signed").hidden = !r.ok;
+  if (r.ok) $("version").textContent = (await r.json()).config_version;
+}
+
+$("signin").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const r = await fetch("/api/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: f.get("username"), password: f.get("password") }),
+  });
+  $("error").textContent = r.ok ? "" : (await r.json()).error;
+  show();
+});
+
+$("signout").addEventListener("click", async () => {
+  await fetch("/api/session", { method: "DELETE" });
+  show();
+});
+
+show();
+</script>
+</body>
+</html>
