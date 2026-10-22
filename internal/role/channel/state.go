@@ -44,6 +44,9 @@ type root struct {
 	FinalRound bool   `json:"final_round,omitempty"`
 	// Options are those of the delivery's last attempt.
 	Options []string `json:"options,omitempty"`
+	// RetainUntil is, once the root closes, the end of context_retention_grace:
+	// until then the role keeps its token, for the purge (architecture §3.6.1, §3.4).
+	RetainUntil time.Time `json:"retain_until,omitzero"`
 }
 
 // roots keeps each root in a file of its own, roots/<TraceID>.json.

@@ -93,6 +93,13 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	if err != nil {
 		return err
 	}
+	closed := map[string]*root{}
+	for id, r := range open {
+		if !r.RetainUntil.IsZero() {
+			closed[id] = r
+			delete(open, id)
+		}
+	}
 	conn, err := grpc.NewClient(o.ContextAddr, grpc.WithTransportCredentials(rt.RPCCredentials()))
 	if err != nil {
 		return err
@@ -104,7 +111,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 		rt: rt, js: js, audience: o.Audience, topic: topic,
 		claimant: claim.New(rt.ID, rt.Credential, js, nc, topic),
 		context:  contextv1.NewContextStoreClient(conn), http: embedding.Client(),
-		roots: store, open: open,
+		roots: store, open: open, closed: closed,
 		byEntry: map[string]string{}, byDelivery: map[string]string{},
 		queries: map[string]*query{}, windows: map[string]time.Duration{},
 	}
@@ -165,6 +172,7 @@ type channel struct {
 
 	mu         sync.Mutex
 	open       map[string]*root
+	closed     map[string]*root  // closed roots, retained for the purge
 	byEntry    map[string]string // entry subtask's TaskID → TraceID
 	byDelivery map[string]string // delivery attempt's TaskID → TraceID
 	queries    map[string]*query
@@ -174,8 +182,8 @@ type channel struct {
 	windows map[string]time.Duration
 }
 
-// followHead reads the head every few seconds, for the current keys: the lease
-// and the delivery mode.
+// followHead reads the head every few seconds, for the current keys: the lease,
+// the delivery mode and the grace of the closed roots, which it sweeps.
 func (c *channel) followHead(ctx context.Context, l *role.Loop) {
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
@@ -183,7 +191,8 @@ func (c *channel) followHead(ctx context.Context, l *role.Loop) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case now := <-t.C:
+			c.sweep(now)
 		}
 		l.Mark()
 		opCtx, cancel := context.WithTimeout(ctx, opTimeout)

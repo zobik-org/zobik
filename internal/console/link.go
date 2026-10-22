@@ -29,6 +29,8 @@ type Channel struct {
 // Operator Channel).
 type Keys struct {
 	Root, Console nkeys.KeyPair
+	// Conversations is the key of the work area's conversations.
+	Conversations []byte
 	// JWT issues the console identity's user JWT, valid until exp.
 	JWT func(exp time.Time) (string, error)
 	// Close wipes the keys.

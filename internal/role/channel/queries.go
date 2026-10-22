@@ -142,7 +142,7 @@ func (c *channel) expire(taskID, reason string) {
 	if err := c.claimant.Fail(ctx, q.a, code, reason); err != nil {
 		log.Printf("channel: closing %s: %v", taskID, err)
 	}
-	ex := &channelv1.Expired{DeliveryId: uuid.NewString(), TaskId: taskID, FailureCode: code}
+	ex := &channelv1.Expired{DeliveryId: uuid.NewString(), TaskId: taskID, FailureCode: code, TraceId: bus.TraceID(q.a.Announcement.TraceParent)}
 	c.mu.Lock()
 	c.expired = append(c.expired, ex)
 	s := c.session

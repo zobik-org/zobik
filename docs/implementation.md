@@ -1425,10 +1425,15 @@ message ConsoleMessage {
   oneof body {
     Shown                 shown    = 1;  // the panel showed a query to the person
     zobik.nri.v1.Received received = 2;  // confirms an expired by its delivery_id
+    Release               release  = 3;  // lets go a query the panel will not show again
   }
 }
 
 message Shown {
+  string task_id = 1;  // the query
+}
+
+message Release {
   string task_id = 1;  // the query
 }
 
@@ -1444,6 +1449,7 @@ message Expired {
   string delivery_id    = 1;
   string task_id        = 2;  // the query
   string failure_code   = 3;  // unanswered | undelivered
+  string trace_id       = 4;  // the query's trace
 }
 
 // Opening a trace: the payload and then the bodies
@@ -1490,9 +1496,20 @@ message ConfigSnapshot {
 
 **`Shown` is what separates `unanswered` from `undelivered`.** The console sends it when the panel has shown the query to the person. If the session closes or `hitl_response_window` expires without an answer, the role closes the query `unanswered` if it received `Shown` and `undelivered` if not (§3.5.2).
 
-**Every query the role closes without an answer reaches the console as `expired`**, which is confirmed with `Received`. The role retains the notice until the confirmation, so that of a query that expires without a session arrives with the next session: it is what the panel shows on sign-in. The console confirms it once the panel has shown it, so a session of the command line alone leaves it for the panel.
+**`Release` lets go a query the console will not show again**, as the session closing does: the role closes it `unanswered` if it received `Shown` and `undelivered` if not. The work area sends it for the queries of a conversation the person deletes, so that its trace does not wait for `hitl_response_window` to close and be purged.
 
-**`Open` opens a trace like the NRI's** (§3): the role generates the `TraceID`, mints the root's token with its credential (§3.14.3), writes the payload and the bodies in the `TraceID`'s section and announces the entry subtask on `topic`, with the references in `data.context_ref` and `data.bodies`. The work area sends the request's text in the `data`, its attachments as bodies, and the conversation's previous messages with their attachments as bodies with `context` (§3.5.1). The topic is one of the channel's entries—`intake` in the Entry Node, the topics of §3.17.1 in the Operator Channel—, and it rejects another with `INVALID_ARGUMENT`, as it does a `data` that is not a JSON object in valid UTF-8.
+**Every query the role closes without an answer reaches the console as `expired`**, with its trace, which places it in its conversation, and it is confirmed with `Received`. The role retains the notice until the confirmation, so that of a query that expires without a session arrives with the next session: it is what the panel shows on sign-in. The console confirms it once the panel has shown it, so a session of the command line alone leaves it for the panel. The `undelivered` of an outcome's delivery outside the final round is confirmed on arrival, without a notice: the delivery reopens in the next round (§3.5.4), and the outcome reaches the panel with it.
+
+**`Open` opens a trace like the NRI's** (§3): the role generates the `TraceID`, mints the root's token with its credential (§3.14.3), writes the payload and the bodies in the `TraceID`'s section and announces the entry subtask on `topic`, with the references in `data.context_ref` and `data.bodies`. The work area sends the request's text in the `data`, its attachments as bodies, and the conversation's previous messages with their attachments as bodies with `context` (§3.5.1).
+
+**Each previous message is a JSON body followed by its attachments**, from the oldest message to the newest, all with `context`, as the messages of a context arrive in ingress (§8.3). The message is an object with `from`, `person` or `network`; `text`; `decision`, only in an answer of the person; and `attachments`, the names of the bodies that follow it, in their order. The messages are those the person has in view, the requests still without an outcome included:
+
+* **A request** is a `person` message with its text.
+* **An outcome** is a `network` message whose `text` is the result when it is UTF-8 text, and the `failure_reason` when the entry subtask failed. A result that is not text goes as its attachment.
+* **A query from a node of the trace** is a `network` message whose `text` is its `data.task_text`, or its `data` as JSON when it has no `task_text` (*The operator console*, above).
+* **The answer of the person** follows the outcome or the query it answers, as a `person` message: `decision` is the option chosen—`accept` or `reject` of an outcome, or one of the query's `options`—and `text` is the reason of a `reject` or the free-text answer of a query. An outcome or a query nobody answered has no answer message, and neither does an outcome whose delivery has no choice.
+
+The topic is one of the channel's entries—`intake` in the Entry Node, the topics of §3.17.1 in the Operator Channel—, and it rejects another with `INVALID_ARGUMENT`, as it does a `data` that is not a JSON object in valid UTF-8.
 
 **On `intake` the role generates the `task_embedding`** from the `task_text` the work area sends in the `data` (§3.7.4), because an emergent node claims it by similarity (§3.7.7); the Operator Channel's entries are claimed by structural components and carry none. It rejects with `INVALID_ARGUMENT` an `Open` on `intake` without `task_text`, with one longer than `max_text_size` (§1.2.15), or with a `task_embedding` or a `model_id`, which it stamps; without `embedding_model` nothing bounds or embeds the text, and it fails with `FAILED_PRECONDITION` (§2.3). `Open` returns once the content is written, and if the embedding endpoint does not answer, the role keeps the announcement in its volume and retries it until the endpoint answers.
 

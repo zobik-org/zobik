@@ -1,8 +1,10 @@
 package deploy
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/nats-io/nkeys"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/console"
 )
 
 // Session is what a sign-in opens: the root and the console's platform
@@ -20,6 +23,9 @@ import (
 type Session struct {
 	Root    nkeys.KeyPair
 	Console nkeys.KeyPair
+	// Conversations is the key the work area's conversations are encrypted
+	// with (implementation §6, The operator console).
+	Conversations []byte
 	// signingKey is the console's scoped signing key, which lives in the clear
 	// on the host, and account the account it signs under.
 	signingKey nkeys.KeyPair
@@ -52,8 +58,35 @@ func OpenSession(dir, user string, password []byte) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Session{Root: root, Console: consoleKey, signingKey: signingKey, account: account.Subject}, nil
+	conversations, err := conversationsKey(dir, password)
+	if err != nil {
+		return nil, err
+	}
+	return &Session{Root: root, Console: consoleKey, Conversations: conversations, signingKey: signingKey, account: account.Subject}, nil
 }
+
+// conversationsKey opens the key of the conversations, and creates it sealed
+// with the password when it does not exist yet.
+func conversationsKey(dir string, password []byte) ([]byte, error) {
+	sealed, err := os.ReadFile(filepath.Join(dir, fileConvKey))
+	if err == nil {
+		return console.OpenSecret(sealed, password)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	if sealed, err = console.SealSecret(key, password); err != nil {
+		return nil, err
+	}
+	return key, writeFile(dir, fileConvKey, sealed)
+}
+
+// ConversationsDir is where the console keeps the conversations.
+func ConversationsDir(dir string) string { return filepath.Join(dir, dirConvs) }
 
 // ConsoleJWT issues the console identity's user JWT, valid until exp, under the
 // console's scoped signing key; the channels authenticate it.
@@ -70,6 +103,7 @@ func (s *Session) Close() {
 	for _, kp := range []nkeys.KeyPair{s.Root, s.Console} {
 		kp.Wipe()
 	}
+	clear(s.Conversations)
 }
 
 // ErrNoChannel is a channel the network does not run.

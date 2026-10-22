@@ -31,6 +31,9 @@ type Options struct {
 	JWTLifetime time.Duration
 	// LinkLifetime bounds the single-use link. Zero is five minutes.
 	LinkLifetime time.Duration
+	// ConversationsDir is where the work area keeps the conversations, which
+	// the key a sign-in opens encrypts (implementation §6, The operator console).
+	ConversationsDir string
 }
 
 // Service is the console's local API: the session, and the acts the panel and
@@ -48,6 +51,7 @@ type Service struct {
 	stop    context.CancelFunc
 	channel map[string]*link
 	seen    map[string]bool
+	work    *workArea
 }
 
 type session struct{ last time.Time }
@@ -96,10 +100,26 @@ func (s *Service) unlock(keys *Keys) {
 	s.keys, s.stop = keys, stop
 	s.channel, s.seen = map[string]*link{}, map[string]bool{}
 	for _, ch := range s.o.Channels {
-		l := &link{ch: ch, keys: keys, lifetime: s.o.JWTLifetime, receive: s.receive}
-		s.channel[ch.Audience] = l
+		s.channel[ch.Audience] = &link{ch: ch, keys: keys, lifetime: s.o.JWTLifetime, receive: s.receive}
+	}
+	if l := s.channel[AudienceUser]; l != nil && s.o.ConversationsDir != "" && keys.Conversations != nil {
+		w, err := s.openWorkArea(l, keys.Conversations)
+		if err != nil {
+			log.Printf("console: opening the conversations: %v", err)
+		}
+		s.work = w
+	}
+	for _, l := range s.channel {
 		go l.run(ctx)
 	}
+}
+
+func (s *Service) openWorkArea(l *link, key []byte) (*workArea, error) {
+	st, err := openStore(s.o.ConversationsDir, key)
+	if err != nil {
+		return nil, err
+	}
+	return newWorkArea(st, l, s.hub.notify)
 }
 
 // signOut closes a session, and with the last one discards the keys.
@@ -118,7 +138,7 @@ func (s *Service) lockIfIdle() {
 	}
 	s.stop()
 	s.keys.Close()
-	s.keys, s.stop, s.channel, s.seen = nil, nil, nil, nil
+	s.keys, s.stop, s.channel, s.seen, s.work = nil, nil, nil, nil, nil
 	s.hub.reset()
 }
 
@@ -220,6 +240,12 @@ func (s *Service) Serve(ctx context.Context, ln net.Listener) error {
 // once some stream has it: showing the outcome is delivering it
 // (implementation §6, The service between the console and the channels).
 func (s *Service) receive(l *link, m *channelv1.ChannelMessage) {
+	if l.ch.Audience == AudienceUser {
+		if w := s.workArea(); w != nil {
+			w.receive(m)
+		}
+		return
+	}
 	c := m.GetConsultation()
 	if c == nil {
 		// An expired is confirmed once the panel shows it.
@@ -274,6 +300,13 @@ func (s *Service) ack(l *link, taskID string) {
 		}
 		s.mu.Unlock()
 	}
+}
+
+// workArea returns the work area while some session is open.
+func (s *Service) workArea() *workArea {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.work
 }
 
 // operator returns the console's half of the Operator Channel, once it holds

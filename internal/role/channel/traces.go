@@ -220,14 +220,39 @@ func (c *channel) announce(t *trace, topic, workspace string, raw []byte, payloa
 	return nil
 }
 
-func (c *channel) forget(r *root) {
+// retain keeps a closed root's token until context_retention_grace expires, so
+// the console can still purge the trace (architecture §3.6.1, §3.4).
+func (c *channel) retain(r *root) {
+	var graceMs int64
+	_ = json.Unmarshal(c.head.Load().Values["context_retention_grace"], &graceMs) // the head passed its schema when it was published
 	c.mu.Lock()
 	delete(c.open, r.TraceID)
 	delete(c.byEntry, r.EntryTaskID)
 	delete(c.byDelivery, r.Delivery)
+	r.RetainUntil = time.Now().Add(time.Duration(graceMs) * time.Millisecond)
+	c.closed[r.TraceID] = r
+	err := c.roots.save(r)
 	c.mu.Unlock()
-	if err := c.roots.remove(r.TraceID); err != nil {
-		log.Printf("channel: forgetting %s: %v", r.TraceID, err)
+	if err != nil {
+		log.Printf("channel: retaining %s: %v", r.TraceID, err)
+	}
+}
+
+// sweep forgets the closed roots whose grace expired.
+func (c *channel) sweep(now time.Time) {
+	c.mu.Lock()
+	var expired []string
+	for id, r := range c.closed {
+		if now.After(r.RetainUntil) {
+			expired = append(expired, id)
+			delete(c.closed, id)
+		}
+	}
+	c.mu.Unlock()
+	for _, id := range expired {
+		if err := c.roots.remove(id); err != nil {
+			log.Printf("channel: forgetting %s: %v", id, err)
+		}
 	}
 }
 
@@ -400,7 +425,7 @@ func (c *channel) closeRoot(ctx context.Context, r *root, typ, code, reason stri
 	if err := bus.Publish(ctx, c.js, bus.SubjectTerminal(typ, c.rt.ID, r.EntryTopic), e); err != nil {
 		return err
 	}
-	c.forget(r)
+	c.retain(r)
 	return nil
 }
 
@@ -412,20 +437,24 @@ func (c *channel) tokenOf(taskID string) (string, bool) {
 	if q, ok := c.queries[taskID]; ok {
 		return q.a.Token, true
 	}
-	if r, ok := c.open[taskID]; ok {
-		return r.Token, true
-	}
-	return "", false
+	return c.rootTokenLocked(taskID)
 }
 
+// rootToken is the token of a root the role opened, closed or not.
 func (c *channel) rootToken(traceID string) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	r, ok := c.open[traceID]
-	if !ok {
-		return "", false
+	return c.rootTokenLocked(traceID)
+}
+
+func (c *channel) rootTokenLocked(traceID string) (string, bool) {
+	if r, ok := c.open[traceID]; ok {
+		return r.Token, true
 	}
-	return r.Token, true
+	if r, ok := c.closed[traceID]; ok && time.Now().Before(r.RetainUntil) {
+		return r.Token, true
+	}
+	return "", false
 }
 
 var errUnknownTask = errors.New("the role holds no such task")

@@ -21,10 +21,15 @@ message ConsoleMessage {
   oneof body {
     Shown                 shown    = 1;  // the panel showed a query to the person
     zobik.nri.v1.Received received = 2;  // confirms an expired by its delivery_id
+    Release               release  = 3;  // lets go a query the panel will not show again
   }
 }
 
 message Shown {
+  string task_id = 1;  // the query
+}
+
+message Release {
   string task_id = 1;  // the query
 }
 
@@ -40,6 +45,7 @@ message Expired {
   string delivery_id    = 1;
   string task_id        = 2;  // the query
   string failure_code   = 3;  // unanswered | undelivered
+  string trace_id       = 4;  // the query's trace
 }
 
 // Opening a trace: the payload and then the bodies

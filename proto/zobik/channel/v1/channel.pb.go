@@ -32,6 +32,7 @@ type ConsoleMessage struct {
 	//
 	//	*ConsoleMessage_Shown
 	//	*ConsoleMessage_Received
+	//	*ConsoleMessage_Release
 	Body          isConsoleMessage_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -92,6 +93,15 @@ func (x *ConsoleMessage) GetReceived() *v1.Received {
 	return nil
 }
 
+func (x *ConsoleMessage) GetRelease() *Release {
+	if x != nil {
+		if x, ok := x.Body.(*ConsoleMessage_Release); ok {
+			return x.Release
+		}
+	}
+	return nil
+}
+
 type isConsoleMessage_Body interface {
 	isConsoleMessage_Body()
 }
@@ -104,9 +114,15 @@ type ConsoleMessage_Received struct {
 	Received *v1.Received `protobuf:"bytes,2,opt,name=received,proto3,oneof"` // confirms an expired by its delivery_id
 }
 
+type ConsoleMessage_Release struct {
+	Release *Release `protobuf:"bytes,3,opt,name=release,proto3,oneof"` // lets go a query the panel will not show again
+}
+
 func (*ConsoleMessage_Shown) isConsoleMessage_Body() {}
 
 func (*ConsoleMessage_Received) isConsoleMessage_Body() {}
+
+func (*ConsoleMessage_Release) isConsoleMessage_Body() {}
 
 type Shown struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -152,6 +168,50 @@ func (x *Shown) GetTaskId() string {
 	return ""
 }
 
+type Release struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"` // the query
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Release) Reset() {
+	*x = Release{}
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Release) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Release) ProtoMessage() {}
+
+func (x *Release) ProtoReflect() protoreflect.Message {
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Release.ProtoReflect.Descriptor instead.
+func (*Release) Descriptor() ([]byte, []int) {
+	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Release) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
 // role → console, over Attach
 type ChannelMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -166,7 +226,7 @@ type ChannelMessage struct {
 
 func (x *ChannelMessage) Reset() {
 	*x = ChannelMessage{}
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[2]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -178,7 +238,7 @@ func (x *ChannelMessage) String() string {
 func (*ChannelMessage) ProtoMessage() {}
 
 func (x *ChannelMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[2]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -191,7 +251,7 @@ func (x *ChannelMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelMessage.ProtoReflect.Descriptor instead.
 func (*ChannelMessage) Descriptor() ([]byte, []int) {
-	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{2}
+	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ChannelMessage) GetBody() isChannelMessage_Body {
@@ -240,13 +300,14 @@ type Expired struct {
 	DeliveryId    string                 `protobuf:"bytes,1,opt,name=delivery_id,json=deliveryId,proto3" json:"delivery_id,omitempty"`
 	TaskId        string                 `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`                // the query
 	FailureCode   string                 `protobuf:"bytes,3,opt,name=failure_code,json=failureCode,proto3" json:"failure_code,omitempty"` // unanswered | undelivered
+	TraceId       string                 `protobuf:"bytes,4,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`             // the query's trace
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Expired) Reset() {
 	*x = Expired{}
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[3]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -258,7 +319,7 @@ func (x *Expired) String() string {
 func (*Expired) ProtoMessage() {}
 
 func (x *Expired) ProtoReflect() protoreflect.Message {
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[3]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -271,7 +332,7 @@ func (x *Expired) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Expired.ProtoReflect.Descriptor instead.
 func (*Expired) Descriptor() ([]byte, []int) {
-	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{3}
+	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Expired) GetDeliveryId() string {
@@ -295,6 +356,13 @@ func (x *Expired) GetFailureCode() string {
 	return ""
 }
 
+func (x *Expired) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
+	}
+	return ""
+}
+
 // Opening a trace: the payload and then the bodies
 type OpenTrace struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -310,7 +378,7 @@ type OpenTrace struct {
 
 func (x *OpenTrace) Reset() {
 	*x = OpenTrace{}
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[4]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -322,7 +390,7 @@ func (x *OpenTrace) String() string {
 func (*OpenTrace) ProtoMessage() {}
 
 func (x *OpenTrace) ProtoReflect() protoreflect.Message {
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[4]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -335,7 +403,7 @@ func (x *OpenTrace) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenTrace.ProtoReflect.Descriptor instead.
 func (*OpenTrace) Descriptor() ([]byte, []int) {
-	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{4}
+	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *OpenTrace) GetPart() isOpenTrace_Part {
@@ -406,7 +474,7 @@ type OpenHeader struct {
 
 func (x *OpenHeader) Reset() {
 	*x = OpenHeader{}
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[5]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -418,7 +486,7 @@ func (x *OpenHeader) String() string {
 func (*OpenHeader) ProtoMessage() {}
 
 func (x *OpenHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[5]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -431,7 +499,7 @@ func (x *OpenHeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenHeader.ProtoReflect.Descriptor instead.
 func (*OpenHeader) Descriptor() ([]byte, []int) {
-	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{5}
+	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *OpenHeader) GetTopic() string {
@@ -473,7 +541,7 @@ type Body struct {
 
 func (x *Body) Reset() {
 	*x = Body{}
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[6]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -485,7 +553,7 @@ func (x *Body) String() string {
 func (*Body) ProtoMessage() {}
 
 func (x *Body) ProtoReflect() protoreflect.Message {
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[6]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -498,7 +566,7 @@ func (x *Body) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Body.ProtoReflect.Descriptor instead.
 func (*Body) Descriptor() ([]byte, []int) {
-	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{6}
+	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Body) GetName() string {
@@ -532,7 +600,7 @@ type AnswerRequest struct {
 
 func (x *AnswerRequest) Reset() {
 	*x = AnswerRequest{}
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[7]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -544,7 +612,7 @@ func (x *AnswerRequest) String() string {
 func (*AnswerRequest) ProtoMessage() {}
 
 func (x *AnswerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[7]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -557,7 +625,7 @@ func (x *AnswerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerRequest.ProtoReflect.Descriptor instead.
 func (*AnswerRequest) Descriptor() ([]byte, []int) {
-	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{7}
+	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AnswerRequest) GetTaskId() string {
@@ -582,7 +650,7 @@ type AnswerAck struct {
 
 func (x *AnswerAck) Reset() {
 	*x = AnswerAck{}
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[8]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -594,7 +662,7 @@ func (x *AnswerAck) String() string {
 func (*AnswerAck) ProtoMessage() {}
 
 func (x *AnswerAck) ProtoReflect() protoreflect.Message {
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[8]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -607,7 +675,7 @@ func (x *AnswerAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerAck.ProtoReflect.Descriptor instead.
 func (*AnswerAck) Descriptor() ([]byte, []int) {
-	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{8}
+	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{9}
 }
 
 type ReadConfigRequest struct {
@@ -618,7 +686,7 @@ type ReadConfigRequest struct {
 
 func (x *ReadConfigRequest) Reset() {
 	*x = ReadConfigRequest{}
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[9]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -630,7 +698,7 @@ func (x *ReadConfigRequest) String() string {
 func (*ReadConfigRequest) ProtoMessage() {}
 
 func (x *ReadConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[9]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -643,7 +711,7 @@ func (x *ReadConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadConfigRequest.ProtoReflect.Descriptor instead.
 func (*ReadConfigRequest) Descriptor() ([]byte, []int) {
-	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{9}
+	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{10}
 }
 
 type ConfigSnapshot struct {
@@ -657,7 +725,7 @@ type ConfigSnapshot struct {
 
 func (x *ConfigSnapshot) Reset() {
 	*x = ConfigSnapshot{}
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[10]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -669,7 +737,7 @@ func (x *ConfigSnapshot) String() string {
 func (*ConfigSnapshot) ProtoMessage() {}
 
 func (x *ConfigSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_zobik_channel_v1_channel_proto_msgTypes[10]
+	mi := &file_zobik_channel_v1_channel_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -682,7 +750,7 @@ func (x *ConfigSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigSnapshot.ProtoReflect.Descriptor instead.
 func (*ConfigSnapshot) Descriptor() ([]byte, []int) {
-	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{10}
+	return file_zobik_channel_v1_channel_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ConfigSnapshot) GetConfigVersion() string {
@@ -710,22 +778,26 @@ var File_zobik_channel_v1_channel_proto protoreflect.FileDescriptor
 
 const file_zobik_channel_v1_channel_proto_rawDesc = "" +
 	"\n" +
-	"\x1ezobik/channel/v1/channel.proto\x12\x10zobik.channel.v1\x1a\x16zobik/nri/v1/nri.proto\"\x7f\n" +
+	"\x1ezobik/channel/v1/channel.proto\x12\x10zobik.channel.v1\x1a\x16zobik/nri/v1/nri.proto\"\xb6\x01\n" +
 	"\x0eConsoleMessage\x12/\n" +
 	"\x05shown\x18\x01 \x01(\v2\x17.zobik.channel.v1.ShownH\x00R\x05shown\x124\n" +
-	"\breceived\x18\x02 \x01(\v2\x16.zobik.nri.v1.ReceivedH\x00R\breceivedB\x06\n" +
+	"\breceived\x18\x02 \x01(\v2\x16.zobik.nri.v1.ReceivedH\x00R\breceived\x125\n" +
+	"\arelease\x18\x03 \x01(\v2\x19.zobik.channel.v1.ReleaseH\x00R\areleaseB\x06\n" +
 	"\x04body\" \n" +
 	"\x05Shown\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\"\n" +
+	"\aRelease\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\x8d\x01\n" +
 	"\x0eChannelMessage\x12<\n" +
 	"\fconsultation\x18\x01 \x01(\v2\x16.zobik.nri.v1.DeliveryH\x00R\fconsultation\x125\n" +
 	"\aexpired\x18\x02 \x01(\v2\x19.zobik.channel.v1.ExpiredH\x00R\aexpiredB\x06\n" +
-	"\x04body\"f\n" +
+	"\x04body\"\x81\x01\n" +
 	"\aExpired\x12\x1f\n" +
 	"\vdelivery_id\x18\x01 \x01(\tR\n" +
 	"deliveryId\x12\x17\n" +
 	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12!\n" +
-	"\ffailure_code\x18\x03 \x01(\tR\vfailureCode\"\x91\x01\n" +
+	"\ffailure_code\x18\x03 \x01(\tR\vfailureCode\x12\x19\n" +
+	"\btrace_id\x18\x04 \x01(\tR\atraceId\"\x91\x01\n" +
 	"\tOpenTrace\x126\n" +
 	"\x06header\x18\x01 \x01(\v2\x1c.zobik.channel.v1.OpenHeaderH\x00R\x06header\x12,\n" +
 	"\x04body\x18\x02 \x01(\v2\x16.zobik.channel.v1.BodyH\x00R\x04body\x12\x16\n" +
@@ -772,51 +844,53 @@ func file_zobik_channel_v1_channel_proto_rawDescGZIP() []byte {
 	return file_zobik_channel_v1_channel_proto_rawDescData
 }
 
-var file_zobik_channel_v1_channel_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_zobik_channel_v1_channel_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_zobik_channel_v1_channel_proto_goTypes = []any{
 	(*ConsoleMessage)(nil),    // 0: zobik.channel.v1.ConsoleMessage
 	(*Shown)(nil),             // 1: zobik.channel.v1.Shown
-	(*ChannelMessage)(nil),    // 2: zobik.channel.v1.ChannelMessage
-	(*Expired)(nil),           // 3: zobik.channel.v1.Expired
-	(*OpenTrace)(nil),         // 4: zobik.channel.v1.OpenTrace
-	(*OpenHeader)(nil),        // 5: zobik.channel.v1.OpenHeader
-	(*Body)(nil),              // 6: zobik.channel.v1.Body
-	(*AnswerRequest)(nil),     // 7: zobik.channel.v1.AnswerRequest
-	(*AnswerAck)(nil),         // 8: zobik.channel.v1.AnswerAck
-	(*ReadConfigRequest)(nil), // 9: zobik.channel.v1.ReadConfigRequest
-	(*ConfigSnapshot)(nil),    // 10: zobik.channel.v1.ConfigSnapshot
-	(*v1.Received)(nil),       // 11: zobik.nri.v1.Received
-	(*v1.Delivery)(nil),       // 12: zobik.nri.v1.Delivery
-	(*v1.ContextRead)(nil),    // 13: zobik.nri.v1.ContextRead
-	(*v1.PurgeRequest)(nil),   // 14: zobik.nri.v1.PurgeRequest
-	(*v1.OpenAck)(nil),        // 15: zobik.nri.v1.OpenAck
-	(*v1.Chunk)(nil),          // 16: zobik.nri.v1.Chunk
-	(*v1.PurgeAck)(nil),       // 17: zobik.nri.v1.PurgeAck
+	(*Release)(nil),           // 2: zobik.channel.v1.Release
+	(*ChannelMessage)(nil),    // 3: zobik.channel.v1.ChannelMessage
+	(*Expired)(nil),           // 4: zobik.channel.v1.Expired
+	(*OpenTrace)(nil),         // 5: zobik.channel.v1.OpenTrace
+	(*OpenHeader)(nil),        // 6: zobik.channel.v1.OpenHeader
+	(*Body)(nil),              // 7: zobik.channel.v1.Body
+	(*AnswerRequest)(nil),     // 8: zobik.channel.v1.AnswerRequest
+	(*AnswerAck)(nil),         // 9: zobik.channel.v1.AnswerAck
+	(*ReadConfigRequest)(nil), // 10: zobik.channel.v1.ReadConfigRequest
+	(*ConfigSnapshot)(nil),    // 11: zobik.channel.v1.ConfigSnapshot
+	(*v1.Received)(nil),       // 12: zobik.nri.v1.Received
+	(*v1.Delivery)(nil),       // 13: zobik.nri.v1.Delivery
+	(*v1.ContextRead)(nil),    // 14: zobik.nri.v1.ContextRead
+	(*v1.PurgeRequest)(nil),   // 15: zobik.nri.v1.PurgeRequest
+	(*v1.OpenAck)(nil),        // 16: zobik.nri.v1.OpenAck
+	(*v1.Chunk)(nil),          // 17: zobik.nri.v1.Chunk
+	(*v1.PurgeAck)(nil),       // 18: zobik.nri.v1.PurgeAck
 }
 var file_zobik_channel_v1_channel_proto_depIdxs = []int32{
 	1,  // 0: zobik.channel.v1.ConsoleMessage.shown:type_name -> zobik.channel.v1.Shown
-	11, // 1: zobik.channel.v1.ConsoleMessage.received:type_name -> zobik.nri.v1.Received
-	12, // 2: zobik.channel.v1.ChannelMessage.consultation:type_name -> zobik.nri.v1.Delivery
-	3,  // 3: zobik.channel.v1.ChannelMessage.expired:type_name -> zobik.channel.v1.Expired
-	5,  // 4: zobik.channel.v1.OpenTrace.header:type_name -> zobik.channel.v1.OpenHeader
-	6,  // 5: zobik.channel.v1.OpenTrace.body:type_name -> zobik.channel.v1.Body
-	0,  // 6: zobik.channel.v1.Channel.Attach:input_type -> zobik.channel.v1.ConsoleMessage
-	4,  // 7: zobik.channel.v1.Channel.Open:input_type -> zobik.channel.v1.OpenTrace
-	7,  // 8: zobik.channel.v1.Channel.Answer:input_type -> zobik.channel.v1.AnswerRequest
-	13, // 9: zobik.channel.v1.Channel.ReadContext:input_type -> zobik.nri.v1.ContextRead
-	14, // 10: zobik.channel.v1.Channel.Purge:input_type -> zobik.nri.v1.PurgeRequest
-	9,  // 11: zobik.channel.v1.Channel.ReadConfig:input_type -> zobik.channel.v1.ReadConfigRequest
-	2,  // 12: zobik.channel.v1.Channel.Attach:output_type -> zobik.channel.v1.ChannelMessage
-	15, // 13: zobik.channel.v1.Channel.Open:output_type -> zobik.nri.v1.OpenAck
-	8,  // 14: zobik.channel.v1.Channel.Answer:output_type -> zobik.channel.v1.AnswerAck
-	16, // 15: zobik.channel.v1.Channel.ReadContext:output_type -> zobik.nri.v1.Chunk
-	17, // 16: zobik.channel.v1.Channel.Purge:output_type -> zobik.nri.v1.PurgeAck
-	10, // 17: zobik.channel.v1.Channel.ReadConfig:output_type -> zobik.channel.v1.ConfigSnapshot
-	12, // [12:18] is the sub-list for method output_type
-	6,  // [6:12] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	12, // 1: zobik.channel.v1.ConsoleMessage.received:type_name -> zobik.nri.v1.Received
+	2,  // 2: zobik.channel.v1.ConsoleMessage.release:type_name -> zobik.channel.v1.Release
+	13, // 3: zobik.channel.v1.ChannelMessage.consultation:type_name -> zobik.nri.v1.Delivery
+	4,  // 4: zobik.channel.v1.ChannelMessage.expired:type_name -> zobik.channel.v1.Expired
+	6,  // 5: zobik.channel.v1.OpenTrace.header:type_name -> zobik.channel.v1.OpenHeader
+	7,  // 6: zobik.channel.v1.OpenTrace.body:type_name -> zobik.channel.v1.Body
+	0,  // 7: zobik.channel.v1.Channel.Attach:input_type -> zobik.channel.v1.ConsoleMessage
+	5,  // 8: zobik.channel.v1.Channel.Open:input_type -> zobik.channel.v1.OpenTrace
+	8,  // 9: zobik.channel.v1.Channel.Answer:input_type -> zobik.channel.v1.AnswerRequest
+	14, // 10: zobik.channel.v1.Channel.ReadContext:input_type -> zobik.nri.v1.ContextRead
+	15, // 11: zobik.channel.v1.Channel.Purge:input_type -> zobik.nri.v1.PurgeRequest
+	10, // 12: zobik.channel.v1.Channel.ReadConfig:input_type -> zobik.channel.v1.ReadConfigRequest
+	3,  // 13: zobik.channel.v1.Channel.Attach:output_type -> zobik.channel.v1.ChannelMessage
+	16, // 14: zobik.channel.v1.Channel.Open:output_type -> zobik.nri.v1.OpenAck
+	9,  // 15: zobik.channel.v1.Channel.Answer:output_type -> zobik.channel.v1.AnswerAck
+	17, // 16: zobik.channel.v1.Channel.ReadContext:output_type -> zobik.nri.v1.Chunk
+	18, // 17: zobik.channel.v1.Channel.Purge:output_type -> zobik.nri.v1.PurgeAck
+	11, // 18: zobik.channel.v1.Channel.ReadConfig:output_type -> zobik.channel.v1.ConfigSnapshot
+	13, // [13:19] is the sub-list for method output_type
+	7,  // [7:13] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_zobik_channel_v1_channel_proto_init() }
@@ -827,12 +901,13 @@ func file_zobik_channel_v1_channel_proto_init() {
 	file_zobik_channel_v1_channel_proto_msgTypes[0].OneofWrappers = []any{
 		(*ConsoleMessage_Shown)(nil),
 		(*ConsoleMessage_Received)(nil),
+		(*ConsoleMessage_Release)(nil),
 	}
-	file_zobik_channel_v1_channel_proto_msgTypes[2].OneofWrappers = []any{
+	file_zobik_channel_v1_channel_proto_msgTypes[3].OneofWrappers = []any{
 		(*ChannelMessage_Consultation)(nil),
 		(*ChannelMessage_Expired)(nil),
 	}
-	file_zobik_channel_v1_channel_proto_msgTypes[4].OneofWrappers = []any{
+	file_zobik_channel_v1_channel_proto_msgTypes[5].OneofWrappers = []any{
 		(*OpenTrace_Header)(nil),
 		(*OpenTrace_Body)(nil),
 		(*OpenTrace_Chunk)(nil),
@@ -843,7 +918,7 @@ func file_zobik_channel_v1_channel_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_zobik_channel_v1_channel_proto_rawDesc), len(file_zobik_channel_v1_channel_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -58,6 +58,17 @@ func (h *hub) outcome(o Outcome, ack func()) {
 	go ack()
 }
 
+// notify passes an event to the open streams; one with no stream open is
+// dropped, because the panel reads the state when it opens its stream.
+func (h *hub) notify(event string, v any) {
+	f := frame(event, v)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for s := range h.streams {
+		s.send(f)
+	}
+}
+
 // open opens a stream for session, which receives first what was waiting.
 func (h *hub) open(session string) *stream {
 	s := &stream{session: session, frames: make(chan []byte, 64)}

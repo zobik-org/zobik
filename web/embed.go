@@ -6,5 +6,5 @@ import "embed"
 
 // FS holds the panel's files.
 //
-//go:embed index.html
+//go:embed index.html app.js style.css
 var FS embed.FS

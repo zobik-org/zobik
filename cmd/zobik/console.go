@@ -79,10 +79,11 @@ func newConsole(dir string, idle time.Duration) (*console.Service, error) {
 			if err != nil {
 				return nil, err
 			}
-			return &console.Keys{Root: s.Root, Console: s.Console, JWT: s.ConsoleJWT, Close: s.Close}, nil
+			return &console.Keys{Root: s.Root, Console: s.Console, Conversations: s.Conversations, JWT: s.ConsoleJWT, Close: s.Close}, nil
 		},
-		Channels:    channels,
-		IdleTimeout: idle,
+		Channels:         channels,
+		IdleTimeout:      idle,
+		ConversationsDir: deploy.ConversationsDir(dir),
 	}), nil
 }
 
