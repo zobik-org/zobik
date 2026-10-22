@@ -58,6 +58,8 @@ type generation struct {
 	conn   *grpc.ClientConn
 	client channelv1.ChannelClient
 	cancel context.CancelFunc
+	// renew is when the next generation replaces it: halfway through its JWT's validity.
+	renew time.Time
 	// ended closes when the Attach ends.
 	ended chan struct{}
 
@@ -98,7 +100,7 @@ func (l *link) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 		case <-g.ended:
-		case <-time.After(l.lifetime / 2):
+		case <-time.After(time.Until(g.renew)):
 		}
 	}
 	l.mu.Lock()
@@ -113,7 +115,10 @@ func (l *link) run(ctx context.Context) {
 // attach opens a connection with a new JWT and the Attach on it, and returns
 // once the channel has taken the session.
 func (l *link) attach(ctx context.Context) (*generation, error) {
-	token, err := l.keys.JWT(time.Now().Add(l.lifetime))
+	// The JWT carries its expiry in whole seconds.
+	issued := time.Now()
+	exp := issued.Add(l.lifetime).Truncate(time.Second)
+	token, err := l.keys.JWT(exp)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +129,7 @@ func (l *link) attach(ctx context.Context) (*generation, error) {
 		return nil, err
 	}
 	gctx, cancel := context.WithCancel(ctx)
-	g := &generation{conn: conn, client: channelv1.NewChannelClient(conn), cancel: cancel, ended: make(chan struct{})}
+	g := &generation{conn: conn, client: channelv1.NewChannelClient(conn), cancel: cancel, renew: issued.Add(exp.Sub(issued) / 2), ended: make(chan struct{})}
 	if g.stream, err = g.client.Attach(gctx); err == nil {
 		_, err = g.stream.Header()
 	}
