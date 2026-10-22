@@ -273,6 +273,103 @@ func TestReject(t *testing.T) {
 	}
 }
 
+// The role keeps a closed root's token for the purge until
+// context_retention_grace expires (architecture §3.6.1, §3.4), and an expired
+// carries its query's trace (implementation §6, The service between the
+// console and the channels).
+func TestPurgeAfterCloseAndExpired(t *testing.T) {
+	f := newEntryFixture(t, true)
+	c := f.client(f.ConsoleKey)
+	ctx, detach := context.WithCancel(f.Ctx)
+	session, err := c.Attach(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	traceID, entry := f.request(c, "find it")
+	e := f.announced(5*time.Second, subject(entry))
+	if e == nil {
+		t.Fatal("the entry subtask was not announced")
+	}
+	f.complete(entry, e.TraceParent)
+	q := asConsultation(t, receive(t, session))
+	if _, err := c.Answer(f.Ctx, &channelv1.AnswerRequest{TaskId: q.TaskID, Data: []byte(`{"decision":"accept"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if e := f.rootClose(traceID, 5*time.Second); e == nil {
+		t.Fatal("the root did not close")
+	}
+	if _, err := c.Purge(f.Ctx, &nriv1.PurgeRequest{TaskId: traceID}); err != nil {
+		t.Errorf("purge after the close: %v", err)
+	}
+
+	// A delivery the console did not show expires undelivered when the session closes.
+	traceID, entry = f.request(c, "find it again")
+	if e = f.announced(5*time.Second, subject(entry)); e == nil {
+		t.Fatal("the second entry subtask was not announced")
+	}
+	f.complete(entry, e.TraceParent)
+	q = asConsultation(t, receive(t, session))
+	detach()
+	time.Sleep(200 * time.Millisecond)
+	session, err = c.Attach(f.Ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expired, retaken bool
+	for !expired || !retaken {
+		m := receive(t, session)
+		if ex := m.GetExpired(); ex != nil {
+			if ex.GetTaskId() != q.TaskID || ex.GetTraceId() != traceID || ex.GetFailureCode() != "undelivered" {
+				t.Errorf("expired %v", ex)
+			}
+			expired = true
+			continue
+		}
+		// Until the Spawner closes vacant rounds, the panel's channel takes the
+		// delivery's next round when the console is back.
+		if r := asConsultation(t, m); r.TaskID != q.TaskID && r.Data.Kind == "result_delivery" {
+			retaken = true
+		}
+	}
+}
+
+// Release lets go a query as the session closing does: unanswered once shown,
+// and the delivery's silence closes the root (implementation §6, The service
+// between the console and the channels).
+func TestRelease(t *testing.T) {
+	f := newEntryFixture(t, true)
+	c := f.client(f.ConsoleKey)
+	session, err := c.Attach(f.Ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	traceID, entry := f.request(c, "find it")
+	e := f.announced(5*time.Second, subject(entry))
+	if e == nil {
+		t.Fatal("the entry subtask was not announced")
+	}
+	f.complete(entry, e.TraceParent)
+	q := asConsultation(t, receive(t, session))
+	for _, m := range []*channelv1.ConsoleMessage{
+		{Body: &channelv1.ConsoleMessage_Shown{Shown: &channelv1.Shown{TaskId: q.TaskID}}},
+		{Body: &channelv1.ConsoleMessage_Release{Release: &channelv1.Release{TaskId: q.TaskID}}},
+	} {
+		if err := session.Send(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ex := receive(t, session).GetExpired()
+	if ex == nil || ex.GetTaskId() != q.TaskID || ex.GetFailureCode() != "unanswered" {
+		t.Errorf("expired %v", ex)
+	}
+	if e := f.rootClose(traceID, 5*time.Second); e == nil || e.Type != bus.TypeCompleted {
+		t.Errorf("root close %+v", e)
+	}
+}
+
 // Without a vector space nothing bounds or embeds the request's text, so Open
 // on intake fails instead of waiting (implementation §6, The service between
 // the console and the channels).

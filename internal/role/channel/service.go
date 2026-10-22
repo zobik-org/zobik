@@ -57,7 +57,8 @@ type service struct {
 }
 
 // Attach is the console's session: the role sends what it retains and what it
-// wins, and receives what the panel showed and the expired it confirms. The
+// wins, and receives what the panel showed, the queries the console lets go and
+// the expired it confirms. The
 // headers tell the console the session replaced the previous one, which it
 // closes then (implementation §6, The service between the console and the channels).
 func (s *service) Attach(stream channelv1.Channel_AttachServer) error {
@@ -79,6 +80,8 @@ func (s *service) Attach(stream channelv1.Channel_AttachServer) error {
 				s.c.shown(b.Shown.GetTaskId())
 			case *channelv1.ConsoleMessage_Received:
 				s.c.received(b.Received.GetDeliveryId())
+			case *channelv1.ConsoleMessage_Release:
+				go s.c.expire(b.Release.GetTaskId(), "the console let it go without showing it again")
 			}
 		}
 	}()

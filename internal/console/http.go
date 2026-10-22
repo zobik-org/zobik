@@ -31,8 +31,19 @@ func (s *Service) Handler(port string) http.Handler {
 	mux.HandleFunc("POST "+PathConfig, s.withSession(true, s.postConfig))
 	// The event stream is not activity (implementation §6, The operator console).
 	mux.HandleFunc("GET "+PathEvents, s.withSession(false, s.getEvents))
+	s.workRoutes(mux)
 	mux.Handle("GET /", http.FileServerFS(web.FS))
-	return addressedToItself(port, mux)
+	return addressedToItself(port, onlyOwnContent(mux))
+}
+
+// onlyOwnContent lets the panel load nothing from elsewhere, nor be framed:
+// what it shows comes from the network and from the person's attachments.
+func onlyOwnContent(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		h.ServeHTTP(w, r)
+	})
 }
 
 // addressedToItself rejects a Host other than the console's own address, and an

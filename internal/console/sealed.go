@@ -53,6 +53,22 @@ func SealKey(kp nkeys.KeyPair, password []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return SealSecret(seed, password)
+}
+
+// OpenKey decrypts a sealed key with password.
+func OpenKey(sealed, password []byte) (nkeys.KeyPair, error) {
+	seed, err := OpenSecret(sealed, password)
+	if err != nil {
+		return nil, err
+	}
+	return nkeys.FromSeed(seed)
+}
+
+// SealSecret encrypts secret with password, in the format of a sealed key: the
+// key of the conversations is sealed like the root (implementation §6, The
+// operator console).
+func SealSecret(secret, password []byte) ([]byte, error) {
 	p, err := defaultParams()
 	if err != nil {
 		return nil, err
@@ -65,12 +81,12 @@ func SealKey(kp nkeys.KeyPair, password []byte) ([]byte, error) {
 	if _, err := rand.Read(s.Nonce); err != nil {
 		return nil, err
 	}
-	s.Ciphertext = aead.Seal(nil, s.Nonce, seed, ad)
+	s.Ciphertext = aead.Seal(nil, s.Nonce, secret, ad)
 	return json.MarshalIndent(s, "", "  ")
 }
 
-// OpenKey decrypts a sealed key with password.
-func OpenKey(sealed, password []byte) (nkeys.KeyPair, error) {
+// OpenSecret decrypts what SealSecret sealed with password.
+func OpenSecret(sealed, password []byte) ([]byte, error) {
 	var s sealedKey
 	if err := json.Unmarshal(sealed, &s); err != nil {
 		return nil, fmt.Errorf("console: sealed key: %w", err)
@@ -85,11 +101,11 @@ func OpenKey(sealed, password []byte) (nkeys.KeyPair, error) {
 	if len(s.Nonce) != aead.NonceSize() {
 		return nil, ErrWrongPassword
 	}
-	seed, err := aead.Open(nil, s.Nonce, s.Ciphertext, ad)
+	secret, err := aead.Open(nil, s.Nonce, s.Ciphertext, ad)
 	if err != nil {
 		return nil, ErrWrongPassword
 	}
-	return nkeys.FromSeed(seed)
+	return secret, nil
 }
 
 // ResealKey re-encrypts a sealed key under a new password. The key does not

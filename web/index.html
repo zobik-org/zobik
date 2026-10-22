@@ -4,52 +4,51 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zobik</title>
-<style>
-  body { font-family: system-ui, sans-serif; max-width: 28rem; margin: 4rem auto; padding: 0 1rem; }
-  form { display: grid; gap: .5rem; }
-  [hidden] { display: none; }
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-<h1>Zobik</h1>
-<form id="signin" hidden>
+<form id="signin" class="signin" hidden>
+  <h1>Zobik</h1>
   <input name="username" placeholder="Username" autocomplete="username" required>
   <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
   <button>Sign in</button>
-  <p id="error"></p>
+  <p id="signin-error" class="error"></p>
 </form>
-<div id="signed" hidden>
-  <p>Signed in, on <span id="version"></span>.</p>
-  <button id="signout">Sign out</button>
+
+<div id="panel" class="panel" hidden>
+  <nav class="side">
+    <header>
+      <strong>Zobik</strong>
+      <button id="signout" class="link">Sign out</button>
+    </header>
+    <button id="new">New conversation</button>
+    <ul id="conversations"></ul>
+  </nav>
+
+  <main class="main">
+    <section id="expired" class="notices" hidden>
+      <header><strong>While you were away</strong> <button id="expired-close" class="link">Close</button></header>
+      <ul id="expired-list"></ul>
+    </section>
+    <p id="unavailable" class="error" hidden></p>
+    <div id="empty" class="empty">Choose a conversation or start a new one.</div>
+    <div id="conversation" hidden>
+      <header class="conv-header">
+        <h2 id="title"></h2>
+        <button id="delete" class="link danger">Delete conversation</button>
+      </header>
+      <ol id="messages"></ol>
+      <form id="composer" class="composer">
+        <textarea name="text" rows="3" placeholder="Write a request"></textarea>
+        <div class="row">
+          <input type="file" name="file" multiple>
+          <button>Send</button>
+        </div>
+        <p id="composer-error" class="error"></p>
+      </form>
+    </div>
+  </main>
 </div>
-<script>
-const $ = (id) => document.getElementById(id);
-
-async function show() {
-  const r = await fetch("/api/config");
-  $("signin").hidden = r.ok;
-  $("signed").hidden = !r.ok;
-  if (r.ok) $("version").textContent = (await r.json()).config_version;
-}
-
-$("signin").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  const r = await fetch("/api/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: f.get("username"), password: f.get("password") }),
-  });
-  $("error").textContent = r.ok ? "" : (await r.json()).error;
-  show();
-});
-
-$("signout").addEventListener("click", async () => {
-  await fetch("/api/session", { method: "DELETE" });
-  show();
-});
-
-show();
-</script>
+<script src="app.js"></script>
 </body>
 </html>

@@ -22,6 +22,9 @@ import (
 //	root.sealed      the root, encrypted with the password
 //	system.sealed    the system account's key, which only acts of deployment use
 //	console.sealed   the console's own platform identity
+//	conversations.sealed  the key of the work area's conversations, created
+//	                 at the first sign-in that finds it missing
+//	conversations/   the conversations, encrypted with that key
 //	operator.jwt, system.jwt, account.jwt
 //	keys/<role>.nk   the scoped signing keys, in the clear, so the console
 //	                 renews identities without a session
@@ -32,6 +35,8 @@ const (
 	fileRoot     = "root.sealed"
 	fileSystem   = "system.sealed"
 	fileConsole  = "console.sealed"
+	fileConvKey  = "conversations.sealed"
+	dirConvs     = "conversations"
 	fileOperator = "operator.jwt"
 	fileSysJWT   = "system.jwt"
 	fileAccount  = "account.jwt"
