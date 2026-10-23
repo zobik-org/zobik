@@ -9,13 +9,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/deploy"
 )
 
 // Las trazas: the trace of a config_change in Jaeger, with a span per task and
@@ -37,9 +36,8 @@ func TestTraces(t *testing.T) {
 	z.build(t, ctx, "images/zobik-python.Dockerfile", "zobik-python:dev")
 	z.build(t, ctx, "examples/blueprints/historian/Dockerfile", "zobik-historian:dev")
 	z.build(t, ctx, "test/e2e/embeddings/Dockerfile", embeddingsImage)
-	z.tracingUI = freePort(t)
 	z.init(t, ctx)
-	jaeger := "http://127.0.0.1:" + z.tracingUI
+	jaeger := z.jaeger(t)
 
 	blueprint := filepath.Join(z.root, "examples/blueprints/historian/blueprint.json")
 	raw, err := os.ReadFile(blueprint)
@@ -129,17 +127,6 @@ func TestTraces(t *testing.T) {
 	}
 }
 
-// freePort returns a port on 127.0.0.1 that nothing listens on.
-func freePort(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	return strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
-}
-
 func randomHex(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
@@ -177,6 +164,27 @@ func reconstruction(t *testing.T, ctx context.Context, container string) (r stru
 	return r
 }
 
+// jaegerClient reads the tenant's Jaeger on its query port, with the console's
+// client certificate (implementation §1.2.17).
+type jaegerClient struct {
+	base string
+	c    *http.Client
+}
+
+func (z *network) jaeger(t *testing.T) *jaegerClient {
+	t.Helper()
+	addr, err := deploy.TracingAddr(z.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, password, _ := strings.Cut(strings.TrimSuffix(credentials, "\n"), "\n")
+	config, err := deploy.OpenTracingClient(z.dir, []byte(password))
+	if err != nil || config == nil {
+		t.Fatalf("the console's client certificate: %v", err)
+	}
+	return &jaegerClient{base: "https://" + addr, c: &http.Client{Transport: &http.Transport{TLSClientConfig: config}}}
+}
+
 // jaegerSpan is a span as Jaeger's API v3 returns it, in OTLP's JSON.
 type jaegerSpan struct {
 	SpanID       string `json:"spanId"`
@@ -187,7 +195,7 @@ type jaegerSpan struct {
 
 // jaegerTrace waits until Jaeger holds a span of trace for each of names, and
 // returns them by name.
-func jaegerTrace(t *testing.T, ctx context.Context, jaeger, trace string, names ...string) map[string]jaegerSpan {
+func jaegerTrace(t *testing.T, ctx context.Context, jaeger *jaegerClient, trace string, names ...string) map[string]jaegerSpan {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
 	var last string
@@ -218,12 +226,12 @@ func jaegerTrace(t *testing.T, ctx context.Context, jaeger, trace string, names 
 	}
 }
 
-func getTrace(ctx context.Context, jaeger, trace string) (map[string]jaegerSpan, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jaeger+"/api/v3/traces/"+trace, nil)
+func getTrace(ctx context.Context, jaeger *jaegerClient, trace string) (map[string]jaegerSpan, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jaeger.base+"/api/v3/traces/"+trace, nil)
 	if err != nil {
 		return nil, "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := jaeger.c.Do(req)
 	if err != nil {
 		return nil, "", err
 	}

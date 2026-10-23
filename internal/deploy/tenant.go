@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base32"
 	"errors"
 	"fmt"
@@ -27,8 +28,12 @@ const (
 	TracingAlias   = "tracing.zobik.internal"
 	TracingOTLP    = "4317"  // OTLP over gRPC, which the Tracing Collector exports to
 	TracingQuery   = "16686" // the query service: the UI and the API v3 over HTTP
+	tracingGRPC    = "16685" // the query service over gRPC
 	tracingHealth  = "13133"
 	tracingConfig  = "/etc/jaeger/config.yaml"
+	tracingCA      = "/etc/jaeger/ca.pem"
+	tracingCert    = "/etc/jaeger/server.pem"
+	tracingKey     = "/etc/jaeger/server.key"
 	tracingDataDir = "/badger"
 	tracingUID     = 10001
 )
@@ -37,8 +42,13 @@ const (
 // (implementation §1.2.17).
 const tracingRetention = 30 * 24 * time.Hour
 
-// The label every tenant-wide resource carries, with the tenant's identifier.
-const labelTenant = "org.zobik.tenant"
+// The label every tenant-wide resource carries, with the tenant's identifier,
+// and the one the tracing backend carries with the fingerprint of the CA its
+// certificates come from.
+const (
+	labelTenant   = "org.zobik.tenant"
+	labelTenantCA = "org.zobik.tenant_ca"
+)
 
 // fileTenant, in the console's directory, records the tenant the network belongs to.
 const fileTenant = "tenant"
@@ -113,9 +123,29 @@ func (e *Engine) checkTenant(ctx context.Context, t tenant) error {
 
 // ensureTracing brings up the tenant's tracing backend if it is not up, connects
 // it to the network's Docker network with its fixed name, and waits until it is
-// ready. ui is the host port on 127.0.0.1 where a new backend publishes its query
-// service, or none if empty.
-func ensureTracing(ctx context.Context, e *Engine, n names, t tenant, ui string) error {
+// ready. ca is the tenant CA when the network created the tenant: the backend's
+// query then takes its server certificate and asks for a client certificate
+// from the CA, and is published on the port of dir's ports/tracing
+// (implementation §1.2.17). A network that joined the tenant finds the backend
+// up and only connects to it.
+func ensureTracing(ctx context.Context, e *Engine, n names, t tenant, ca *authority, dir string) error {
+	labels, ok, err := e.containerLabels(ctx, t.tracing())
+	if err != nil {
+		return err
+	}
+	if ok && (labels[labelTenantCA] == "" || ca != nil && labels[labelTenantCA] != ca.fingerprint()) {
+		return fmt.Errorf("deploy: the tracing backend %s predates the tenant CA: remove the tenant's networks and %s, and create them again", t.tracing(), t.tracing())
+	}
+	if ca == nil {
+		if !ok {
+			return fmt.Errorf("deploy: the tenant %s has no tracing backend, and only the network that created it brings one up", t)
+		}
+		if err := e.connect(ctx, t.tracing(), n.dockerNetwork(), []string{TracingAlias}); err != nil {
+			return fmt.Errorf("deploy: tracing backend: %w", err)
+		}
+		return e.WaitHealthy(ctx, t.tracing(), roleReadyTimeout)
+	}
+
 	if err := e.EnsureImage(ctx, TracingImage); err != nil {
 		return fmt.Errorf("deploy: tracing image: %w", err)
 	}
@@ -129,26 +159,64 @@ func ensureTracing(ctx context.Context, e *Engine, n names, t tenant, ui string)
 			return fmt.Errorf("deploy: tracing volume: %w", err)
 		}
 	}
-	var publish map[string]string
-	if ui != "" {
-		publish = map[string]string{TracingQuery + "/tcp": ui}
+	port, err := ConsolePort(dir, unitTracing)
+	if err != nil {
+		return err
 	}
+	// The pieces' certificates are issued again on each run (implementation §6,
+	// The tenant CA, the link and the join code); a container takes them when it
+	// is created.
+	cert, key, err := ca.issue(TracingAlias, x509.ExtKeyUsageServerAuth)
+	if err != nil {
+		return err
+	}
+	withCA := t.labels()
+	withCA[labelTenantCA] = ca.fingerprint()
 	if err := e.EnsureShared(ctx, Spec{
-		Name:        t.tracing(),
-		Alias:       TracingAlias,
-		Network:     n.dockerNetwork(),
-		Labels:      t.labels(),
-		Image:       TracingImage,
-		Cmd:         []string{"--config", tracingConfig},
-		Mounts:      []mount.Mount{{Type: mount.TypeVolume, Source: t.tracing(), Target: tracingDataDir}},
-		Files:       []File{{Path: tracingConfig, Mode: 0o644, Data: tracingConfigYAML()}},
+		Name:    t.tracing(),
+		Alias:   TracingAlias,
+		Network: n.dockerNetwork(),
+		Labels:  withCA,
+		Image:   TracingImage,
+		Cmd:     []string{"--config", tracingConfig},
+		Mounts:  []mount.Mount{{Type: mount.TypeVolume, Source: t.tracing(), Target: tracingDataDir}},
+		Files: []File{
+			{Path: tracingConfig, Mode: 0o644, Data: tracingConfigYAML()},
+			{Path: tracingCA, Mode: 0o644, Data: ca.certPEM()},
+			{Path: tracingCert, Mode: 0o644, Data: cert},
+			{Path: tracingKey, Mode: 0o600, UID: tracingUID, Data: key},
+		},
 		Restart:     true,
 		Healthcheck: tracingHealthcheck,
-		Publish:     publish,
+		Publish:     map[string]string{TracingQuery + "/tcp": port},
 	}); err != nil {
 		return fmt.Errorf("deploy: tracing backend: %w", err)
 	}
 	return e.WaitHealthy(ctx, t.tracing(), roleReadyTimeout)
+}
+
+// unitTracing names, among the ports, the tracing backend's query
+// (implementation §6, The deployment parameters).
+const unitTracing = "tracing"
+
+// ErrNoTracing is a network that did not create its tenant: its console has no
+// client certificate for the tracing backend.
+var ErrNoTracing = errors.New("deploy: the network did not create its tenant")
+
+// TracingAddr is the address on 127.0.0.1 of the tracing backend's query, which
+// only the network that created the tenant knows.
+func TracingAddr(dir string) (string, error) {
+	if _, err := os.Stat(filepath.Join(dir, fileTracingKey)); errors.Is(err, fs.ErrNotExist) {
+		return "", ErrNoTracing
+	}
+	b, err := os.ReadFile(filepath.Join(dir, dirPorts, unitTracing))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", ErrNoTracing
+	}
+	if err != nil {
+		return "", err
+	}
+	return "127.0.0.1:" + strings.TrimSpace(string(b)), nil
 }
 
 var tracingHealthcheck = &container.HealthConfig{
@@ -161,7 +229,8 @@ var tracingHealthcheck = &container.HealthConfig{
 }
 
 // tracingConfigYAML is Jaeger's configuration: OTLP over gRPC in, Badger with
-// the spans' TTL, and the query service.
+// the spans' TTL, and the query service, over HTTP and gRPC, only for clients
+// with a certificate from the tenant CA (implementation §1.2.17).
 func tracingConfigYAML() []byte {
 	return fmt.Appendf(nil, `service:
   extensions: [jaeger_storage, jaeger_query, healthcheckv2]
@@ -193,6 +262,18 @@ extensions:
       traces: badger
     http:
       endpoint: 0.0.0.0:%[3]s
+      tls:
+        cert_file: %[7]s
+        key_file: %[8]s
+        client_ca_file: %[6]s
+        min_version: "1.3"
+    grpc:
+      endpoint: 0.0.0.0:%[9]s
+      tls:
+        cert_file: %[7]s
+        key_file: %[8]s
+        client_ca_file: %[6]s
+        min_version: "1.3"
 receivers:
   otlp:
     protocols:
@@ -203,7 +284,7 @@ processors:
 exporters:
   jaeger_storage_exporter:
     trace_storage: badger
-`, tracingHealth, TracingOTLP, TracingQuery, tracingDataDir, tracingRetention)
+`, tracingHealth, TracingOTLP, TracingQuery, tracingDataDir, tracingRetention, tracingCA, tracingCert, tracingKey, tracingGRPC)
 }
 
 // recordTenant writes the network's tenant to the console's directory.

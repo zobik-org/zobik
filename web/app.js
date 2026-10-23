@@ -10,6 +10,7 @@ const openKey = "zobik.open"; // where the browser remembers the open conversati
 let reopen = remembered(); // the conversation to open on sign-in
 let events = null;    // the event stream
 const shown = new Set(); // task ids already reported as shown
+let traceUI = "";     // where the console serves the tracing backend's UI, if it does
 
 // api calls the console. refresh marks a request the panel makes on its own,
 // which is not the person's activity.
@@ -96,6 +97,7 @@ async function start() {
   $("signin").hidden = true;
   $("panel").hidden = false;
   $("unavailable").hidden = true;
+  try { traceUI = (await api("GET", "/api/session", undefined, true)).trace_ui || ""; } catch (_) { traceUI = ""; }
   openEvents();
   await Promise.all([loadList(), loadExpired()]);
   if (reopen) {
@@ -239,7 +241,7 @@ function renderMessage(c, m) {
     if (m.text) li.append(el("div", { class: "text" }, m.text));
     li.append(files(c, m));
   } else if (m.kind === "outcome") {
-    li.append(el("div", { class: "meta", title: "Trace " + m.trace_id }, "Network · " + time));
+    li.append(el("div", { class: "meta" }, "Network · " + time, traceLink(m.trace_id)));
     if (m.outcome !== "task.completed") {
       li.append(el("div", { class: "failure" },
         (m.outcome === "task.aborted" ? "Aborted" : "Failed") + (m.failure_reason ? ": " + m.failure_reason : "")));
@@ -253,6 +255,13 @@ function renderMessage(c, m) {
     li.append(queryState(m));
   }
   return li;
+}
+
+// traceLink opens an outcome's trace in the tracing backend's UI, which the
+// console serves behind the session on a port of its own (implementation §1.2.17).
+function traceLink(traceID) {
+  if (!traceUI || !/^[0-9a-f]{32}$/.test(traceID || "")) return null;
+  return el("a", { class: "trace", href: traceUI + "/trace/" + traceID, target: "_blank", rel: "noopener noreferrer", title: "Trace " + traceID }, "Trace");
 }
 
 function files(c, m) {

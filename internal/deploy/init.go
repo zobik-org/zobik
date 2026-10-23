@@ -2,7 +2,11 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/nats-io/nkeys"
@@ -27,10 +31,6 @@ type Options struct {
 	// Tenant names a tenant on this host for the network to join; empty creates
 	// a new one (implementation §6, The deployment parameters).
 	Tenant string
-	// TracingUI is the host port on 127.0.0.1 where a new tracing backend
-	// publishes its query service, or none if empty. Only a development binary
-	// publishes it, because the UI does not authenticate.
-	TracingUI string
 }
 
 // actIdentityLifetime bounds the identity an ephemeral act connects with: it
@@ -108,13 +108,34 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 	}
 
 	// The tenant-wide pieces (implementation §6, Installation and zobik init).
+	ca, err := tenantAuthority(o.Dir, t, o.Tenant, o.Password)
+	if err != nil {
+		return err
+	}
 	if err := recordTenant(o.Dir, t); err != nil {
 		return err
 	}
-	if err := ensureTracing(ctx, e, n, t, o.TracingUI); err != nil {
+	if err := ensureTracing(ctx, e, n, t, ca, o.Dir); err != nil {
 		return err
 	}
 	return startRoles(ctx, e, n, o.Dir, o.Image)
+}
+
+// tenantAuthority opens the tenant CA of the network in dir, and mints it when
+// the network creates its tenant t; a network that joined a tenant has none.
+func tenantAuthority(dir string, t tenant, join string, password []byte) (*authority, error) {
+	ca, err := openAuthority(dir, password)
+	if err != nil || ca != nil {
+		return ca, err
+	}
+	_, err = os.Stat(filepath.Join(dir, fileTenant))
+	switch {
+	case err == nil || join != "":
+		return nil, nil
+	case !errors.Is(err, fs.ErrNotExist):
+		return nil, err
+	}
+	return writeAuthority(dir, t, password)
 }
 
 func runAct(ctx context.Context, e *Engine, n names, image, act string, creds []byte, files ...File) error {

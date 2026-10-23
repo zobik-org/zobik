@@ -34,6 +34,9 @@ type Options struct {
 	// ConversationsDir is where the work area keeps the conversations, which
 	// the key a sign-in opens encrypts (implementation §6, The operator console).
 	ConversationsDir string
+	// TracingAddr is the address of the tracing backend's query, whose UI the
+	// console serves behind the session (implementation §1.2.17); empty is none.
+	TracingAddr string
 }
 
 // Service is the console's local API: the session, and the acts the panel and
@@ -52,6 +55,9 @@ type Service struct {
 	channel map[string]*link
 	seen    map[string]bool
 	work    *workArea
+	traces  *traceProxy
+	// tracePort is the port where ServeTraces serves the tracing backend's UI.
+	tracePort string
 }
 
 type session struct{ last time.Time }
@@ -109,6 +115,9 @@ func (s *Service) unlock(keys *Keys) {
 		}
 		s.work = w
 	}
+	if keys.Tracing != nil && s.o.TracingAddr != "" {
+		s.traces = newTraceProxy(s.o.TracingAddr, keys.Tracing)
+	}
 	for _, l := range s.channel {
 		go l.run(ctx)
 	}
@@ -137,8 +146,11 @@ func (s *Service) lockIfIdle() {
 		return
 	}
 	s.stop()
+	if s.traces != nil {
+		s.traces.close()
+	}
 	s.keys.Close()
-	s.keys, s.stop, s.channel, s.seen, s.work = nil, nil, nil, nil, nil
+	s.keys, s.stop, s.channel, s.seen, s.work, s.traces = nil, nil, nil, nil, nil, nil
 	s.hub.reset()
 }
 

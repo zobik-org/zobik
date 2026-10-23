@@ -438,6 +438,15 @@ const unitPanel = "panel"
 // the first zobik init chooses it, and it stays fixed.
 func PanelPort(dir string) (string, error) { return ConsolePort(dir, unitPanel) }
 
+// unitTraceUI names, among the ports, the one where the console serves the
+// tracing backend's UI (implementation §1.2.17).
+const unitTraceUI = "trace_ui"
+
+// TraceUIPort is the host port on 127.0.0.1 where the console serves the
+// tracing backend's UI: the first console that serves it chooses it, and it
+// stays fixed.
+func TraceUIPort(dir string) (string, error) { return ConsolePort(dir, unitTraceUI) }
+
 // ErrNoPanel is a directory where zobik init has not chosen the panel's port.
 var ErrNoPanel = errors.New("deploy: no network here: run zobik init")
 

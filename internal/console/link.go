@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
 	"sync"
 	"time"
@@ -31,6 +32,9 @@ type Keys struct {
 	Root, Console nkeys.KeyPair
 	// Conversations is the key of the work area's conversations.
 	Conversations []byte
+	// Tracing is the TLS the console reaches the tracing backend's query with,
+	// or nil if the network did not create its tenant (implementation §1.2.17).
+	Tracing *tls.Config
 	// JWT issues the console identity's user JWT, valid until exp.
 	JWT func(exp time.Time) (string, error)
 	// Close wipes the keys.
