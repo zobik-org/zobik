@@ -5,8 +5,11 @@ package deploy
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
+	"fmt"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
@@ -44,7 +47,8 @@ func testEngine(t *testing.T, ctx context.Context) *Engine {
 }
 
 // Two networks on the same host share their tenant's Jaeger, each reaches it by
-// its fixed name, and removing one leaves it.
+// its fixed name, and removing one leaves it. Its query answers only a client
+// with a certificate from the tenant CA (implementation §1.2.17).
 func TestTracingShared(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -60,15 +64,20 @@ func TestTracingShared(t *testing.T) {
 	})
 	a := testNetwork(t, ctx, e, "tracing-a")
 	b := testNetwork(t, ctx, e, "tracing-b")
+	dir, password := t.TempDir(), []byte("pw")
+	ca, err := writeAuthority(dir, tn, password)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if err := ensureTracing(ctx, e, a, tn, ""); err != nil {
+	if err := ensureTracing(ctx, e, a, tn, ca, dir); err != nil {
 		t.Fatal(err)
 	}
 	first := containerID(t, ctx, e, tn.tracing())
-	if err := ensureTracing(ctx, e, b, tn, ""); err != nil {
+	if err := ensureTracing(ctx, e, b, tn, nil, t.TempDir()); err != nil { // joins
 		t.Fatal(err)
 	}
-	if err := ensureTracing(ctx, e, a, tn, ""); err != nil { // converges
+	if err := ensureTracing(ctx, e, a, tn, ca, dir); err != nil { // converges
 		t.Fatal(err)
 	}
 	if id := containerID(t, ctx, e, tn.tracing()); id != first {
@@ -76,6 +85,37 @@ func TestTracingShared(t *testing.T) {
 	}
 	reach(t, ctx, e, a)
 	reach(t, ctx, e, b)
+
+	addr, err := TracingAddr(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := OpenTracingClient(dir, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := query(ctx, addr, own); err != nil {
+		t.Errorf("with the console's certificate: %v", err)
+	}
+	if err := query(ctx, addr, &tls.Config{RootCAs: own.RootCAs, ServerName: TracingAlias}); err == nil {
+		t.Error("the query answered without a client certificate")
+	}
+	otherDir := t.TempDir()
+	other, err := writeAuthority(otherDir, tn, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := OpenTracingClient(otherDir, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign.RootCAs = own.RootCAs
+	if err := query(ctx, addr, foreign); err == nil {
+		t.Error("the query answered a certificate from another CA")
+	}
+	if err := ensureTracing(ctx, e, a, tn, other, otherDir); err == nil {
+		t.Error("a backend of another CA was taken as the tenant's")
+	}
 
 	if err := e.RemoveNetwork(ctx, a.dockerNetwork()); err != nil {
 		t.Fatal(err)
@@ -102,7 +142,12 @@ func TestChooseTenant(t *testing.T) {
 	}
 	t.Cleanup(func() { e.Remove(context.Background(), []string{tn.tracing()}, []string{tn.tracing()}) })
 	n := testNetwork(t, ctx, e, "tenant")
-	if err := ensureTracing(ctx, e, n, tn, ""); err != nil {
+	dir := t.TempDir()
+	ca, err := writeAuthority(dir, tn, []byte("pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureTracing(ctx, e, n, tn, ca, dir); err != nil {
 		t.Fatal(err)
 	}
 
@@ -122,7 +167,7 @@ func TestChooseTenant(t *testing.T) {
 		t.Errorf("a new tenant: %q, %v", fresh, err)
 	}
 
-	dir := t.TempDir()
+	dir = t.TempDir()
 	if err := recordTenant(dir, tn); err != nil {
 		t.Fatal(err)
 	}
@@ -191,25 +236,53 @@ func containerID(t *testing.T, ctx context.Context, e *Engine, name string) stri
 	return info.Container.ID
 }
 
-// reach asks the query service for its services from a container on n's
-// Docker network, by the backend's fixed name.
+// reach asks the backend for its health from a container on n's Docker
+// network, by its fixed name, and checks that its query, over HTTP and gRPC,
+// asks for TLS there too.
 func reach(t *testing.T, ctx context.Context, e *Engine, n names) {
 	t.Helper()
 	if err := e.EnsureImage(ctx, testBase); err != nil {
 		t.Fatal(err)
 	}
-	out, err := e.RunEphemeral(ctx, Spec{
-		Name:    n.container("probe"),
-		Network: n.dockerNetwork(),
-		Image:   testBase,
-		Cmd:     []string{"wget", "-q", "-O", "-", "http://" + TracingAlias + ":" + TracingQuery + "/api/v3/services"},
-	})
+	probe := func(url string) (string, error) {
+		out, err := e.RunEphemeral(ctx, Spec{
+			Name:    n.container("probe"),
+			Network: n.dockerNetwork(),
+			Image:   testBase,
+			Cmd:     []string{"wget", "-q", "-T", "5", "-O", "-", url},
+		})
+		return string(out), err
+	}
+	out, err := probe("http://" + TracingAlias + ":" + tracingHealth + "/status")
 	if err != nil {
 		t.Fatalf("from %s: %v", n.network, err)
 	}
-	if !strings.Contains(string(out), "services") {
-		t.Fatalf("from %s the query service said: %s", n.network, out)
+	if !strings.Contains(out, "StatusOK") {
+		t.Fatalf("from %s the backend's health said: %s", n.network, out)
 	}
+	for _, port := range []string{TracingQuery, tracingGRPC} {
+		if out, err := probe("http://" + TracingAlias + ":" + port + "/"); err == nil {
+			t.Errorf("from %s the query on %s answered in the clear: %s", n.network, port, out)
+		}
+	}
+}
+
+// query asks the query service on addr for its services over TLS.
+func query(ctx context.Context, addr string, config *tls.Config) error {
+	c := &http.Client{Transport: &http.Transport{TLSClientConfig: config}, Timeout: 10 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+addr+"/api/v3/services", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s", resp.Status)
+	}
+	return nil
 }
 
 func freePort(t *testing.T) string {

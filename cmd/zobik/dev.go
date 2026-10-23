@@ -34,9 +34,6 @@ func init() {
 	devScopes = append(devScopes, bus.TapScope, bus.PublishScope)
 	devCommands["tap"] = tapCmd
 	devCommands["publish"] = publishCmd
-	devInitFlags = append(devInitFlags, func(fs *flag.FlagSet, o *deploy.Options) {
-		fs.StringVar(&o.TracingUI, "tracing-ui", deploy.TracingQuery, "the port on 127.0.0.1 where a new tenant publishes Jaeger's UI; empty publishes none")
-	})
 }
 
 const (

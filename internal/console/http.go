@@ -25,6 +25,7 @@ const CookieSession = "zobik_session"
 func (s *Service) Handler(port string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+PathSession, s.postSession)
+	mux.HandleFunc("GET "+PathSession, s.withSession(false, s.getSession))
 	mux.HandleFunc("DELETE "+PathSession, s.withSession(true, s.deleteSession))
 	mux.HandleFunc("GET "+pathSignIn, s.getSignIn)
 	mux.HandleFunc("GET "+PathConfig, s.withSession(true, s.getConfig))

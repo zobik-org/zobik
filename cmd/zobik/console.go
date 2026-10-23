@@ -43,7 +43,39 @@ func consoleCmd(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("console: serving the panel at http://localhost:%s/\n", port)
-	return svc.Serve(ctx, ln)
+	return serveConsole(ctx, svc, n.dir, ln)
+}
+
+// serveConsole serves the panel on ln and, when the network created its tenant,
+// the tracing backend's UI on a port of its own (implementation §1.2.17), until
+// ctx ends or either fails.
+func serveConsole(ctx context.Context, svc *console.Service, dir string, ln net.Listener) error {
+	if _, err := deploy.TracingAddr(dir); errors.Is(err, deploy.ErrNoTracing) {
+		return svc.Serve(ctx, ln)
+	} else if err != nil {
+		return err
+	}
+	port, err := deploy.TraceUIPort(dir)
+	if err != nil {
+		return err
+	}
+	traces, err := net.Listen("tcp", "127.0.0.1:"+port)
+	if err != nil {
+		return fmt.Errorf("serving the tracing backend's UI on port %s: %w", port, err)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.ServeTraces(ctx, traces)
+		cancel()
+	}()
+	err = svc.Serve(ctx, ln)
+	cancel()
+	if tracesErr := <-done; err == nil {
+		err = tracesErr
+	}
+	return err
 }
 
 func registerIdleTimeout(fs *flag.FlagSet) *time.Duration {
@@ -73,17 +105,22 @@ func newConsole(dir string, idle time.Duration) (*console.Service, error) {
 		}
 		channels = append(channels, console.Channel{Audience: audience, ID: id, Addr: addr})
 	}
+	tracing, err := deploy.TracingAddr(dir)
+	if err != nil && !errors.Is(err, deploy.ErrNoTracing) {
+		return nil, err
+	}
 	return console.New(console.Options{
 		Open: func(user string, password []byte) (*console.Keys, error) {
 			s, err := deploy.OpenSession(dir, user, password)
 			if err != nil {
 				return nil, err
 			}
-			return &console.Keys{Root: s.Root, Console: s.Console, Conversations: s.Conversations, JWT: s.ConsoleJWT, Close: s.Close}, nil
+			return &console.Keys{Root: s.Root, Console: s.Console, Conversations: s.Conversations, Tracing: s.Tracing, JWT: s.ConsoleJWT, Close: s.Close}, nil
 		},
 		Channels:         channels,
 		IdleTimeout:      idle,
 		ConversationsDir: deploy.ConversationsDir(dir),
+		TracingAddr:      tracing,
 	}), nil
 }
 

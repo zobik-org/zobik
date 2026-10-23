@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -26,6 +27,9 @@ type Session struct {
 	// Conversations is the key the work area's conversations are encrypted
 	// with (implementation §6, The operator console).
 	Conversations []byte
+	// Tracing is the TLS the console reaches the tracing backend's query with,
+	// or nil if the network did not create its tenant (implementation §1.2.17).
+	Tracing *tls.Config
 	// signingKey is the console's scoped signing key, which lives in the clear
 	// on the host, and account the account it signs under.
 	signingKey nkeys.KeyPair
@@ -62,7 +66,11 @@ func OpenSession(dir, user string, password []byte) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Session{Root: root, Console: consoleKey, Conversations: conversations, signingKey: signingKey, account: account.Subject}, nil
+	tracing, err := OpenTracingClient(dir, password)
+	if err != nil {
+		return nil, err
+	}
+	return &Session{Root: root, Console: consoleKey, Conversations: conversations, Tracing: tracing, signingKey: signingKey, account: account.Subject}, nil
 }
 
 // conversationsKey opens the key of the conversations, and creates it sealed
@@ -104,6 +112,7 @@ func (s *Session) Close() {
 		kp.Wipe()
 	}
 	clear(s.Conversations)
+	s.Tracing = nil
 }
 
 // ErrNoChannel is a channel the network does not run.

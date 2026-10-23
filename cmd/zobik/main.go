@@ -31,9 +31,6 @@ var devScopes []bus.Scope
 // devCommands are the subcommands only a development binary has (dev.go).
 var devCommands = map[string]func(ctx context.Context, args []string) error{}
 
-// devInitFlags register the flags of zobik init only a development binary has (dev.go).
-var devInitFlags []func(fs *flag.FlagSet, o *deploy.Options)
-
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -100,9 +97,6 @@ func initCmd(ctx context.Context, args []string) error {
 	var o deploy.Options
 	fs.StringVar(&o.Tenant, "tenant", "", "the identifier of a tenant on this host to join (default: a new tenant)")
 	idle := registerIdleTimeout(fs)
-	for _, f := range devInitFlags {
-		f(fs, &o)
-	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -150,7 +144,7 @@ func initCmd(ctx context.Context, args []string) error {
 	url := "http://localhost:" + port + path
 	fmt.Printf("console: the network is up; the panel is at %s\n", url)
 	openBrowser(url)
-	return svc.Serve(ctx, ln)
+	return serveConsole(ctx, svc, n.dir, ln)
 }
 
 // readCredentials asks for the operator's username and password on the

@@ -39,6 +39,7 @@ input, textarea { font: inherit; color: inherit; background: var(--bg); border: 
 .msg.request { background: var(--person); align-self: flex-end; }
 .msg.outcome, .msg.query { background: var(--network); border: 1px solid var(--line); }
 .msg .meta { color: var(--muted); font-size: .8em; margin-bottom: .2rem; }
+.msg .meta .trace { margin-left: .5rem; }
 .msg .text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-size: .9em; }
 .msg .failure { color: var(--danger); }
