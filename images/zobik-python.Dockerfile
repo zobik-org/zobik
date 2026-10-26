@@ -1,6 +1,6 @@
 # The Logic Container base image: Python with the NRI client library (implementation §1.2.13).
 # Build from the repository root: docker build -f images/zobik-python.Dockerfile -t zobik-python:dev .
-FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
 COPY sdk/python/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt && rm /tmp/requirements.txt
 COPY sdk/python/src/zobik /usr/local/lib/python3.12/site-packages/zobik
