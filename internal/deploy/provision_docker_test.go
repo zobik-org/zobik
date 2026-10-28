@@ -23,6 +23,7 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/configschema"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/embedding/embeddingtest"
 	"zobik.org/zobik/internal/globalconfig"
@@ -81,7 +82,7 @@ func newProvisionFixture(t *testing.T, ctx context.Context) *provisionFixture {
 		t.Fatal(err)
 	}
 	values := schema.V0()
-	values["egress_registry"] = json.RawMessage(`{"embeddings":{"target":"` + fake.URL + `"}}`)
+	values["egress_registry"] = json.RawMessage(`{"embeddings":` + string(egress.EmbeddingsEntry(fake.URL)) + `}`)
 	values["embedding_model"] = json.RawMessage(`{"entry":"embeddings","model":"test","document_prefix":"search_document: ","query_prefix":"search_query: ","max_text_size":8192}`)
 	if err := globalconfig.WriteV0(ctx, f.js, globalconfig.Record{ConfigVersion: "v0", PublishedAt: time.Now(), AuthorizedBy: "deployment", Values: values}); err != nil {
 		t.Fatal(err)

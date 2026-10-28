@@ -55,7 +55,7 @@ func TestTraces(t *testing.T) {
 	z.embeddings(t, ctx, map[string][]float32{documentPrefix + b.CapabilityText: same, queryPrefix + text: same})
 
 	out := z.run(t, ctx, credentials, "config", "set",
-		`egress_registry={"embeddings":{"target":"http://embeddings:8080"}}`,
+		embeddingsRegistry,
 		`embedding_model={"entry":"embeddings","model":"fake","document_prefix":"`+documentPrefix+`","query_prefix":"`+queryPrefix+`","max_text_size":8192}`)
 	trace := regexp.MustCompile(`trace (\S+)`).FindStringSubmatch(out)
 	if trace == nil {

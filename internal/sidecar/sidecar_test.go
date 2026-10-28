@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role/taskbroker"
@@ -119,7 +120,7 @@ func newFixture(t *testing.T, o options) *fixture {
 		})
 		if o.embeddings != "" {
 			testnet.Set(v, map[string]any{
-				"egress_registry": map[string]any{"embeddings": map[string]any{"target": o.embeddings}},
+				"egress_registry": map[string]any{"embeddings": egress.EmbeddingsEntry(o.embeddings)},
 				"embedding_model": map[string]any{"entry": "embeddings", "model": "test", "document_prefix": "", "query_prefix": "q: ", "max_text_size": 64},
 			})
 		}

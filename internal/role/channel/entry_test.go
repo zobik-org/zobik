@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/embedding/embeddingtest"
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role"
@@ -68,7 +69,7 @@ func newEntryFixture(t *testing.T, space bool) *entryFixture {
 		if space {
 			testnet.Set(v, map[string]any{
 				"network_admission": "open",
-				"egress_registry":   map[string]any{"embeddings": map[string]any{"target": ep.URL}},
+				"egress_registry":   map[string]any{"embeddings": egress.EmbeddingsEntry(ep.URL)},
 				"embedding_model":   map[string]any{"entry": "embeddings", "model": "test", "document_prefix": "", "query_prefix": "q: ", "max_text_size": maxBytes},
 			})
 		}
