@@ -31,7 +31,7 @@ The **Justification** column states the argument in one line; the full developme
 | 15 | Embedding Model | Generates capability, task and topic embeddings (semantic matching §3.7). | **Any endpoint of the OpenAI embeddings API**, reached through egress; the operator chooses it | An open protocol that hosted providers and local runtimes speak, so the network installs none (§1.2.15). |
 | 16 | Image registry | Resolves the content-addressed `artifact_ref` of each blueprint. | **zot**, **shared at tenant level** | The `artifact_ref` of a tenant-wide Catalog has to resolve in every network of the tenant; it garbage-collects what was deleted without ceasing to accept writes (§1.2.16). |
 | 17 | Tracing / APM backend | Backend the Tracing Collector exports to and where traces are visualized. | **Jaeger** with embedded **Badger** storage (escape to **Cassandra** by volume), one instance shared at tenant level | Native OTLP, a UI and the query API that §6.6 needs; the shared instance fulfills cross-network, and the footprint decides the engine (§1.2.17). |
-| 18 | Secret Store | Holds the value behind each `credential_handle` and each `verify_handle`; resolves it to each Integration Sidecar, trimmed to its grants. | **SOPS + age** (encrypted file the console writes), served by the `secrets` role of `zobik`; escape to **OpenBao** (MPL-2.0) when centralized rotation is needed | The load is handle→value trimmed to the grants; an encrypted file behind a role fulfills it with no service to unseal at startup (§1.2.18). |
+| 18 | Secret Store | Holds the value behind each `credential_handle` and each `verify_handle`; resolves it to each Integration Sidecar, trimmed to its grants. | **age** (encrypted file the console writes), served by the `secrets` role of `zobik`; escape to **OpenBao** (MPL-2.0) when centralized rotation is needed | The load is handle→value trimmed to the grants; an encrypted file behind a role fulfills it with no service to unseal at startup (§1.2.18). |
 | 19 | Admission Scanner | Static analysis of the artifact; emits the `scan_result` with which a blueprint is admitted (§3.13.3). | **Trivy** (embedded secrets and credentials) + own rules for injection patterns, behind the `scanner` role of `zobik` | Deterministic and with no LLM; the verdict is cached by digest, so the normal case does not scan (§1.2.19). |
 
 ### 1.1. Stack rationale
@@ -575,11 +575,11 @@ With that, the default is **embedded Badger**, and **Cassandra** remains as the 
 
 **A single instance is a single point for the tenant, and the architecture already admits it.** The backend is a dependency only of export: the Tracing Collector answers `trace_query` from its own state (§3.10), and §3.15.2 persists budget enforcement in the Contention Registry precisely so as not to hang it from here. While it is down, the human view and the Forge's evidence (§6.6) are unavailable, so high availability is not a criterion of this row.
 
-#### 1.2.18. Secret Store—SOPS + age, with escape to OpenBao
+#### 1.2.18. Secret Store—a file encrypted with age, with escape to OpenBao
 
 **The load of this row is resolving each handle to its value and nothing more.** §2.1 classifies it as an external dependency with that single job, and §3.16.6 bounds it to the egress and ingress credentials; the root of trust is kept in the act of deployment and not here (row 3, §3.14.2). Nothing the network does with node credentials goes through this store: §3.14.2 fixes that a capability credential verifies provenance against the root, that no revocation list or expiry is needed, and that **revoking is taking down the workload**—so the rotation and revocation a vault offers answer to no clause.
 
-What remains is a handle→value map, and an **encrypted file with SOPS + age** fulfills it: no database to operate and **no startup to unseal**, which is one step less before the network admits anything (§5.1). Rotating a provider credential is rewriting the entry, and it takes effect on the next call because the handle is resolved on invocation (§3.16.4). At startup, the Integration Sidecar only checks that each handle of its grants resolves (§3.16.5).
+What remains is a handle→value map, and an **encrypted file** fulfills it: no database to operate and **no startup to unseal**, which is one step less before the network admits anything (§5.1). The file is the map as a JSON object, encrypted whole with `age` through its reference Go implementation, `filippo.io/age`. The console writes it and the `secrets` role reads it, so it needs no format a person edits by hand. Rotating a provider credential is rewriting the entry, and it takes effect on the next call because the handle is resolved on invocation (§3.16.4). At startup, the Integration Sidecar only checks that each handle of its grants resolves (§3.16.5).
 
 `zobik init` generates the `age` key and the operator console keeps it (§6), which is also what writes the file: one more custody in the same place, instead of a service whose own startup secret has to be kept anyway. It is stored apart from the root and without the password, because the root is decrypted only with a person present and the handles are resolved with no one (§3.16.4).
 
@@ -1782,7 +1782,7 @@ The response declares `output`, `model` and `usage`, from `/output`, `/model` an
 * `target`: `https://api.openai.com`, and `operations`: `create_response`.
 * `grant_scope` = `open`, because the nodes the Forge derives for other topics also use it (§6.3); the trace budget contains the spending (§3.15).
 * `rules`: a single rule, without `when`, with `allow`. Calling the model produces no effect outside the network, and what only costs needs no approval (§3.16.2).
-* `billing_rule`: the `usage` tokens—input, cached input and output—times the rate of the `model` the response returns (§8.5). The rate depends on the model and each call chooses the model, so a price per entry is not enough.
+* `billing_rule`: the `cost` is the `usage` tokens—input, cached input and output—times the rate of the `model` the response returns (§8.5). The rate depends on the model and each call chooses the model, so a price per entry is not enough.
 
   ```cel
   response.status >= 400
@@ -1792,7 +1792,11 @@ The response declares `output`, `model` and `usage`, from `/output`, `/model` an
       + double(response.usage.output_tokens) * rate[response.model].output
   ```
 
-  An error response does not charge. A successful one without `usage`, or with a `model` the table does not have, cannot be evaluated and charges `max_per_call`.
+  An error response does not charge. A successful one without `usage`, or with a `model` the table does not have, cannot be evaluated and charges `max_per_call`. `tokens_in` and `tokens_out` are `usage.input_tokens` and `usage.output_tokens`, and 0 in an error response:
+
+  ```cel
+  response.status >= 400 ? 0 : response.usage.input_tokens
+  ```
 
 * `rate_source`: the per-model price table the variant brings, in `cost_unit`, with its `as_of` (§8.5).
 * `credential_handle`: that of the key the operator writes to the Secret Store when deploying, with `credential_placement` in `Authorization: Bearer` (§8.4).
@@ -1935,7 +1939,17 @@ It is valid only with `https`. The own adapters use the credential as their prot
 
 ### 8.5. Billing
 
-**The `billing_rule` is CEL, with one expression per operation the entry admits.** Each expression returns a `double`, the cost of the call in `cost_unit` (§3.10). It is compiled against the call's fields, like the conditions (§8.2); against `response`, with that operation's response shape as its type; against `rate`, as `map(string, map(string, double))`; and against `max_per_call`. The Config Store compiles it when validating the `config_change`, like the `rules`. The expression of an operation that costs nothing is `0.0`.
+**The `billing_rule` is CEL, with an object per operation the entry admits.** The object carries `cost`, an expression that returns a `double`, the cost of the call in `cost_unit`, and optionally `tokens_in` and `tokens_out`, which return an `int`, the tokens the provider reports (§3.10). Each expression is compiled against the call's fields, like the conditions (§8.2); against `response`, with that operation's response shape as its type; against `rate`, as `map(string, map(string, double))`; and against `max_per_call`. The Config Store compiles them when validating the `config_change`, like the `rules`. The `cost` of an operation that costs nothing is `0.0`, and an operation without `tokens_in` or `tokens_out` adds 0 to that field:
+
+```json
+{
+  "create_response": {
+    "cost": "…",
+    "tokens_in": "response.usage.input_tokens",
+    "tokens_out": "response.usage.output_tokens"
+  }
+}
+```
 
 **The rate comes from a table, and `rate_source` is its name.** The table is a JSON document:
 
@@ -1960,11 +1974,13 @@ It is valid only with `https`. The own adapters use the credential as their prot
 
 **The Integration Sidecar watches the bucket and keeps the tables in memory.** A KV watch delivers the value of each key on opening and then each change, so it values each call with the current rate without querying the bucket on every call. It watches the whole bucket and not only the keys of its grants: the tables are few and small, and an edit of the registry changes the table an entry names without touching the node (§3.16.3). The Spawner, which generates embeddings through the entry `embedding_model` names (§1.2.15), watches it the same way, and its signing key lets it read it without writing it.
 
-**An entry without `rate_source` is one that costs nothing**: its `billing_rule` is `0.0` in every operation, and the Config Store rejects any other expression. It is the form of the Forge's infrastructure entries (§7.4) and of an embedding model on a local runtime (§1.2.15), which have no price or table to write.
+**An entry without `rate_source` is one that costs nothing**: its `cost` is `0.0` in every operation, and the Config Store rejects any other expression. It is the form of the Forge's infrastructure entries (§7.4) and of an embedding model on a local runtime (§1.2.15), which have no price or table to write.
 
-**An entry that names a `rate_source` absent from the bucket does not execute.** Without a table there is no `max_per_call`, and a call whose `billing_rule` failed would have nothing to be charged with. The Integration Sidecar rejects it before executing it, with an error that names the table, and the error returns to the Logic Container like that of a `deny` (§3.16.4). On the `embedding_model` entry, the rejection is a failed generation, which follows `embedding_regeneration_backoff` like any other (§3.13.7).
+**An entry that names a `rate_source` absent from the bucket does not execute.** Without a table there is no `max_per_call`, and a call whose `cost` failed would have nothing to be charged with. The Integration Sidecar rejects it before executing it, with an error that names the table, and the error returns to the Logic Container like that of a `deny` (§3.16.4). On the `embedding_model` entry, the rejection is a failed generation, which follows `embedding_regeneration_backoff` like any other (§3.13.7).
 
-**An evaluation error charges `max_per_call`.** The shape of the response is not enforced (§3.16.2), so a provider that changes its response, or that returns a model the table does not have, makes the expression unevaluable. Charging zero would underestimate the spending without a signal, and the ceiling of §3.15.1 would stop containing it. The error goes in the call's span (§3.2). A provider that settles out of band (§3.10) uses `max_per_call` as the expression.
+**An evaluation error of `cost` charges `max_per_call`.** The shape of the response is not enforced (§3.16.2), so a provider that changes its response, or that returns a model the table does not have, makes the expression unevaluable. Charging zero would underestimate the spending without a signal, and the ceiling of §3.15.1 would stop containing it. The error goes in the call's span (§3.2). A provider that settles out of band (§3.10) uses `max_per_call` as its `cost`.
+
+**An evaluation error of `tokens_in` or `tokens_out` adds 0 to that field**, and the error goes in the call's span. The tokens feed the diagnosis of §3.12.2 and no ceiling, so a failed extraction is not charged in `cost`.
 
 ### 8.6. Sender verification
 
