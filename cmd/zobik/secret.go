@@ -71,7 +71,8 @@ func secretCmd(ctx context.Context, args []string) error {
 		}
 		user, password = string(bytes.TrimRight(lines[0], "\r")), bytes.TrimRight(lines[1], "\r")
 		if len(lines) == 3 {
-			val = bytes.TrimRight(lines[2], "\r\n")
+			// Only the line's own end: the rest of the value is kept as is.
+			val = bytes.TrimSuffix(bytes.TrimSuffix(lines[2], []byte("\n")), []byte("\r"))
 		}
 	}
 	if args[0] == "set" && len(val) == 0 {

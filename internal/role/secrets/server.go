@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/rpcauth"
 	"zobik.org/zobik/internal/signing"
 	secretsv1 "zobik.org/zobik/proto/zobik/secrets/v1"
@@ -203,13 +204,13 @@ func granted(head map[string]json.RawMessage, cred signing.Capability, root, han
 			continue
 		}
 		switch e.GrantScope {
-		case "", "open":
+		case "", egress.ScopeOpen:
 			return true
-		case "topics":
+		case egress.ScopeTopics:
 			if slices.Contains(e.GranteeTopics, cred.Topic) {
 				return true
 			}
-		case "provision":
+		case egress.ScopeProvision:
 			if provisioned(cred, root, g) {
 				return true
 			}

@@ -24,8 +24,11 @@ const (
 	unitSecrets      = "secrets"
 )
 
-// handleForm bounds a handle to what the panel and the command line name it with.
-var handleForm = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`).MatchString
+// handleForm bounds a handle to what the panel and the command line name it
+// with: up to 128 bytes in segments separated by /, none of them empty, . or ..
+func handleForm(h string) bool { return len(h) <= 128 && handleSegments(h) }
+
+var handleSegments = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$`).MatchString
 
 // secretsKey returns the age identity, generating it the first time.
 func secretsKey(dir string) (string, error) {
@@ -99,10 +102,15 @@ func WriteSecret(ctx context.Context, e *Engine, dir, network, image, handle str
 	if sealed, err = secrets.Seal(key, values); err != nil {
 		return err
 	}
-	if err := writeFile(dir, fileSecretsStore, sealed); err != nil {
+	// The role's volume first: an act that fails leaves the console's copy as
+	// the role serves it, and the next zobik init does not carry the change.
+	n := names{network, root}
+	if _, err := e.EnsureVolume(ctx, n.volume(unitSecrets), n.labels()); err != nil {
 		return err
 	}
-	n := names{network, root}
-	return e.WriteVolume(ctx, n.volume(unitSecrets), image, role.Dir,
-		[]File{{Path: secrets.FileStore, Mode: 0o600, Data: sealed}})
+	if err := e.WriteVolume(ctx, n.volume(unitSecrets), image, role.Dir,
+		[]File{{Path: secrets.FileStore, Mode: 0o600, Data: sealed}}); err != nil {
+		return err
+	}
+	return writeFile(dir, fileSecretsStore, sealed)
 }

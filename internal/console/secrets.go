@@ -13,7 +13,8 @@ import (
 // (implementation §6, The operator console).
 const PathSecrets = "/api/secrets"
 
-// maxSecret bounds a value: a key, a token or a listener's certificate.
+// maxSecret bounds a value: a key, a token or a listener's certificate. The body
+// carries it in base64, a third longer.
 const maxSecret = 64 << 10
 
 // ErrHandle is a handle the Secret Store does not admit.
@@ -27,8 +28,12 @@ type secretWrite struct {
 func (s *Service) secretRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT "+PathSecrets+"/{handle...}", s.withSession(true, func(w http.ResponseWriter, r *http.Request, _ string) {
 		var body secretWrite
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSecret)).Decode(&body); err != nil || len(body.Value) == 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2*maxSecret)).Decode(&body); err != nil || len(body.Value) == 0 {
 			writeError(w, http.StatusBadRequest, "the body carries the value")
+			return
+		}
+		if len(body.Value) > maxSecret {
+			writeError(w, http.StatusRequestEntityTooLarge, "the value exceeds 64 KiB")
 			return
 		}
 		s.writeSecret(w, r, body.Value)

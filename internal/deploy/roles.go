@@ -138,7 +138,7 @@ func panelChannel(audience string, waitsFor ...string) Role {
 	topic := signing.HITLPrefix + audience
 	return Role{Unit: "channel_" + audience, Scope: bus.ChannelScope, Topic: topic,
 		AttemptWindow: &signing.AttemptWindow{From: ptr(1), FinalRound: ptr(true)},
-		Args:          []string{"--role=channel", "--audience=" + audience}, WaitsFor: []string{"config"},
+		Args:          []string{"--role=channel", "--audience=" + audience}, WaitsFor: waitsFor,
 		ServesConsole: true,
 		Consumers: func(id string) []bus.Consumer {
 			c := claimant(topic)(id)
