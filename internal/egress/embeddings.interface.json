@@ -1,0 +1,55 @@
+{
+  "protocol": "https",
+  "direction": "egress",
+  "operations": {
+    "create_embeddings": {
+      "fields": {
+        "type": "object",
+        "required": ["model", "input"],
+        "properties": {
+          "model": {"type": "string"},
+          "input": {"type": "array", "items": {"type": "string"}},
+          "encoding_format": {"type": "string", "enum": ["float"]}
+        }
+      },
+      "response": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {"type": "integer"},
+                "embedding": {"type": "array", "items": {"type": "number"}}
+              }
+            }
+          },
+          "model": {"type": "string"},
+          "usage": {
+            "type": "object",
+            "properties": {
+              "prompt_tokens": {"type": "integer"},
+              "total_tokens": {"type": "integer"}
+            }
+          }
+        }
+      },
+      "https": {
+        "method": "POST",
+        "path": "/v1/embeddings",
+        "headers": {"Content-Type": "application/json"},
+        "fields": {
+          "model": {"in": "json", "at": "/model"},
+          "input": {"in": "json", "at": "/input"},
+          "encoding_format": {"in": "json", "at": "/encoding_format"}
+        },
+        "response": {
+          "data": {"from": "json", "at": "/data"},
+          "model": {"from": "json", "at": "/model"},
+          "usage": {"from": "json", "at": "/usage"}
+        }
+      }
+    }
+  }
+}

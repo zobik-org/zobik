@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/interface.schema.json",
+  "description": "The operation interface an egress_registry or ingress_registry entry implements, copied whole and identified by the digest of its JCS canonical form (architecture §3.16.2, §3.16.7; implementation §8.1). The fields and the response of each operation are schemas in the subset of implementation §8.2, which the binary checks beyond this document.",
+  "type": "object",
+  "required": ["protocol", "direction", "operations"],
+  "properties": {
+    "protocol": {
+      "description": "https, or the protocol of an own adapter (implementation §8.3, §8.7). Its range is that of the deployed Integration Sidecar, which the Global Configuration schema fixes.",
+      "type": "string",
+      "minLength": 1
+    },
+    "direction": {
+      "type": "string",
+      "enum": ["egress", "ingress"]
+    },
+    "operations": {
+      "description": "One key per operation.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["fields"],
+        "properties": {
+          "fields": {
+            "description": "The fields, as an object schema with properties (implementation §8.2).",
+            "opaque": true
+          },
+          "response": {
+            "description": "The shape of the response, as an object schema with properties; in ingress, only when the protocol expects a reply.",
+            "opaque": true
+          },
+          "body": {
+            "description": "In egress, whether the call and the response carry a body (architecture §3.16.2).",
+            "type": "object",
+            "required": ["request", "response"],
+            "properties": {
+              "request": {"type": "boolean"},
+              "response": {"type": "boolean"}
+            }
+          },
+          "bodies": {
+            "description": "In ingress, whether the message brings bodies (architecture §3.16.7).",
+            "type": "boolean"
+          },
+          "context": {
+            "description": "In ingress, the message's context window (architecture §3.16.7, implementation §8.3).",
+            "opaque": true
+          },
+          "https": {
+            "description": "The declarative mapping, when protocol is https (implementation §8.3).",
+            "type": "object",
+            "required": ["method", "path"],
+            "properties": {
+              "method": {"type": "string", "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]},
+              "path": {"description": "Under the root of the target, with a {name} segment per path field.", "type": "string", "minLength": 1},
+              "headers": {"description": "Constant headers.", "type": "object", "additionalProperties": {"type": "string"}},
+              "fields": {
+                "description": "Where each field goes: in is path, query, header or json, and at is the parameter's or the header's name, or a JSON Pointer into the request's JSON body.",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "required": ["in"],
+                  "properties": {
+                    "in": {"type": "string", "enum": ["path", "query", "header", "json"]},
+                    "at": {"type": "string"}
+                  }
+                }
+              },
+              "response": {
+                "description": "Where each field of the response comes from: from is json, with a JSON Pointer over the body, or header, with a name.",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "required": ["from", "at"],
+                  "properties": {
+                    "from": {"type": "string", "enum": ["json", "header"]},
+                    "at": {"type": "string"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "verification": {
+      "description": "In ingress through a listener, how the sender is verified (implementation §8.6).",
+      "opaque": true
+    }
+  }
+}

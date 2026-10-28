@@ -44,6 +44,24 @@ type Key struct {
 
 	Preconditions []Precondition
 	rules         []*rules.Bool
+	checks        []Check
+}
+
+// Check is a validation of the resulting snapshot that its schema does not
+// express, like compiling an egress entry's conditions against its interface
+// (architecture §3.14.4). The binary registers it next to the code it answers to.
+type Check func(values map[string]json.RawMessage) error
+
+// AddCheck declares check on each key whose edit evaluates it, like a precondition.
+func (s *Schema) AddCheck(check Check, keys ...string) error {
+	for _, name := range keys {
+		k, ok := s.Keys[name]
+		if !ok {
+			return fmt.Errorf("globalconfig: a check on %s, which is not a key", name)
+		}
+		k.checks = append(k.checks, check)
+	}
+	return nil
 }
 
 // Schema is the assembled schema of the Global Configuration.

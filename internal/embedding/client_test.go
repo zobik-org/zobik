@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"zobik.org/zobik/internal/digest"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/embedding/embeddingtest"
 )
@@ -20,7 +21,7 @@ const model = `{"entry":"embeddings","model":"nomic-embed-text","document_prefix
 func values(target string) map[string]json.RawMessage {
 	return map[string]json.RawMessage{
 		"embedding_model": json.RawMessage(model),
-		"egress_registry": json.RawMessage(`{"embeddings":{"target":"` + target + `"}}`),
+		"egress_registry": json.RawMessage(`{"embeddings":` + string(egress.EmbeddingsEntry(target)) + `}`),
 	}
 }
 
