@@ -258,7 +258,7 @@ Consistent with the Go policy for the structural components. Embedded SDK, not a
 | `zobik.current_attempts`, `zobik.previous_attempt` | those of the announcement (§3.3) |
 | `zobik.outcome` | `completed`, `failed`, `aborted` or `lease_expired` |
 | `zobik.failure_code`, `zobik.failure_reason` | those of the `task.failed` |
-| `zobik.metrics.tokens_in`, `zobik.metrics.tokens_out`, `zobik.metrics.cost`, `zobik.metrics.duration_ms` | `data.metrics` of the terminal event (§3.10) |
+| `zobik.metrics.tokens_in`, `zobik.metrics.tokens_out`, `zobik.metrics.cost`, `zobik.metrics.billing_errors`, `zobik.metrics.duration_ms` | `data.metrics` of the terminal event (§3.10) |
 
 An absent value is an absent attribute. A span whose outcome is not `completed` has the status `Error`. Its *span events* are the task's `task.announced`, each `task.proposed` with the proposer's `node_id` and its `declared_similarity`, each `task.rejected` with that `node_id` and the `similarity` the Task Broker recomputed, and each `notice` whose `traceparent` names the span, with its `kind`.
 
@@ -1978,9 +1978,9 @@ It is valid only with `https`. The own adapters use the credential as their prot
 
 **An entry that names a `rate_source` absent from the bucket does not execute.** Without a table there is no `max_per_call`, and a call whose `cost` failed would have nothing to be charged with. The Integration Sidecar rejects it before executing it, with an error that names the table, and the error returns to the Logic Container like that of a `deny` (§3.16.4). On the `embedding_model` entry, the rejection is a failed generation, which follows `embedding_regeneration_backoff` like any other (§3.13.7).
 
-**An evaluation error of `cost` charges `max_per_call`.** The shape of the response is not enforced (§3.16.2), so a provider that changes its response, or that returns a model the table does not have, makes the expression unevaluable. Charging zero would underestimate the spending without a signal, and the ceiling of §3.15.1 would stop containing it. The error goes in the call's span (§3.2). A provider that settles out of band (§3.10) uses `max_per_call` as its `cost`.
+**An evaluation error of `cost` charges `max_per_call`.** The shape of the response is not enforced (§3.16.2), so a provider that changes its response, or that returns a model the table does not have, makes the expression unevaluable. Charging zero would underestimate the spending without a signal, and the ceiling of §3.15.1 would stop containing it. The call counts in `billing_errors` (§3.10). A provider that settles out of band (§3.10) uses `max_per_call` as its `cost`.
 
-**An evaluation error of `tokens_in` or `tokens_out` adds 0 to that field**, and the error goes in the call's span. The tokens feed the diagnosis of §3.12.2 and no ceiling, so a failed extraction is not charged in `cost`.
+**An evaluation error of `tokens_in` or `tokens_out` adds 0 to that field**, and the call counts in `billing_errors`, once whatever expressions of it failed. The tokens feed the diagnosis of §3.12.2 and no ceiling, so a failed extraction is not charged in `cost`.
 
 ### 8.6. Sender verification
 
@@ -2086,13 +2086,13 @@ It is the depth of the chain of §3.14.2: a structural credential carries no `si
 | `capability_embedding` | string | the capability embedding, with the encoding of the `task_embedding` (§1.2.1) |
 | `similarity_floor` | number | the blueprint's floor (§3.13.3) |
 | `attempt_window` | object | the blueprint's, with the shape of the act of registration (§1.2.11) |
-| `egress_grants` | list of `{ slot, entry }` | for each slot of the `egress_required`, the `egress_registry` key it is associated with (§3.16.3) |
-| `ingress_grants` | list of `{ slot, entry }` | for each slot of the `ingress_required`, the `ingress_registry` key it is associated with (§3.16.7) |
+| `egress_grants` | list of `{ slot, entry, interface }` | for each slot of the `egress_required`, the `egress_registry` key it is associated with and the digest of the slot's interface (§3.16.3, §8.1) |
+| `ingress_grants` | list of `{ slot, entry, interface }` | for each slot of the `ingress_required`, the `ingress_registry` key it is associated with and the digest of the slot's interface (§3.16.7, §8.1) |
 | `operator_proof` | string | the proof of the `node_provision` that brought up the node, in compact JWS as it arrived; only in an emergent `hitl_contact_*` channel or in a node with a `provision` grant |
 
 **A structural credential carries neither `model_id` nor `capability_embedding`.** `zobik init` signs it before the network has a vector space (§6, *Installation and `zobik init`*), and on `hitl_contact_*` the Task Broker does not compare it with any embedding (§3.14.2).
 
-**The proof goes once per credential and covers all its `provision` grants.** The grant and the proof are fields of the same credential, so the Spawner's signature binds them. Whoever verifies a `provision` grant—the Integration Sidecar (§3.16.4) and the `secrets` role (§1.2.18)—looks for its `{ slot, entry }` in the proof's `provision_grants` and compares the proof's `artifact_ref` with the credential's. The Task Broker makes the same `artifact_ref` comparison, and that of `audience` against the `topic` (§3.14.2).
+**The proof goes once per credential and covers all its `provision` grants.** The grant and the proof are fields of the same credential, so the Spawner's signature binds them. Whoever verifies a `provision` grant—the Integration Sidecar (§3.16.4) and the `secrets` role (§1.2.18)—looks for its `slot` and `entry` in the proof's `provision_grants` and compares the proof's `artifact_ref` with the credential's. The Task Broker makes the same `artifact_ref` comparison, and that of `audience` against the `topic` (§3.14.2).
 
 **The role certificate, `role_certificate`:**
 
