@@ -79,7 +79,7 @@ func openAIEntry(t *testing.T, edit func(map[string]any)) json.RawMessage {
 		"credential_handle":    "openai",
 		"credential_placement": map[string]string{"header": "Authorization", "scheme": "Bearer"},
 		"rules": []map[string]string{
-			{"when": `max_output_tokens > 4000`, "then": "requester"},
+			{"when": `model.startsWith("gpt-5-pro")`, "then": "requester"},
 			{"then": "allow"},
 		},
 		"billing_rule": map[string]any{"create_response": map[string]string{
@@ -188,6 +188,10 @@ func TestParseEntryRejects(t *testing.T) {
 		{"grantee_topics outside topics", func(e map[string]any) { e["grantee_topics"] = []string{"code_review"} }, "grantee_topics"},
 		{"topics without grantee_topics", func(e map[string]any) { e["grant_scope"] = "topics" }, "grantee_topics"},
 		{"a field without mapping", func(e map[string]any) { delete(mapping(e)["fields"].(map[string]any), "tools") }, "has no mapping"},
+		{"a header written twice", func(e map[string]any) {
+			mapping(e)["headers"] = map[string]string{"X-Model": "a"}
+			mapping(e)["fields"].(map[string]any)["model"] = map[string]string{"in": "header", "at": "x-model"}
+		}, "written twice"},
 		{"a mapping that writes Host", func(e map[string]any) { mapping(e)["headers"] = map[string]string{"host": "x"} }, "adapter sets"},
 		{"a path segment without field", func(e map[string]any) { mapping(e)["path"] = "/v1/{org}/responses" }, "no path field"},
 		{"a json field outside a pointer", func(e map[string]any) {

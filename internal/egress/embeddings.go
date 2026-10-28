@@ -29,7 +29,7 @@ func EmbeddingsEntry(target string) json.RawMessage {
 		"target":       target,
 		"operations":   []string{EmbeddingsOperation},
 		"rules":        []map[string]string{{"then": Allow}},
-		"billing_rule": map[string]any{EmbeddingsOperation: map[string]string{"cost": free, "tokens_in": "response.usage.prompt_tokens"}},
+		"billing_rule": map[string]any{EmbeddingsOperation: map[string]string{"cost": free, "tokens_in": "response.status >= 400 ? 0 : response.usage.prompt_tokens"}},
 	})
 	if err != nil {
 		panic(err)

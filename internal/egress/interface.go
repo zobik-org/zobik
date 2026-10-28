@@ -85,9 +85,11 @@ var celReserved = []string{
 }
 
 var (
-	operationName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`).MatchString
-	fieldName     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString
-	pathParam     = regexp.MustCompile(`\{([^{}]*)\}`)
+	// snakeCase is the form of an operation's name and of an audience a rule
+	// names, the suffix of its hitl_contact_<audience> topic (architecture §3.5.3).
+	snakeCase = regexp.MustCompile(`^[a-z][a-z0-9_]*$`).MatchString
+	fieldName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString
+	pathParam = regexp.MustCompile(`\{([^{}]*)\}`)
 )
 
 // statusField is the field every https response carries without declaring it
@@ -151,7 +153,7 @@ func ParseInterface(raw json.RawMessage) (*Interface, error) {
 		fail := func(format string, args ...any) error {
 			return fmt.Errorf("interface: operation %s: %s", name, fmt.Sprintf(format, args...))
 		}
-		if !operationName(name) {
+		if !snakeCase(name) {
 			return nil, fail("an operation is named in snake_case")
 		}
 		op := &Operation{HTTPS: d.HTTPS}
@@ -224,9 +226,14 @@ func (op *Operation) checkEgressMapping() error {
 	if !strings.HasPrefix(m.Path, "/") {
 		return fmt.Errorf("the path starts with /")
 	}
-	for name := range m.Headers {
+	// Each header is written once, by a constant or by a field.
+	headers, _ := m.written()
+	for i, name := range headers {
 		if forbiddenHeader(name) {
 			return fmt.Errorf("the adapter sets %s", name)
+		}
+		if slices.Contains(headers[:i], name) {
+			return fmt.Errorf("the header %s is written twice", name)
 		}
 	}
 	params := map[string]bool{}

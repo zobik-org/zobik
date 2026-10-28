@@ -1,12 +1,10 @@
 package egress
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"net/textproto"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -32,10 +30,6 @@ const (
 
 // platformHandles is the prefix of the handles no entry names (implementation §1.2.18).
 const platformHandles = "zobik/"
-
-// audience is the form of an audience a rule names, the suffix of its
-// hitl_contact_<audience> topic (architecture §3.5.3).
-var audience = regexp.MustCompile(`^[a-z][a-z0-9_]*$`).MatchString
 
 // Entry is a compiled egress_registry entry (architecture §3.16.2).
 type Entry struct {
@@ -305,7 +299,7 @@ func (e *Entry) compileRules(list []ruleDoc) error {
 			return fmt.Errorf("rules: the last rule carries no when")
 		case !last && r.When == nil:
 			return fmt.Errorf("rules: only the last rule goes without when")
-		case r.Then != Allow && r.Then != Deny && !audience(r.Then):
+		case r.Then != Allow && r.Then != Deny && !snakeCase(r.Then):
 			return fmt.Errorf("rules: %q is not allow, deny or an audience", r.Then)
 		}
 		rule := Rule{Then: r.Then}
@@ -351,8 +345,7 @@ func (e *Entry) compileBilling(op, cost string, tokensIn, tokensOut *string) (*B
 // ParseRegistry parses and compiles every entry of an egress_registry value.
 func ParseRegistry(raw json.RawMessage) (map[string]*Entry, error) {
 	var entries map[string]json.RawMessage
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	if err := dec.Decode(&entries); err != nil {
+	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil, err
 	}
 	out := make(map[string]*Entry, len(entries))
