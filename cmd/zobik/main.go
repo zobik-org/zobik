@@ -55,6 +55,8 @@ func run(ctx context.Context, args []string) error {
 		return configCmd(ctx, rest)
 	case "console":
 		return consoleCmd(ctx, rest)
+	case "secret":
+		return secretCmd(ctx, rest)
 	case deploy.ActCommand:
 		if len(rest) != 1 {
 			return fmt.Errorf("usage: zobik %s <act>", deploy.ActCommand)
@@ -133,7 +135,7 @@ func initCmd(ctx context.Context, args []string) error {
 
 	// It ends serving the console, with the session open and a single-use link
 	// to it (implementation §6, Installation and zobik init).
-	svc, err := newConsole(n.dir, *idle)
+	svc, err := newConsole(n, *idle)
 	if err != nil {
 		return err
 	}

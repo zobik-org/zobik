@@ -38,7 +38,7 @@ func consoleCmd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	svc, err := newConsole(n.dir, *idle)
+	svc, err := newConsole(n, *idle)
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,8 @@ func listenPanel(n networkFlags, port string) (net.Listener, error) {
 
 // newConsole is the console of the network in dir, with the panel's channels
 // the network runs.
-func newConsole(dir string, idle time.Duration) (*console.Service, error) {
+func newConsole(n networkFlags, idle time.Duration) (*console.Service, error) {
+	dir := n.dir
 	var channels []console.Channel
 	for unit, audience := range map[string]string{"channel_operator": console.AudienceOperator, "channel_user": console.AudienceUser} {
 		id, addr, err := deploy.Channel(dir, unit)
@@ -121,17 +122,30 @@ func newConsole(dir string, idle time.Duration) (*console.Service, error) {
 		IdleTimeout:      idle,
 		ConversationsDir: deploy.ConversationsDir(dir),
 		TracingAddr:      tracing,
+		WriteSecret: func(ctx context.Context, handle string, value []byte) error {
+			e, err := deploy.NewEngine(ctx)
+			if err != nil {
+				return err
+			}
+			defer e.Close()
+			return deploy.WriteSecret(ctx, e, dir, n.network, image, handle, value)
+		},
 	}), nil
 }
 
 // consoleClient signs in to the network's console with the operator's username
 // and password.
 func consoleClient(ctx context.Context, n networkFlags) (*console.Client, error) {
-	port, err := deploy.KnownPanelPort(n.dir)
+	user, password, err := readCredentials(false)
 	if err != nil {
 		return nil, err
 	}
-	user, password, err := readCredentials(false)
+	return signInAs(ctx, n, user, password)
+}
+
+// signInAs signs in to the network's console with credentials already read.
+func signInAs(ctx context.Context, n networkFlags, user string, password []byte) (*console.Client, error) {
+	port, err := deploy.KnownPanelPort(n.dir)
 	if err != nil {
 		return nil, err
 	}

@@ -37,6 +37,9 @@ type Options struct {
 	// TracingAddr is the address of the tracing backend's query, whose UI the
 	// console serves behind the session (implementation §1.2.17); empty is none.
 	TracingAddr string
+	// WriteSecret sets the value behind a handle in the Secret Store, or removes
+	// it with a nil value: an act of deployment (implementation §1.2.18).
+	WriteSecret func(ctx context.Context, handle string, value []byte) error
 }
 
 // Service is the console's local API: the session, and the acts the panel and
@@ -58,6 +61,8 @@ type Service struct {
 	traces  *traceProxy
 	// tracePort is the port where ServeTraces serves the tracing backend's UI.
 	tracePort string
+	// secretsMu holds the Secret Store's writes one at a time.
+	secretsMu sync.Mutex
 }
 
 type session struct{ last time.Time }

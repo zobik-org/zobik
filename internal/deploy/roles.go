@@ -120,19 +120,21 @@ var Roles = []Role{
 	// The Spawner's container comes with its decisions; until then the act of
 	// provisioning runs with its material (Provision).
 	{Unit: "spawner", Scope: bus.SpawnerScope, Certificate: signing.RoleSpawner, Issues: &bus.NodeScope, Unstarted: true},
+	// The Secret Store's resolver, with the store and its key in its volume
+	// (implementation §1.2.18). It uses the Bus only to read the configuration.
+	{Unit: unitSecrets, Scope: bus.SecretsScope, Args: []string{"--role=secrets"}},
 	// The panel's channels go first and last in their audience (implementation §6,
-	// The operator console). The Entry Node reaches the embeddings endpoint
-	// without a credential until the secrets role enters, so it waits only for
-	// config.
-	panelChannel("user"),
-	panelChannel("operator"),
+	// The operator console). The Entry Node resolves the embedding model's
+	// credential (implementation §1.2.15).
+	panelChannel("user", "config", unitSecrets),
+	panelChannel("operator", "config"),
 }
 
 // panelChannel is the channel role of one of the panel's audiences. A channel
 // also receives the closes of the tasks it opens. Its window has no upper limit
 // until the Spawner closes the vacant rounds: without that close no query
 // reaches the final round, and one let go in round 1 would stay vacant.
-func panelChannel(audience string) Role {
+func panelChannel(audience string, waitsFor ...string) Role {
 	topic := signing.HITLPrefix + audience
 	return Role{Unit: "channel_" + audience, Scope: bus.ChannelScope, Topic: topic,
 		AttemptWindow: &signing.AttemptWindow{From: ptr(1), FinalRound: ptr(true)},
@@ -223,6 +225,13 @@ func ensureRoles(ctx context.Context, e *Engine, n names, m *material, dir, imag
 		write := append(files[r.Unit], accountFile)
 		if r.ServesConsole {
 			write = append(write, File{Path: role.FileConsolePub, Mode: 0o644, Data: []byte(consolePub)})
+		}
+		if r.Unit == unitSecrets {
+			store, err := secretsFiles(dir, ids["channel_user"])
+			if err != nil {
+				return nil, err
+			}
+			write = append(write, store...)
 		}
 		if err := e.WriteVolume(ctx, n.volume(r.Unit), image, role.Dir, write); err != nil {
 			return nil, fmt.Errorf("deploy: writing %s's material: %w", r.Unit, err)

@@ -59,6 +59,10 @@ const (
 	// PortChannel is where a channel serves the console, published on the
 	// host's 127.0.0.1 (implementation §6, The off-Bus interfaces).
 	PortChannel = "7002"
+	PortSecrets = "7003"
+	// AddrSecrets is where the Integration Sidecars and the roles reach the
+	// secrets role (implementation §1.2.18).
+	AddrSecrets = "secrets:" + PortSecrets
 )
 
 // Runtime is what a role runs with.
