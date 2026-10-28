@@ -155,8 +155,16 @@ var TracingCollectorScope = Scope{
 	Subscribe: inboxSub,
 }
 
+// SecretsScope is the secrets role's: it uses the Bus only to read the
+// configuration (implementation §1.2.18).
+var SecretsScope = Scope{
+	Role:      "secrets",
+	Publish:   configRead,
+	Subscribe: inboxSub,
+}
+
 // RoleScopes are the scopes zobik init registers for the structural roles.
-var RoleScopes = []Scope{ConfigScope, TaskBrokerScope, ContextScope, ChannelScope, SpawnerScope, TracingCollectorScope}
+var RoleScopes = []Scope{ConfigScope, TaskBrokerScope, ContextScope, ChannelScope, SpawnerScope, TracingCollectorScope, SecretsScope}
 
 // NodeScope is every node's: it announces, proposes and renews under its own
 // identity, closes the tasks of any destination and pulls from its consumer

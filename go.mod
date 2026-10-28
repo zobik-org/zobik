@@ -6,6 +6,7 @@ toolchain go1.27.3
 
 require (
 	cel.dev/cel-go v0.32.0
+	filippo.io/age v1.3.2
 	github.com/containerd/errdefs v1.0.0
 	github.com/cyberphone/json-canonicalization v0.0.0-20231011164504-785e29786b46
 	github.com/google/uuid v1.6.0
@@ -28,6 +29,7 @@ require (
 
 require (
 	cel.dev/expr v0.25.2 // indirect
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.8.0-default-no-op // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect

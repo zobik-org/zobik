@@ -13,6 +13,7 @@ import (
 	"zobik.org/zobik/internal/role/channel"
 	"zobik.org/zobik/internal/role/config"
 	"zobik.org/zobik/internal/role/contextstore"
+	"zobik.org/zobik/internal/role/secrets"
 	"zobik.org/zobik/internal/role/taskbroker"
 	"zobik.org/zobik/internal/role/tracingcollector"
 )
@@ -37,6 +38,8 @@ func runCmd(ctx context.Context, args []string) error {
 		}
 	case "task_broker":
 		body = taskbroker.Run
+	case "secrets":
+		body = secrets.Run
 	case "context":
 		if *storeSize <= 0 || *traceSize <= 0 {
 			return fmt.Errorf("the context role needs --store-size and --trace-size")
