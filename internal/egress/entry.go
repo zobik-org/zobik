@@ -69,7 +69,9 @@ type Billing struct {
 
 // declarations are the CEL types an entry's expressions compile against.
 type declarations struct {
-	provider  *rules.Provider
+	provider *rules.Provider
+	// fields are the fields as top-level variables, and call holds them
+	// together, so a condition tests an optional one with has (implementation §8.2).
 	fields    []rules.Var
 	responses map[string]*types.Type
 }
@@ -224,14 +226,14 @@ func declare(in *Interface) (*declarations, error) {
 		return nil, err
 	}
 	d := &declarations{provider: p, responses: map[string]*types.Type{}}
-	seen := map[string]bool{}
+	call := &schema.Schema{Kind: schema.KindObject, Properties: map[string]*schema.Schema{}}
 	for _, name := range slices.Sorted(maps.Keys(in.Operations)) {
 		op := in.Operations[name]
 		for _, f := range slices.Sorted(maps.Keys(op.Fields.Properties)) {
-			if seen[f] {
+			if _, ok := call.Properties[f]; ok {
 				continue
 			}
-			seen[f] = true
+			call.Properties[f] = op.Fields.Properties[f]
 			t, err := p.Declare("zobik.field."+f, op.Fields.Properties[f])
 			if err != nil {
 				return nil, err
@@ -249,6 +251,11 @@ func declare(in *Interface) (*declarations, error) {
 			return nil, err
 		}
 	}
+	t, err := p.Declare("zobik.call", call)
+	if err != nil {
+		return nil, err
+	}
+	d.fields = append(d.fields, rules.Var{Name: "call", Type: t})
 	return d, nil
 }
 

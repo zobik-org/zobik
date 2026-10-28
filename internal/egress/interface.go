@@ -74,7 +74,7 @@ type FromMapping struct {
 // The variables a condition and a billing_rule read besides the fields, which no
 // field can be named like (implementation §8.2, §8.5).
 var reserved = []string{
-	"operation", "body_size", "body_digest", "egress_lists", "now", "bodies",
+	"operation", "call", "body_size", "body_digest", "egress_lists", "now", "bodies",
 	"response", "rate", "max_per_call",
 }
 

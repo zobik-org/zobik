@@ -79,7 +79,7 @@ func openAIEntry(t *testing.T, edit func(map[string]any)) json.RawMessage {
 		"credential_handle":    "openai",
 		"credential_placement": map[string]string{"header": "Authorization", "scheme": "Bearer"},
 		"rules": []map[string]string{
-			{"when": `model.startsWith("gpt-5-pro")`, "then": "requester"},
+			{"when": `has(call.max_output_tokens) && call.max_output_tokens > 4000`, "then": "requester"},
 			{"then": "allow"},
 		},
 		"billing_rule": map[string]any{"create_response": map[string]string{
@@ -198,8 +198,8 @@ func TestParseEntryRejects(t *testing.T) {
 			mapping(e)["fields"].(map[string]any)["model"] = map[string]string{"in": "json", "at": "model"}
 		}, "JSON Pointer"},
 		{"a field named like a variable", func(e map[string]any) {
-			fields(e)["operation"] = map[string]string{"type": "string"}
-			mapping(e)["fields"].(map[string]any)["operation"] = map[string]string{"in": "json", "at": "/operation"}
+			fields(e)["call"] = map[string]string{"type": "string"}
+			mapping(e)["fields"].(map[string]any)["call"] = map[string]string{"in": "json", "at": "/call"}
 		}, "named like a variable"},
 		{"a field outside the subset", func(e map[string]any) { fields(e)["model"] = map[string]any{"type": "string", "pattern": "x"} }, "outside the subset"},
 		{"a response declaring status", func(e map[string]any) {
@@ -236,5 +236,27 @@ func TestFieldTypeAcrossOperations(t *testing.T) {
 	same := strings.Replace(in, `"n":{"type":"string"}`, `"n":{"type":"integer","description":"the same"}`, 1)
 	if _, err := ParseInterface(json.RawMessage(same)); err != nil {
 		t.Errorf("the same type with another description: %v", err)
+	}
+}
+
+// An optional field that did not come is tested through call, and the condition
+// is false instead of unevaluable (implementation §8.2).
+func TestOptionalFieldThroughCall(t *testing.T) {
+	e, err := ParseEntry(openAIEntry(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	when := e.Rules[0].When
+	for _, c := range []struct {
+		call map[string]any
+		want bool
+	}{
+		{map[string]any{"model": "gpt-5"}, false},
+		{map[string]any{"model": "gpt-5", "max_output_tokens": int64(8000)}, true},
+	} {
+		got, err := when.Eval(map[string]any{"call": c.call})
+		if err != nil || got != c.want {
+			t.Errorf("over %v: %v, %v; want %v", c.call, got, err, c.want)
+		}
 	}
 }
