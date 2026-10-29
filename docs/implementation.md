@@ -1774,8 +1774,12 @@ It instantiates the architecture's bundle proposal (§6.8): the set of blueprint
 | `tools` | `array` of `opaque` tools, optional | `/tools` |
 | `text_format` | `opaque`, optional | `/text/format` |
 | `max_output_tokens` | `integer`, optional | `/max_output_tokens` |
+| `reasoning` | `opaque`, optional | `/reasoning` |
+| `store` | `boolean`, optional | `/store` |
 
 The response declares `output`, `model` and `usage`, from `/output`, `/model` and `/usage`.
+
+**The members send `store` = `false`.** The API keeps each response at the provider unless the call says otherwise, and a conversation kept there is out of reach of the purge of the trace's context (§3.4).
 
 **The proposed entry** the variant brings, and that the console registers when deploying the Forge (§6):
 
