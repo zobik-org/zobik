@@ -1841,7 +1841,7 @@ The Config Store reads it when validating an entry (§3.14.4), the Spawner when 
 
 **An interface is a JSON document, and its digest is `sha256:` followed by the hexadecimal SHA-256 of its JCS canonical form** (RFC 8785). JCS sorts the keys and fixes how each number and each string is written, so two serializations of the same document give the same digest. It is computed with the RFC's reference implementation, `cyberphone/json-canonicalization`, which has a Go version.
 
-**The same canonical form is that of every digest over JSON at the boundary:** that of the request being approved, over an object with the entry's key, the operation, the fields and the body's digest (§3.16.4), and the `model_id`, over the fields of `embedding_model` that define the space (§1.2.15).
+**The same canonical form is that of every digest over JSON at the boundary:** that of the request being approved, over an object with the entry's key, its `target`, the operation, the fields and the body's digest (§3.16.4), and the `model_id`, over the fields of `embedding_model` that define the space (§1.2.15).
 
 **JCS writes every number as an IEEE 754 double**, so an integer of more than 53 bits does not have a single spelling. That is why the type system bounds every `integer` to ±(2^53 − 1), and a longer identifier is declared `string` (§8.2).
 
