@@ -84,7 +84,7 @@ func (z *network) build(t *testing.T, ctx context.Context, dockerfile, tag strin
 // after the command's words, before the arguments the command parses itself.
 func (z *network) cmd(ctx context.Context, stdin string, args ...string) *exec.Cmd {
 	words := 1
-	if args[0] == "config" || args[0] == "node" {
+	if args[0] == "config" || args[0] == "node" || args[0] == "secret" || args[0] == "rates" {
 		words = 2
 	}
 	full := append(append([]string{}, args[:words]...), "--network", z.name, "--dir", z.dir)

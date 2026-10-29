@@ -190,7 +190,23 @@ type jaegerSpan struct {
 	SpanID       string `json:"spanId"`
 	ParentSpanID string `json:"parentSpanId"`
 	Name         string `json:"name"`
-	service      string
+	Attributes   []struct {
+		Key   string `json:"key"`
+		Value struct {
+			DoubleValue float64 `json:"doubleValue"`
+		} `json:"value"`
+	} `json:"attributes"`
+	service string
+}
+
+// double is the value of a double attribute of the span, and whether it has it.
+func (s jaegerSpan) double(key string) (float64, bool) {
+	for _, a := range s.Attributes {
+		if a.Key == key {
+			return a.Value.DoubleValue, true
+		}
+	}
+	return 0, false
 }
 
 // jaegerTrace waits until Jaeger holds a span of trace for each of names, and
