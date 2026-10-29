@@ -42,6 +42,9 @@ input, textarea { font: inherit; color: inherit; background: var(--bg); border: 
 .msg .meta .trace { margin-left: .5rem; }
 .msg .text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-size: .9em; }
+.gate dl { display: grid; grid-template-columns: max-content 1fr; gap: .2em .8em; margin: .5em 0; }
+.gate dt { color: var(--muted); }
+.gate dd { margin: 0; overflow-wrap: anywhere; }
 .msg .failure { color: var(--danger); }
 .msg .actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; align-items: flex-start; }
 .msg .actions textarea { flex-basis: 100%; }

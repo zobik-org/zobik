@@ -58,6 +58,8 @@ type provider struct {
 	mu       sync.Mutex
 	auth     []string
 	uploaded []string
+	// bodies are the bodies of the calls that are not uploads.
+	bodies []string
 }
 
 func newProvider(t *testing.T) *provider {
@@ -68,6 +70,8 @@ func newProvider(t *testing.T) *provider {
 		p.auth = append(p.auth, r.Header.Get("Authorization"))
 		if r.Method == http.MethodPut {
 			p.uploaded = append(p.uploaded, string(body))
+		} else {
+			p.bodies = append(p.bodies, string(body))
 		}
 		p.mu.Unlock()
 		if strings.Contains(string(body), "slow") {

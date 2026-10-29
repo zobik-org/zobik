@@ -51,17 +51,9 @@ func (sv *service) Call(ctx context.Context, req *nriv1.EgressRequest) (*nriv1.E
 
 	// Step 2: the slot is associated, with an entry that still implements its
 	// interface and still reaches the node.
-	g, ok := grant(n.cred, req.GetSlot())
-	if !ok {
-		return nil, status.Errorf(codes.PermissionDenied, "slot %q is not associated in the node's egress_grants", req.GetSlot())
-	}
-	reg, version, err := n.cfg.registry()
+	key, e, version, err := n.served(req.GetSlot())
 	if err != nil {
-		return nil, status.Error(codes.Unavailable, err.Error())
-	}
-	e := reg[g.Entry]
-	if e == nil || !e.Reach().Serves(g, n.cred, n.root) {
-		return nil, status.Errorf(codes.PermissionDenied, "entry %q no longer serves slot %q", g.Entry, req.GetSlot())
+		return nil, err
 	}
 
 	// Step 3: the operation, the fields and the body, measured on a copy the
@@ -84,13 +76,16 @@ func (sv *service) Call(ctx context.Context, req *nriv1.EgressRequest) (*nriv1.E
 	// Step 4: the rules, over the call, the lists and the time.
 	now := time.Now().UTC()
 	o := e.Decide(call, egress.Lists, now)
-	evaluated := fmt.Sprintf("%s, evaluated at %s under config_version %s", o, now.Format(time.RFC3339), version)
 	switch o.Then {
 	case egress.Allow:
 	case egress.Deny:
-		return nil, status.Error(codes.PermissionDenied, evaluated)
+		return nil, status.Error(codes.PermissionDenied, evaluated(o, now, version))
 	default:
-		return nil, status.Errorf(codes.Unimplemented, "%s: this Integration Sidecar does not ask an audience yet", evaluated)
+		// Steps 6 and 7: the audience approves, and what executes is the
+		// request checked again against the current registry.
+		if e, call, err = n.gate(ctx, a, req, &gated{key: key, entry: e, call: call, outcome: o, at: now, version: version}); err != nil {
+			return nil, err
+		}
 	}
 
 	// Step 5: the execution, with the response's body left in the work area.
@@ -146,6 +141,31 @@ func executeError(err error) error {
 		return status.Error(codes.Aborted, err.Error())
 	}
 	return status.Error(codes.Unavailable, err.Error())
+}
+
+// served is the entry the slot is associated with in the current registry, with
+// its key and the version read, if it still implements the slot's interface and
+// still reaches the node (architecture §3.16.4, step 2).
+func (n *node) served(slot string) (string, *egress.Entry, string, error) {
+	g, ok := grant(n.cred, slot)
+	if !ok {
+		return "", nil, "", status.Errorf(codes.PermissionDenied, "slot %q is not associated in the node's egress_grants", slot)
+	}
+	reg, version, err := n.cfg.registry()
+	if err != nil {
+		return "", nil, "", status.Error(codes.Unavailable, err.Error())
+	}
+	e := reg[g.Entry]
+	if e == nil || !e.Reach().Serves(g, n.cred, n.root) {
+		return "", nil, "", status.Errorf(codes.PermissionDenied, "entry %q no longer serves slot %q", g.Entry, slot)
+	}
+	return g.Entry, e, version, nil
+}
+
+// evaluated names an outcome with the rule that produced it, the evaluation
+// time and the version read (architecture §3.16.4).
+func evaluated(o egress.Outcome, at time.Time, version string) string {
+	return fmt.Sprintf("%s, evaluated at %s under config_version %s", o, at.Format(time.RFC3339), version)
 }
 
 // grant is the slot's association in the credential.
