@@ -61,6 +61,7 @@ type fixture struct {
 	pub    *nats.Conn
 
 	startup             *sidecar.Startup
+	secretsAddr         string
 	path, shared, state string
 	speaks              sidecar.Range
 	nc                  *nats.Conn
@@ -75,6 +76,7 @@ func (f *fixture) start() {
 	go func() {
 		run <- sidecar.Run(ctx, f.nc, f.startup, sidecar.Options{
 			Shared: f.shared, State: f.state, Speaks: f.speaks, StartupPath: f.path, ContextAddr: f.ContextAddr,
+			SecretsAddr: f.secretsAddr,
 		})
 	}()
 	f.t.Cleanup(func() {
@@ -109,6 +111,10 @@ type options struct {
 	// embeddings is the target of the embeddings endpoint, if the network has
 	// a vector space.
 	embeddings string
+	// registry are egress_registry entries, and secrets the Secret Store the
+	// secrets role serves.
+	registry map[string]any
+	secrets  map[string][]byte
 }
 
 func newFixture(t *testing.T, o options) *fixture {
@@ -118,11 +124,18 @@ func newFixture(t *testing.T, o options) *fixture {
 			"auction_timeout": auction.Milliseconds(), "task_lease_ttl": lease.Milliseconds(),
 			"reannounce_backoff_base": 600, "max_reannounce_backoff": 2400, "network_admission": "open",
 		})
+		registry := map[string]any{}
+		for k, e := range o.registry {
+			registry[k] = e
+		}
 		if o.embeddings != "" {
+			registry["embeddings"] = egress.EmbeddingsEntry(o.embeddings)
 			testnet.Set(v, map[string]any{
-				"egress_registry": map[string]any{"embeddings": egress.EmbeddingsEntry(o.embeddings)},
 				"embedding_model": map[string]any{"entry": "embeddings", "model": "test", "document_prefix": "", "query_prefix": "q: ", "max_text_size": 64},
 			})
+		}
+		if len(registry) > 0 {
+			testnet.Set(v, map[string]any{"egress_registry": registry})
 		}
 	})
 	if o.cap.Topic == "" {
@@ -162,6 +175,9 @@ func newFixture(t *testing.T, o options) *fixture {
 		f.broker = n.Conn(bus.TaskBrokerScope.Role, nil)
 	}
 	f.startup, f.path, f.shared, f.state, f.speaks, f.nc = &st, path, dir, t.TempDir(), o.speaks, nc
+	if o.secrets != nil {
+		f.secretsAddr = n.StartSecrets(o.secrets)
+	}
 	t.Cleanup(nc.Close)
 	f.start()
 	return f

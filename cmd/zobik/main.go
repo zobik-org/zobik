@@ -57,6 +57,8 @@ func run(ctx context.Context, args []string) error {
 		return consoleCmd(ctx, rest)
 	case "secret":
 		return secretCmd(ctx, rest)
+	case "rates":
+		return ratesCmd(ctx, rest)
 	case deploy.ActCommand:
 		if len(rest) != 1 {
 			return fmt.Errorf("usage: zobik %s <act>", deploy.ActCommand)

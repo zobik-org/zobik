@@ -49,8 +49,10 @@ func CheckRegistry(values map[string]json.RawMessage) error {
 }
 
 // CheckSpace checks that the entry embedding_model names implements the
-// embeddings interface and admits its operation (implementation §1.2.15). That
-// the entry exists is a precondition of the schema.
+// embeddings interface, admits its operation (implementation §1.2.15) and has no
+// rule that ends in an audience: those embeddings run outside any task an
+// audience could approve (architecture §3.16.3). That the entry exists is a
+// precondition of the schema.
 func CheckSpace(values map[string]json.RawMessage) error {
 	raw, ok := values["embedding_model"]
 	if !ok {
@@ -82,6 +84,11 @@ func CheckSpace(values map[string]json.RawMessage) error {
 	}
 	if e.Interface.Digest != want.Digest || !slices.Contains(e.Operations, EmbeddingsOperation) {
 		return fmt.Errorf("embedding_model.entry %q does not implement the embeddings interface with %s", m.Entry, EmbeddingsOperation)
+	}
+	for _, r := range e.Rules {
+		if r.Then != Allow && r.Then != Deny {
+			return fmt.Errorf("embedding_model.entry %q has a rule that ends in the audience %s: its rules end in allow or deny", m.Entry, r.Then)
+		}
 	}
 	return nil
 }

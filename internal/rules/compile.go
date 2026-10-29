@@ -16,7 +16,8 @@ type Var struct {
 
 // NewEnv returns an environment over the provider's types and vars.
 func NewEnv(p *Provider, vars ...Var) (*cel.Env, error) {
-	opts := []cel.EnvOption{cel.CustomTypeProvider(p)}
+	// The macro calls are kept, so a condition that uses one prints back.
+	opts := []cel.EnvOption{cel.CustomTypeProvider(p), cel.EnableMacroCallTracking()}
 	for _, v := range vars {
 		opts = append(opts, cel.Variable(v.Name, v.Type))
 	}
@@ -26,6 +27,9 @@ func NewEnv(p *Provider, vars ...Var) (*cel.Env, error) {
 // Expr is a compiled expression of a declared type.
 type Expr struct {
 	Expr string
+	// Text is the expression as the parser that evaluates it prints it back,
+	// which names a rule in each outcome (architecture §3.16.4, implementation §1.2.12).
+	Text string
 	prg  cel.Program
 }
 
@@ -42,7 +46,13 @@ func Compile(env *cel.Env, expr string, want *types.Type) (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Expr{Expr: expr, prg: prg}, nil
+	// An environment that keeps no macro calls does not print one back; the
+	// source names it then.
+	text, err := cel.AstToString(ast)
+	if err != nil {
+		text = expr
+	}
+	return &Expr{Expr: expr, Text: text, prg: prg}, nil
 }
 
 // Eval evaluates the expression over vars. An evaluation error comes out as an

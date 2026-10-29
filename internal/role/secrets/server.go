@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 
@@ -16,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/digest"
 	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/rpcauth"
 	"zobik.org/zobik/internal/signing"
@@ -123,7 +123,7 @@ func (s *Server) authorize(ctx context.Context, info rpcauth.Info, req *secretsv
 		if cred.Claims.Sub != info.Identity {
 			return status.Error(codes.PermissionDenied, "the credential is not the caller's")
 		}
-		if req.Handle == space || granted(head, cred.Claims, s.Root, req.Handle) {
+		if req.Handle == space || granted(head, &cred.Claims, s.Root, req.Handle) {
 			return nil
 		}
 	case bus.SpawnerScope.Role:
@@ -167,9 +167,10 @@ func (s *Server) verify(token string) (*signing.Verified[signing.Capability], er
 
 // entry is what the role reads of an egress_registry entry.
 type entry struct {
-	GrantScope       string   `json:"grant_scope"`
-	GranteeTopics    []string `json:"grantee_topics"`
-	CredentialHandle string   `json:"credential_handle"`
+	Interface        json.RawMessage `json:"interface"`
+	GrantScope       string          `json:"grant_scope"`
+	GranteeTopics    []string        `json:"grantee_topics"`
+	CredentialHandle string          `json:"credential_handle"`
 }
 
 func registry(head map[string]json.RawMessage) map[string]entry {
@@ -192,43 +193,26 @@ func embeddingHandle(head map[string]json.RawMessage) string {
 }
 
 // granted reports whether an entry that names handle is associated in the
-// node's egress_grants and still reaches it in the current registry: the
+// node's egress_grants and still serves it in the current registry: the
 // predicate of step 2 of architecture §3.16.4. The grants come from the
 // credential the Spawner signed, never from what the caller declares
 // (architecture §3.16.6).
-func granted(head map[string]json.RawMessage, cred signing.Capability, root, handle string) bool {
+func granted(head map[string]json.RawMessage, cred *signing.Capability, root, handle string) bool {
 	reg := registry(head)
 	for _, g := range cred.EgressGrants {
 		e, ok := reg[g.Entry]
 		if !ok || e.CredentialHandle != handle {
 			continue
 		}
-		switch e.GrantScope {
-		case "", egress.ScopeOpen:
+		id, err := digest.JSON(e.Interface)
+		if err != nil {
+			continue
+		}
+		if (egress.Reach{GrantScope: e.GrantScope, GranteeTopics: e.GranteeTopics, Interface: id}).Serves(g, cred, root) {
 			return true
-		case egress.ScopeTopics:
-			if slices.Contains(e.GranteeTopics, cred.Topic) {
-				return true
-			}
-		case egress.ScopeProvision:
-			if provisioned(cred, root, g) {
-				return true
-			}
 		}
 	}
 	return false
-}
-
-// provisioned reports whether the credential carries the proof of a
-// node_provision that associates g and names the running artifact_ref
-// (implementation §9.2): a Spawner that lies about the grants cannot fabricate it.
-func provisioned(cred signing.Capability, root string, g signing.Grant) bool {
-	proof, err := signing.VerifyOperatorProof(cred.OperatorProof, root)
-	if err != nil {
-		return false
-	}
-	p := proof.Claims
-	return p.Act == signing.ActNodeProvision && p.ArtifactRef == cred.ArtifactRef && slices.Contains(p.ProvisionGrants, g)
 }
 
 // values reads the Secret Store on each request, and decrypts it again when the

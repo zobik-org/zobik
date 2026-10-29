@@ -94,6 +94,7 @@ func TestApplyVersioned(t *testing.T) {
 		{"an entry without a target", v0, map[string]string{"egress_registry": `{"e":{}}`}, "required"},
 		{"an entry whose rule does not compile", v0, map[string]string{"egress_registry": strings.Replace(at("e", "http://llama:8080"), `"then":"allow"`, `"when":"price > 5","then":"allow"},{"then":"deny"`, 1)}, "undeclared reference"},
 		{"the vector space on an entry of another interface", with(v0, "egress_registry", strings.Replace(registry, `/v1/embeddings`, `/v2/embeddings`, 1)), map[string]string{"embedding_model": model}, "does not implement the embeddings interface"},
+		{"the vector space on an entry whose rule ends in an audience", with(v0, "egress_registry", strings.Replace(registry, `{"then":"allow"}`, `{"when":"size(input) > 1","then":"operator"},{"then":"allow"}`, 1)), map[string]string{"embedding_model": model}, "ends in the audience operator"},
 		{"a rate_source that is no bucket key", v0, map[string]string{"egress_registry": strings.Replace(at("e", "http://llama:8080"), `"target"`, `"rate_source":"a b","target"`, 1)}, "key of the rates bucket"},
 		{"an IPv6 target", v0, map[string]string{"egress_registry": at("e", "http://[::1]:8080")}, ""},
 		{"a target with a space in its host", v0, map[string]string{"egress_registry": at("e", "http://ll ama:8080")}, "http or https URL"},

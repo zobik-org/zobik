@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/digest"
 	"zobik.org/zobik/internal/rpcauth"
 	"zobik.org/zobik/internal/signing"
 	secretsv1 "zobik.org/zobik/proto/zobik/secrets/v1"
@@ -22,13 +23,16 @@ import (
 const head = `{
   "embedding_model": {"entry": "embeddings"},
   "egress_registry": {
-    "embeddings": {"credential_handle": "embeddings_key"},
-    "model":      {"credential_handle": "openai"},
-    "review":     {"grant_scope": "topics", "grantee_topics": ["code_review"], "credential_handle": "github"},
-    "bank":       {"grant_scope": "provision", "credential_handle": "bank"},
-    "other":      {"credential_handle": "other"}
+    "embeddings": {"interface": {"name": "a"}, "credential_handle": "embeddings_key"},
+    "model":      {"interface": {"name": "a"}, "credential_handle": "openai"},
+    "review":     {"interface": {"name": "a"}, "grant_scope": "topics", "grantee_topics": ["code_review"], "credential_handle": "github"},
+    "bank":       {"interface": {"name": "a"}, "grant_scope": "provision", "credential_handle": "bank"},
+    "other":      {"interface": {"name": "a"}, "credential_handle": "other"}
   }
 }`
+
+// iface is the digest of the interface every entry of head implements.
+var iface, _ = digest.JSON([]byte(`{"name": "a"}`))
 
 type fixture struct {
 	t        *testing.T
@@ -105,8 +109,12 @@ func (f *fixture) node(topic string, grants []signing.Grant, proof string) (stri
 
 func (f *fixture) proof(artifact string, grants ...signing.Grant) string {
 	f.t.Helper()
+	var associations []signing.Association
+	for _, g := range grants {
+		associations = append(associations, g.Association())
+	}
 	p, err := signing.Sign(f.root, signing.TypeOperatorProof, signing.OperatorProof{
-		Act: signing.ActNodeProvision, ArtifactRef: artifact, ProvisionGrants: grants,
+		Act: signing.ActNodeProvision, ArtifactRef: artifact, ProvisionGrants: associations,
 	}, "")
 	if err != nil {
 		f.t.Fatal(err)
@@ -118,10 +126,12 @@ func code(err error) codes.Code { return status.Code(err) }
 
 func TestResolve(t *testing.T) {
 	f := newFixture(t)
-	grants := []signing.Grant{{Slot: "model", Entry: "model"}, {Slot: "repo", Entry: "review"}, {Slot: "pay", Entry: "bank"}}
+	grants := []signing.Grant{{Slot: "model", Entry: "model", Interface: iface}, {Slot: "repo", Entry: "review", Interface: iface}, {Slot: "pay", Entry: "bank", Interface: iface}}
 	reviewer, reviewerCred := f.node("code_review", grants, "")
 	writer, writerCred := f.node("writing", grants, "")
 	payer, payerCred := f.node("payments", grants, f.proof("sha256:aa", grants[2]))
+	// A node built against another interface of the same entry.
+	older, olderCred := f.node("writing", []signing.Grant{{Slot: "model", Entry: "model", Interface: "sha256:older"}}, "")
 	stale, staleCred := f.node("payments", grants, f.proof("sha256:bb", grants[2]))
 	other, _ := nkeys.CreateUser()
 	otherID, _ := other.PublicKey()
@@ -137,6 +147,7 @@ func TestResolve(t *testing.T) {
 	}{
 		{"an open grant", caller(bus.NodeScope.Role, reviewer), "openai", reviewerCred, codes.OK, "sk-1"},
 		{"the embedding model's, without a grant", caller(bus.NodeScope.Role, writer), "embeddings_key", writerCred, codes.OK, "e"},
+		{"an entry that implements another interface than the slot's", caller(bus.NodeScope.Role, older), "openai", olderCred, codes.PermissionDenied, ""},
 		{"an entry the grants do not associate", caller(bus.NodeScope.Role, reviewer), "other", reviewerCred, codes.PermissionDenied, ""},
 		{"a topics grant of the node's topic", caller(bus.NodeScope.Role, reviewer), "github", reviewerCred, codes.OK, "gh"},
 		{"a topics grant of another topic", caller(bus.NodeScope.Role, writer), "github", writerCred, codes.PermissionDenied, ""},
@@ -172,7 +183,7 @@ func TestResolve(t *testing.T) {
 // (architecture §3.16.6), and rotating it is rewriting the store.
 func TestNarrowAndRotate(t *testing.T) {
 	f := newFixture(t)
-	id, cred := f.node("code_review", []signing.Grant{{Slot: "repo", Entry: "review"}}, "")
+	id, cred := f.node("code_review", []signing.Grant{{Slot: "repo", Entry: "review", Interface: iface}}, "")
 	resolve := func() (*secretsv1.Secret, error) {
 		return f.srv.Resolve(caller(bus.NodeScope.Role, id), &secretsv1.SecretRequest{Handle: "github", Credential: cred})
 	}
@@ -183,7 +194,11 @@ func TestNarrowAndRotate(t *testing.T) {
 	if v, err := resolve(); err != nil || string(v.Value) != "gh-2" {
 		t.Fatalf("rotated: %v %v", v, err)
 	}
-	f.head["egress_registry"] = json.RawMessage(`{"review": {"grant_scope": "topics", "grantee_topics": ["triage"], "credential_handle": "github"}}`)
+	f.head["egress_registry"] = json.RawMessage(`{"review": {"interface": {"name": "b"}, "grant_scope": "topics", "grantee_topics": ["code_review"], "credential_handle": "github"}}`)
+	if _, err := resolve(); code(err) != codes.PermissionDenied {
+		t.Errorf("another interface: %v", err)
+	}
+	f.head["egress_registry"] = json.RawMessage(`{"review": {"interface": {"name": "a"}, "grant_scope": "topics", "grantee_topics": ["triage"], "credential_handle": "github"}}`)
 	if _, err := resolve(); code(err) != codes.PermissionDenied {
 		t.Errorf("narrowed: %v", err)
 	}
@@ -191,7 +206,7 @@ func TestNarrowAndRotate(t *testing.T) {
 
 func TestCheckAndNotFound(t *testing.T) {
 	f := newFixture(t)
-	id, cred := f.node("writing", []signing.Grant{{Slot: "model", Entry: "model"}}, "")
+	id, cred := f.node("writing", []signing.Grant{{Slot: "model", Entry: "model", Interface: iface}}, "")
 	ctx := caller(bus.NodeScope.Role, id)
 	if _, err := f.srv.Check(ctx, &secretsv1.SecretRequest{Handle: "openai", Credential: cred}); err != nil {
 		t.Errorf("check: %v", err)

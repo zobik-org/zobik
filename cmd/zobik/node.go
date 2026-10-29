@@ -102,6 +102,7 @@ func nodeUpInside(ctx context.Context) error {
 		return err
 	}
 	defer nc.Close()
+	defer iss.Close()
 	js, err := jetstream.New(nc)
 	if err != nil {
 		return err
@@ -115,7 +116,7 @@ func nodeUpInside(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("provisioned node %s on %s: %s and %s, similarity_floor %g, %d MB, model_id %s\n",
-		node.ID, req.Topic, node.Logic, node.Sidecar, node.SimilarityFloor, node.MemoryRequiredMB, node.ModelID)
+	fmt.Printf("provisioned node %s on %s: %s and %s, similarity_floor %g, %d MB, model_id %s, egress_grants %v\n",
+		node.ID, req.Topic, node.Logic, node.Sidecar, node.SimilarityFloor, node.MemoryRequiredMB, node.ModelID, node.EgressGrants)
 	return nil
 }

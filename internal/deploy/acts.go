@@ -55,6 +55,12 @@ func RunAct(ctx context.Context, act string) error {
 			return err
 		}
 		return s.ensure(ctx, js)
+	case actRates:
+		js, err := jetstream.New(nc)
+		if err != nil {
+			return err
+		}
+		return putRates(ctx, js)
 	case actAccount:
 		account, err := os.ReadFile(actAccountPath)
 		if err != nil {
