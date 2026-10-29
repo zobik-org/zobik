@@ -28,6 +28,10 @@ const (
 	Deny  = "deny"
 )
 
+// Requester is the audience that names the trace's origin audience
+// (architecture §3.5.3).
+const Requester = "requester"
+
 // platformHandles is the prefix of the handles no entry names (implementation §1.2.18).
 const platformHandles = "zobik/"
 

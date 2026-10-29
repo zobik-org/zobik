@@ -353,6 +353,9 @@ func (n *node) begin(taskID string) *task {
 		return nil
 	}
 	t.closing = true
+	// A call waiting for a gate's answer returns without executing, so the
+	// close does not wait for the person.
+	n.endGates(taskID)
 	return t
 }
 
@@ -431,6 +434,7 @@ func (n *node) cut(s *session) {
 	tasks := n.tasks
 	n.tasks = map[string]*task{}
 	// The terminal events of the subtasks reach no one: their parents fail.
+	n.endGates("")
 	n.subtasks = map[string]*lineage{}
 	unconfirmed := n.held
 	n.held = map[string]*held{}

@@ -188,8 +188,10 @@ class Task:
         """Calls an operation of an egress slot's interface (architecture §3.16.4).
         body is a file of the task's work area, which goes as the call's body; the
         response's body, when the operation has one, is left there too
-        (implementation §3, Context Store and egress). A call the network does not
-        execute raises grpc.aio.AioRpcError, with the rule that decided it."""
+        (implementation §3, Context Store and egress). A call whose rule ends in
+        an audience returns once that audience answers, which can take as long
+        as the person takes. A call the network does not execute raises
+        grpc.aio.AioRpcError, with the rule that decided it."""
         rel = ""
         if body is not None:
             p = Path(body)

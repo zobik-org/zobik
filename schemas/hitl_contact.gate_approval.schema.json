@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/hitl_contact.gate_approval.schema.json",
+  "description": "The egress gate, which the Integration Sidecar opens on hitl_contact_<audience> when the rule that decides a call ends in an audience (architecture §3.16.4).",
+  "type": "object",
+  "required": ["kind", "scope", "since", "options", "outcome_if_silent", "evidence", "details"],
+  "properties": {
+    "kind": {"description": "gate_approval.", "type": "string"},
+    "scope": {"description": "call.", "type": "string"},
+    "since": {"description": "When the Logic Container requested the call.", "type": "string", "format": "date-time"},
+    "options": {
+      "description": "approve and deny.",
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "outcome_if_silent": {"description": "deny.", "type": "string"},
+    "evidence": {
+      "type": "object",
+      "required": ["trace_id", "task_id"],
+      "properties": {
+        "trace_id": {"description": "The trace the call is requested under.", "type": "string"},
+        "task_id": {"description": "The task the call runs on.", "type": "string"},
+        "cost": {"description": "The trace's accumulated cost, in cost_unit (architecture §3.15.1).", "type": "number"}
+      }
+    },
+    "details": {
+      "description": "The call and what sent it to the audience (architecture §3.16.4).",
+      "type": "object",
+      "required": ["entry", "rule", "evaluated_at", "config_version", "call", "digest", "topic", "node_id"],
+      "properties": {
+        "entry": {"description": "The egress_registry key of the entry that gated the call.", "type": "string"},
+        "rule": {"description": "The rule that sent the call to the audience, as the parser that evaluated it prints it.", "type": "string"},
+        "evaluated_at": {"description": "When the rules were evaluated.", "type": "string", "format": "date-time"},
+        "config_version": {"description": "The version whose egress_registry was read.", "type": "string"},
+        "call": {
+          "description": "The rendered call.",
+          "type": "object",
+          "required": ["target", "operation", "fields"],
+          "properties": {
+            "target": {"description": "The entry's target.", "type": "string"},
+            "operation": {"type": "string"},
+            "fields": {
+              "description": "The fields the interface declares for the operation, as validated.",
+              "type": "object",
+              "additionalProperties": {"opaque": true}
+            },
+            "body_size": {"description": "The size of the call's body, in bytes; only with a body.", "type": "integer"},
+            "body_digest": {"description": "The digest of the call's body; only with a body.", "type": "string"}
+          }
+        },
+        "digest": {"description": "The digest of the request: the entry, its target, the operation, the fields and the body's digest, in the form of implementation §8.1.", "type": "string"},
+        "topic": {"description": "The topic of the node that requests the call.", "type": "string"},
+        "node_id": {"description": "The node that requests the call.", "type": "string"}
+      }
+    }
+  }
+}

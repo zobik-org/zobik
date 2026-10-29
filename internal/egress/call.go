@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"zobik.org/zobik/internal/digest"
 	"zobik.org/zobik/internal/rules"
 	"zobik.org/zobik/internal/schema"
 )
@@ -74,6 +75,29 @@ func (e *Entry) NewCall(op string, fields []byte, hasBody bool) (*Call, error) {
 		}
 	}
 	return &Call{Operation: op, Fields: declared, native: native.(map[string]any)}, nil
+}
+
+// Rendered is the call as the gate shows it: the entry's target, the
+// operation, the fields and the body's size and digest (architecture §3.16.4).
+func (e *Entry) Rendered(c *Call) map[string]any {
+	r := map[string]any{"target": e.Target, "operation": c.Operation, "fields": c.Fields}
+	if c.BodyDigest != "" {
+		r["body_size"], r["body_digest"] = c.BodySize, c.BodyDigest
+	}
+	return r
+}
+
+// Digest is the digest of the request the gate approves: the entry's key, its
+// target, the operation, the fields and the body's digest, in the canonical
+// form of implementation §8.1 (architecture §3.16.4, step 6).
+func (e *Entry) Digest(key string, c *Call) (string, error) {
+	doc, err := json.Marshal(map[string]any{
+		"entry": key, "target": e.Target, "operation": c.Operation, "fields": c.Fields, "body_digest": c.BodyDigest,
+	})
+	if err != nil {
+		return "", err
+	}
+	return digest.JSON(doc)
 }
 
 // Outcome is what the rules give a call, named by the rule that produced it
