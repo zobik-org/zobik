@@ -18,8 +18,10 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role"
+	"zobik.org/zobik/internal/role/secrets"
 	"zobik.org/zobik/internal/rpcauth"
 	contextv1 "zobik.org/zobik/proto/zobik/context/v1"
 	nriv1 "zobik.org/zobik/proto/zobik/nri/v1"
@@ -40,6 +42,8 @@ type Options struct {
 	StartupPath string
 	// ContextAddr is the Context Store; role.AddrContext by default.
 	ContextAddr string
+	// SecretsAddr is the secrets role; role.AddrSecrets by default.
+	SecretsAddr string
 }
 
 // The gRPC keepalive with which the Integration Sidecar checks that the session
@@ -68,6 +72,9 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	}
 	if o.ContextAddr == "" {
 		o.ContextAddr = role.AddrContext
+	}
+	if o.SecretsAddr == "" {
+		o.SecretsAddr = role.AddrSecrets
 	}
 	if o.Speaks == nil {
 		o.Speaks = Speaks
@@ -109,7 +116,7 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	if err != nil {
 		return err
 	}
-	conn, err := grpc.NewClient(o.ContextAddr, grpc.WithTransportCredentials(&rpcauth.Client{
+	rpcCreds := &rpcauth.Client{
 		JWT: func() (string, error) {
 			st, err := LoadStartup(o.StartupPath)
 			if err != nil {
@@ -118,11 +125,24 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 			return strings.TrimSpace(st.BusJWT), nil
 		},
 		Key: kp,
-	}))
+	}
+	conn, err := grpc.NewClient(o.ContextAddr, grpc.WithTransportCredentials(rpcCreds))
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+	// The secrets role resolves only the handles of the node's grants and the
+	// embedding model's, from the credential it presents (architecture §3.16.6).
+	secretsClient, closeSecrets, err := secrets.Dial(o.SecretsAddr, rpcCreds, startup.Credential)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = closeSecrets() }()
+	if err := checkCredentials(ctx, cfg, cred, startup.Root, secretsClient.Check); err != nil {
+		return err
+	}
+	x := &egress.Executor{HTTP: egress.HTTPClient(), Credential: secretsClient.Resolve, Rates: egress.WatchRates(ctx, js).Table}
+	clearCalls(o.State)
 
 	_ = os.Remove(o.Socket)
 	ln, err := net.Listen("unix", o.Socket)
@@ -142,11 +162,12 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	defer stopOut()
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	out := newOutbox(outCtx, st, js, cfg)
+	out := newOutbox(outCtx, st, js, cfg, x)
 	if err := out.resume(); err != nil {
 		return err
 	}
 	n := newNode(id, startup.Credential, cred, js, nc, cfg, st, out, o.Shared)
+	n.private, n.root, n.egress = o.State, startup.Root, x
 	n.clearAreas()
 	// Stopping waits for the handlers, so none writes to the outbox after it drains.
 	g := grpc.NewServer(grpc.KeepaliveParams(keepaliveServer), grpc.KeepaliveEnforcementPolicy(keepalivePolicy),

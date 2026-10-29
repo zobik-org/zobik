@@ -50,6 +50,7 @@ class FakeSidecar(nri_pb2_grpc.NodeRuntimeServicer):
         # before_ack, if set, runs before a PublishAck of a subtask leaves.
         self.before_ack = None
         self.fail_writes = False
+        self.calls: list = []
 
     async def Attach(self, request_iterator, context):
         first = await request_iterator.__anext__()
@@ -90,6 +91,12 @@ class FakeSidecar(nri_pb2_grpc.NodeRuntimeServicer):
 
     async def ReadContext(self, request, context):
         yield pb.Chunk(data=self.portions[(request.ref.task_id, request.ref.name)])
+
+    async def Call(self, request, context):
+        self.calls.append(request)
+        if request.slot == "denied":
+            await context.abort(grpc.StatusCode.PERMISSION_DENIED, "deny by the rule then deny")
+        return pb.EgressResponse(fields=json.dumps({"status": 200, "text": "done"}).encode(), body="zobik-response-1")
 
 
 class LibraryTest(unittest.IsolatedAsyncioTestCase):
@@ -135,6 +142,29 @@ class LibraryTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(self.fake.portions[("t1", "result")], b"hola")
         self.assertIn("assigned-t1", self.fake.received)
+
+    async def test_call(self):
+        responses = []
+
+        async def handler(task):
+            (task.work_area / "upload").parent.mkdir(parents=True, exist_ok=True)
+            responses.append(await task.call("model", "complete", {"prompt": "hi"}, body=task.work_area / "upload"))
+            try:
+                await task.call("denied", "complete")
+            except grpc.aio.AioRpcError as e:
+                responses.append(e.code())
+            await task.complete()
+
+        await self.start(handler)
+        await self.fake.to_send.put(assignment("t1", {}))
+        await self.closing("complete")
+        first = self.fake.calls[0]
+        self.assertEqual((first.task_id, first.slot, first.operation, first.body), ("t1", "model", "complete", "upload"))
+        self.assertEqual(json.loads(first.fields), {"prompt": "hi"})
+        self.assertEqual(responses[0].status, 200)
+        self.assertEqual(responses[0].fields["text"], "done")
+        self.assertEqual(responses[0].body, Path(self.dir.name) / "t1" / "zobik-response-1")
+        self.assertEqual(responses[1], grpc.StatusCode.PERMISSION_DENIED)
 
     async def test_dials_until_the_socket_exists(self):
         async def complete(task):

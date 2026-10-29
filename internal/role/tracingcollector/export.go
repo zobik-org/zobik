@@ -153,6 +153,7 @@ func (s *span) attributes() []attribute.KeyValue {
 				attribute.Int64("zobik.metrics.tokens_in", m.TokensIn),
 				attribute.Int64("zobik.metrics.tokens_out", m.TokensOut),
 				attribute.Float64("zobik.metrics.cost", m.Cost),
+				attribute.Int64("zobik.metrics.billing_errors", m.BillingErrors),
 				attribute.Int64("zobik.metrics.duration_ms", m.DurationMs))
 		}
 	}

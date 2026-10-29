@@ -11,6 +11,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/globalconfig"
 )
 
@@ -36,6 +37,11 @@ type config struct {
 	// pinned caches similarity_precision_decimals by config_version: a
 	// published version never changes.
 	pinned map[string]int
+	// compiled is the egress_registry of version, compiled.
+	compiled struct {
+		version  string
+		registry map[string]*egress.Entry
+	}
 }
 
 func newConfig(js jetstream.JetStream, head *globalconfig.Record) *config {
@@ -71,6 +77,26 @@ func (c *config) follow(ctx context.Context) {
 func (c *config) head() *globalconfig.Record    { return c.current.Load() }
 func (c *config) leaseTTL() time.Duration       { return time.Duration(c.lease.Load()) }
 func (c *config) auctionTimeout() time.Duration { return time.Duration(c.auction.Load()) }
+
+// registry is the egress_registry of the head, compiled once per version: the
+// rules belong to the current class (architecture §2.3, §3.16.4).
+func (c *config) registry() (map[string]*egress.Entry, string, error) {
+	head := c.head()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.compiled.registry != nil && c.compiled.version == head.ConfigVersion {
+		return c.compiled.registry, head.ConfigVersion, nil
+	}
+	reg := map[string]*egress.Entry{}
+	if raw, ok := head.Values["egress_registry"]; ok {
+		var err error
+		if reg, err = egress.ParseRegistry(raw); err != nil {
+			return nil, "", fmt.Errorf("egress_registry of %s: %w", head.ConfigVersion, err)
+		}
+	}
+	c.compiled.version, c.compiled.registry = head.ConfigVersion, reg
+	return reg, head.ConfigVersion, nil
+}
 
 // decimals is similarity_precision_decimals of the version a trace pinned.
 func (c *config) decimals(ctx context.Context, version string) (int, error) {

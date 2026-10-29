@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"net/http"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/embedding"
 )
 
@@ -35,7 +35,7 @@ type outbox struct {
 	st      *state
 	js      jetstream.JetStream
 	cfg     *config
-	http    *http.Client
+	egress  *egress.Executor
 
 	mu sync.Mutex
 	// vectors are the last task_embeddings generated, by model_id and text: a
@@ -46,8 +46,8 @@ type outbox struct {
 // maxVectors bounds the vectors kept for reuse.
 const maxVectors = 256
 
-func newOutbox(ctx context.Context, st *state, js jetstream.JetStream, cfg *config) *outbox {
-	return &outbox{ctx: ctx, st: st, js: js, cfg: cfg, http: embedding.Client(), vectors: map[string]string{}}
+func newOutbox(ctx context.Context, st *state, js jetstream.JetStream, cfg *config, x *egress.Executor) *outbox {
+	return &outbox{ctx: ctx, st: st, js: js, cfg: cfg, egress: x, vectors: map[string]string{}}
 }
 
 // resume sends what a previous run left in the outbox.
@@ -161,7 +161,7 @@ func (o *outbox) embed(raw json.RawMessage) (json.RawMessage, error) {
 	o.mu.Unlock()
 	if !ok {
 		ctx, cancel := context.WithTimeout(o.ctx, embedTimeout)
-		v, err := space.Query(ctx, o.http, text)
+		v, err := space.Query(ctx, o.egress, text)
 		cancel()
 		if err != nil {
 			return nil, err

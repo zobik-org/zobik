@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,9 +19,10 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/claim"
-	"zobik.org/zobik/internal/embedding"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role"
+	"zobik.org/zobik/internal/role/secrets"
 	"zobik.org/zobik/internal/rpcauth"
 	"zobik.org/zobik/internal/signing"
 	channelv1 "zobik.org/zobik/proto/zobik/channel/v1"
@@ -53,8 +53,9 @@ const opTimeout = 5 * time.Second
 // Options are where the role listens and what it reaches besides the Bus.
 type Options struct {
 	Audience string
-	// Listen is where it serves the console; ContextAddr, the Context Store.
-	Listen, ContextAddr string
+	// Listen is where it serves the console; ContextAddr, the Context Store;
+	// SecretsAddr, the secrets role, role.AddrSecrets by default.
+	Listen, ContextAddr, SecretsAddr string
 }
 
 // Run is the channel role for an audience: the network half of the deployment's
@@ -105,13 +106,24 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 		return err
 	}
 	defer conn.Close()
+	if o.SecretsAddr == "" {
+		o.SecretsAddr = role.AddrSecrets
+	}
+	// The Entry Node resolves the embedding model's credential and values its
+	// calls with the current rate (implementation §1.2.15, §8.5).
+	secretsClient, closeSecrets, err := secrets.Dial(o.SecretsAddr, rt.RPCCredentials(), "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = closeSecrets() }()
 
 	topic := signing.HITLPrefix + o.Audience
 	c := &channel{
 		rt: rt, js: js, audience: o.Audience, topic: topic,
 		claimant: claim.New(rt.ID, rt.Credential, js, nc, topic),
-		context:  contextv1.NewContextStoreClient(conn), http: embedding.Client(),
-		roots: store, open: open, closed: closed,
+		context:  contextv1.NewContextStoreClient(conn),
+		egress:   &egress.Executor{HTTP: egress.HTTPClient(), Credential: secretsClient.Resolve, Rates: egress.WatchRates(ctx, js).Table},
+		roots:    store, open: open, closed: closed,
 		byEntry: map[string]string{}, byDelivery: map[string]string{},
 		queries: map[string]*query{}, windows: map[string]time.Duration{},
 	}
@@ -163,8 +175,8 @@ type channel struct {
 	topic    string
 	claimant *claim.Claimant
 	context  contextv1.ContextStoreClient
-	// http calls the embeddings endpoint.
-	http   *http.Client
+	// egress executes the embeddings' calls.
+	egress *egress.Executor
 	window *signing.AttemptWindow
 	roots  *roots
 	// head is the Global Configuration as last read.

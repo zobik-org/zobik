@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nkeys"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/sidecar"
@@ -48,6 +49,10 @@ type Issuer struct {
 	SigningKey  nkeys.KeyPair
 	// Account is the network's account public key, and Root the root's.
 	Account, Root string
+	// Egress executes the embeddings' calls, with the credential the secrets
+	// role resolves for the Spawner (implementation §1.2.15, §1.2.18).
+	Egress *egress.Executor
+	close  func() error
 }
 
 // ProvisionRequest is one act: a blueprint on a topic, in a network.
@@ -67,6 +72,7 @@ type Node struct {
 	ModelID          string
 	SimilarityFloor  float64
 	MemoryRequiredMB int64
+	EgressGrants     []signing.Grant
 }
 
 // ProvisionError is a precondition the act does not meet, with the failure_code
@@ -133,7 +139,7 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	if b.ArtifactRef == "" || b.CapabilityText == "" {
 		return nil, refuse(codeRequestInvalid, "the blueprint needs artifact_ref and capability_text")
 	}
-	memoryMB, err := requires(b.Requires)
+	memoryMB, slots, ifaces, err := requires(b.Requires)
 	if err != nil {
 		return nil, err
 	}
@@ -152,11 +158,21 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	if err := json.Unmarshal(head.Values["task_similarity_floor"], &floor); err != nil {
 		return nil, fmt.Errorf("deploy: task_similarity_floor: %w", err)
 	}
+	registry := map[string]*egress.Entry{}
+	if raw, ok := head.Values["egress_registry"]; ok {
+		if registry, err = egress.ParseRegistry(raw); err != nil {
+			return nil, fmt.Errorf("deploy: egress_registry: %w", err)
+		}
+	}
+	grants, err := associate(slots, ifaces, registry, req.Topic)
+	if err != nil {
+		return nil, err
+	}
 	space, err := embedding.Resolve(head.Values)
 	if err != nil {
 		return nil, refuse(codeEmbeddingUnavailable, "%v", err)
 	}
-	vector, err := space.Document(ctx, embedding.Client(), b.CapabilityText)
+	vector, err := space.Document(ctx, iss.Egress, b.CapabilityText)
 	if errors.Is(err, embedding.ErrTooLong) {
 		return nil, refuse(codeRequestInvalid, "%v", err)
 	}
@@ -215,6 +231,7 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 		CapabilityEmbedding: embedding.Encode(vector),
 		SimilarityFloor:     floor,
 		AttemptWindow:       b.AttemptWindow,
+		EgressGrants:        grants,
 	}, iss.Certificate)
 	if err != nil {
 		return nil, err
@@ -236,6 +253,7 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 		ID: id, Logic: base + "-logic", Sidecar: base + "-sidecar",
 		Shared: base + "-shared", Private: base + "-private",
 		ModelID: space.ModelID, SimilarityFloor: floor, MemoryRequiredMB: memoryMB,
+		EgressGrants: grants,
 	}
 	defer func() {
 		if err == nil {
@@ -283,13 +301,20 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 		return node, fmt.Errorf("deploy: Integration Sidecar: %w", err)
 	}
 
+	grantsLabel, err := json.Marshal(grants)
+	if err != nil {
+		return node, err
+	}
+	if grants == nil {
+		grantsLabel = []byte("[]")
+	}
 	logicLabels := with(common, labelMemory, strconv.FormatInt(memoryMB, 10))
 	for k, v := range map[string]string{
 		labelTopic:           req.Topic,
 		labelModelID:         space.ModelID,
 		labelSignerID:        iss.ID,
 		labelSimilarityFloor: strconv.FormatFloat(floor, 'f', -1, 64),
-		labelEgressGrants:    "[]",
+		labelEgressGrants:    string(grantsLabel),
 		labelIngressGrants:   "[]",
 	} {
 		logicLabels[k] = v
@@ -311,38 +336,40 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 }
 
 // requires evaluates the provisioning preconditions the entry declares, and
-// returns its memory_required, or zero if it declares none (implementation
-// §1.2.11). No slot can be associated yet: an entry that requires one is not
-// provisioned.
-func requires(r map[string]json.RawMessage) (int64, error) {
+// returns its memory_required, or zero if it declares none, and its egress
+// slots (implementation §1.2.11). No ingress slot can be associated yet: an
+// entry that requires one is not provisioned.
+func requires(r map[string]json.RawMessage) (int64, []slot, []*egress.Interface, error) {
 	var memoryMB int64
+	var slots []slot
+	var ifaces []*egress.Interface
 	// In order, so the same entry is always refused with the same failure_code.
 	for _, key := range slices.Sorted(maps.Keys(r)) {
 		raw := r[key]
-		var slots []json.RawMessage
 		switch key {
 		case "memory_required":
 			if err := json.Unmarshal(raw, &memoryMB); err != nil || memoryMB < minMemoryMB || memoryMB > maxMemoryMB {
-				return 0, refuse(codeRequestInvalid, "memory_required is not an integer from %d to %d MB", minMemoryMB, maxMemoryMB)
+				return 0, nil, nil, refuse(codeRequestInvalid, "memory_required is not an integer from %d to %d MB", minMemoryMB, maxMemoryMB)
 			}
-		case "egress_required", "ingress_required":
-			if err := json.Unmarshal(raw, &slots); err != nil {
-				return 0, refuse(codeRequestInvalid, "%s is not a list", key)
+		case "egress_required":
+			var err error
+			if slots, ifaces, err = parseSlots(raw); err != nil {
+				return 0, nil, nil, err
 			}
-			if len(slots) == 0 {
-				continue
+		case "ingress_required":
+			var list []json.RawMessage
+			if err := json.Unmarshal(raw, &list); err != nil {
+				return 0, nil, nil, refuse(codeRequestInvalid, "%s is not a list", key)
 			}
-			code := codeEgressSlotUnbound
-			if key == "ingress_required" {
-				code = codeIngressSlotUnbound
+			if len(list) > 0 {
+				return 0, nil, nil, refuse(codeIngressSlotUnbound, "a slot of %s is not associated", key)
 			}
-			return 0, refuse(code, "a slot of %s is not associated", key)
 		default:
 			// A key of requires the Spawner does not know prevents provisioning (implementation §1.2.11).
-			return 0, refuse(codeRequestInvalid, "requires.%s is not a precondition this Spawner knows", key)
+			return 0, nil, nil, refuse(codeRequestInvalid, "requires.%s is not a precondition this Spawner knows", key)
 		}
 	}
-	return memoryMB, nil
+	return memoryMB, slots, ifaces, nil
 }
 
 func intValue(v globalconfig.Values, key string) (int64, error) {

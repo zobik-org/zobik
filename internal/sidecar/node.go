@@ -15,6 +15,7 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/claim"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/signing"
 	nriv1 "zobik.org/zobik/proto/zobik/nri/v1"
 )
@@ -41,8 +42,13 @@ type node struct {
 
 	st  *state
 	out *outbox
-	// areas is the shared volume, where the work areas go (implementation §3).
-	areas string
+	// areas is the shared volume, where the work areas go (implementation §3),
+	// and private the Integration Sidecar's own volume.
+	areas, private string
+	// root is the root's public key, which a provision grant's proof verifies
+	// against, and egress executes the calls (architecture §3.16.4).
+	root   string
+	egress *egress.Executor
 
 	mu      sync.Mutex
 	session *session

@@ -11,10 +11,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/nats-io/nkeys"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/role"
+	"zobik.org/zobik/internal/role/secrets"
 )
 
 // engineSocket is where the container engine's socket is, on the host and in
@@ -79,8 +82,33 @@ func SpawnerIssuer(ctx context.Context, dir string) (*Issuer, *nats.Conn, error)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+	js, err := jetstream.New(nc)
+	if err != nil {
+		nc.Close()
+		return nil, nil, err
+	}
+	// The Spawner resolves the embedding model's credential and reads the rate
+	// its embeddings are valued with (implementation §1.2.15, §8.5).
+	sc, closeSecrets, err := secrets.Dial(role.AddrSecrets, rt.RPCCredentials(), "")
+	if err != nil {
+		nc.Close()
+		return nil, nil, err
+	}
+	rates := func(name string) (*egress.Table, bool) {
+		t, ok, err := egress.ReadRate(ctx, js, name)
+		return t, ok && err == nil
+	}
 	return &Issuer{
 		ID: rt.ID, Sign: rt.Sign, Certificate: rt.Certificate, SigningKey: key,
 		Account: account.Subject, Root: rt.Root,
+		Egress: &egress.Executor{HTTP: egress.HTTPClient(), Credential: sc.Resolve, Rates: rates},
+		close:  closeSecrets,
 	}, nc, nil
+}
+
+// Close closes the issuer's connection to the secrets role.
+func (iss *Issuer) Close() {
+	if iss.close != nil {
+		_ = iss.close()
+	}
 }

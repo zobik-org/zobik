@@ -40,6 +40,10 @@ type Options struct {
 	// WriteSecret sets the value behind a handle in the Secret Store, or removes
 	// it with a nil value: an act of deployment (implementation §1.2.18).
 	WriteSecret func(ctx context.Context, handle string, value []byte) error
+	// WriteRates writes a rate table, already validated, to the rates bucket
+	// with the console's identity for the act in creds: an act of deployment
+	// (implementation §8.5).
+	WriteRates func(ctx context.Context, creds []byte, name string, table []byte) error
 }
 
 // Service is the console's local API: the session, and the acts the panel and

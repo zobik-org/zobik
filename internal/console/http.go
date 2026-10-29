@@ -34,6 +34,7 @@ func (s *Service) Handler(port string) http.Handler {
 	mux.HandleFunc("GET "+PathEvents, s.withSession(false, s.getEvents))
 	s.workRoutes(mux)
 	s.secretRoutes(mux)
+	s.rateRoutes(mux)
 	mux.Handle("GET /", http.FileServerFS(web.FS))
 	return addressedToItself(port, onlyOwnContent(mux))
 }

@@ -78,6 +78,35 @@ type Assignment struct {
 	Token     string
 	Requester string
 	Started   time.Time
+
+	mu    sync.Mutex
+	spent Spent
+}
+
+// Spent is what the external calls executed on a task cost: the sum of each
+// call, never a breakdown (architecture §3.10).
+type Spent struct {
+	TokensIn, TokensOut int64
+	Cost                float64
+	// BillingErrors counts the calls whose billing data could not be read.
+	BillingErrors int64
+}
+
+// Charge adds a call's spending to the task.
+func (a *Assignment) Charge(s Spent) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.spent.TokensIn += s.TokensIn
+	a.spent.TokensOut += s.TokensOut
+	a.spent.Cost += s.Cost
+	a.spent.BillingErrors += s.BillingErrors
+}
+
+// Spent is what the task's calls cost so far.
+func (a *Assignment) Spent() Spent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.spent
 }
 
 // Inherited is what the task's events inherit from its announcement:
@@ -187,16 +216,21 @@ func (c *Claimant) Close(ctx context.Context, a *Assignment, typ string, data ma
 // Terminal assembles and validates the terminal event typ of the task, on the
 // task's identifier, with what the trace inherits copied from the task
 // (architecture §3.6.1), and returns it with the subject of its requester. The
-// metrics are those of a task that spent no tokens and no money (architecture §3.10).
+// metrics are the sum of what the task's calls cost (architecture §3.10).
 func (c *Claimant) Terminal(a *Assignment, typ string, data map[string]any) (*bus.Event, string, error) {
 	for k, v := range a.Inherited() {
 		data[k] = v
 	}
 	data["topic"] = c.topic
-	data["metrics"] = map[string]any{
-		"tokens_in": 0, "tokens_out": 0, "cost": 0,
+	s := a.Spent()
+	metrics := map[string]any{
+		"tokens_in": s.TokensIn, "tokens_out": s.TokensOut, "cost": s.Cost,
 		"duration_ms": time.Since(a.Started).Milliseconds(),
 	}
+	if s.BillingErrors > 0 {
+		metrics["billing_errors"] = s.BillingErrors
+	}
+	data["metrics"] = metrics
 	e, err := bus.NewEvent(typ, c.id, a.TaskID, data)
 	if err != nil {
 		return nil, "", err

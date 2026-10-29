@@ -266,3 +266,59 @@ func TestNodeScope(t *testing.T) {
 		t.Errorf("spawner deleting the node's consumer: %v", err)
 	}
 }
+
+// The console writes the rates bucket; a node, a channel and the Spawner read
+// it and watch it, and do not write it (implementation §8.5).
+func TestRatesBucket(t *testing.T) {
+	a := roleAccount(t)
+	s := startServer(t, a)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	console, _, err := connect(t, s, a, ConsoleScope.Role, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, _ := jetstream.New(console)
+	if err := EnsureBuckets(ctx, admin, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	written, err := admin.KeyValue(ctx, BucketRates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := written.Put(ctx, "openai", []byte(`{"as_of":"2026-10-01"}`)); err != nil {
+		t.Fatalf("the console writing a table: %v", err)
+	}
+
+	for _, scope := range []string{NodeScope.Role, ChannelScope.Role, SpawnerScope.Role} {
+		r := connectRole(t, s, a, scope)
+		js, _ := jetstream.New(r.nc)
+		kv, err := js.KeyValue(ctx, BucketRates)
+		if err != nil {
+			t.Fatalf("%s opening the bucket: %v", scope, err)
+		}
+		if e, err := kv.Get(ctx, "openai"); err != nil || string(e.Value()) != `{"as_of":"2026-10-01"}` {
+			t.Errorf("%s reading a table: %v", scope, err)
+		}
+		w, err := kv.WatchAll(ctx)
+		if err != nil {
+			t.Fatalf("%s watching: %v", scope, err)
+		}
+		select {
+		case u := <-w.Updates():
+			if u == nil || u.Key() != "openai" {
+				t.Errorf("%s watched %v", scope, u)
+			}
+		case <-time.After(2 * time.Second):
+			t.Errorf("%s: the watch delivered nothing", scope)
+		}
+		_ = w.Stop()
+		// A denied write gets no acknowledgment.
+		putCtx, cancelPut := context.WithTimeout(ctx, 500*time.Millisecond)
+		if _, err := kv.Put(putCtx, "openai", []byte(`{}`)); err == nil {
+			t.Errorf("%s wrote a table", scope)
+		}
+		cancelPut()
+	}
+}

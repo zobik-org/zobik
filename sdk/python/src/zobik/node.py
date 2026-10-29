@@ -113,6 +113,18 @@ class Result:
         return self.type == "task.completed"
 
 
+@dataclass(frozen=True)
+class Response:
+    """The response of a call: its fields, with status, and the file of its body, if any."""
+
+    fields: dict[str, Any]
+    body: Path | None = None
+
+    @property
+    def status(self) -> int | None:
+        return self.fields.get("status")
+
+
 class Subtask:
     """A subtask a task opened with announce or ask. Awaiting it returns its Result."""
 
@@ -169,6 +181,23 @@ class Task:
             pb.ContextList(task_id=self.task_id, section=section or self.task_id)
         )
         return [ContextRef._from_pb(r) for r in listing.refs]
+
+    async def call(
+        self, slot: str, operation: str, fields: dict[str, Any] | None = None, body: str | os.PathLike[str] | None = None
+    ) -> Response:
+        """Calls an operation of an egress slot's interface (architecture §3.16.4).
+        body is a file of the task's work area, which goes as the call's body; the
+        response's body, when the operation has one, is left there too
+        (implementation §3, Context Store and egress). A call the network does not
+        execute raises grpc.aio.AioRpcError, with the rule that decided it."""
+        rel = ""
+        if body is not None:
+            p = Path(body)
+            rel = str(p.relative_to(self.work_area) if p.is_absolute() else p)
+        resp = await self._session.stub.Call(
+            pb.EgressRequest(task_id=self.task_id, slot=slot, operation=operation, fields=_encode(fields), body=rel)
+        )
+        return Response(json.loads(resp.fields) if resp.fields else {}, self.work_area / resp.body if resp.body else None)
 
     async def announce(
         self, topic: str, data: dict[str, Any], previous_attempt: Subtask | str | None = None

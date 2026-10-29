@@ -8,5 +8,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -o /zobik-sidecar ./cmd/zobik-sidecar
 
 FROM scratch
+# The system CAs the https adapter trusts (implementation §1.2.12).
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /zobik-sidecar /zobik-sidecar
 ENTRYPOINT ["/zobik-sidecar"]
