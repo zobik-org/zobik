@@ -80,12 +80,27 @@ type RateSource func(name string) (*Table, bool)
 type Rates struct {
 	mu     sync.RWMutex
 	tables map[string]*Table
+	// loaded closes once the first watch delivered the bucket's values.
+	loaded chan struct{}
+	once   sync.Once
 }
 
+// ratesWait bounds how long WatchRates waits for the bucket's values.
+const ratesWait = 5 * time.Second
+
 // WatchRates watches the whole bucket until ctx ends, reopening the watch
-// whenever it ends: the reader tolerates the NATS server's absence.
+// whenever it ends: the reader tolerates the NATS server's absence. It returns
+// once the bucket's values arrived, or after ratesWait, so a call made at
+// startup finds the tables there are.
 func WatchRates(ctx context.Context, js jetstream.JetStream) *Rates {
-	r := &Rates{tables: map[string]*Table{}}
+	r := &Rates{tables: map[string]*Table{}, loaded: make(chan struct{})}
+	defer func() {
+		select {
+		case <-r.loaded:
+		case <-ctx.Done():
+		case <-time.After(ratesWait):
+		}
+	}()
 	go func() {
 		for ctx.Err() == nil {
 			if err := r.watch(ctx, js); err != nil && ctx.Err() == nil {
@@ -119,7 +134,8 @@ func (r *Rates) watch(ctx context.Context, js jetstream.JetStream) error {
 				return errors.New("the watch ended")
 			}
 			if u == nil {
-				continue // the initial values are delivered
+				r.once.Do(func() { close(r.loaded) }) // the initial values are delivered
+				continue
 			}
 			r.apply(u)
 		}
@@ -149,6 +165,18 @@ func (r *Rates) Table(name string) (*Table, bool) {
 	defer r.mu.RUnlock()
 	t, ok := r.tables[name]
 	return t, ok
+}
+
+// BucketRates reads each table from the bucket when a call asks for it, for an
+// act that makes a single call. A read that fails is logged and reads as absent.
+func BucketRates(ctx context.Context, js jetstream.JetStream) RateSource {
+	return func(name string) (*Table, bool) {
+		t, ok, err := ReadRate(ctx, js, name)
+		if err != nil {
+			log.Printf("egress: reading the rate table %s: %v", name, err)
+		}
+		return t, ok && err == nil
+	}
 }
 
 // ReadRate reads one table from the bucket, for an act that makes a single call.

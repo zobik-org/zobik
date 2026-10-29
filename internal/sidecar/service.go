@@ -174,6 +174,7 @@ func (sv *service) close(t *task, req *nriv1.PublishRequest) (*nriv1.PublishAck,
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	t.calls.Wait()
 	e, subject, err := sv.n.claimant.Terminal(t.a, typ, data)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())

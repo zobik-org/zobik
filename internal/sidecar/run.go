@@ -166,7 +166,12 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	if err := out.resume(); err != nil {
 		return err
 	}
-	n := newNode(id, startup.Credential, cred, js, nc, cfg, st, out, o.Shared)
+	areas, err := os.OpenRoot(o.Shared)
+	if err != nil {
+		return err
+	}
+	defer areas.Close()
+	n := newNode(id, startup.Credential, cred, js, nc, cfg, st, out, areas)
 	n.private, n.root, n.egress = o.State, startup.Root, x
 	n.clearAreas()
 	// Stopping waits for the handlers, so none writes to the outbox after it drains.

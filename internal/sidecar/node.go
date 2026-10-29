@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -43,8 +44,10 @@ type node struct {
 	st  *state
 	out *outbox
 	// areas is the shared volume, where the work areas go (implementation §3),
-	// and private the Integration Sidecar's own volume.
-	areas, private string
+	// opened as a root: the Logic Container writes inside it, so no path under
+	// it is resolved outside it. private is the Integration Sidecar's own volume.
+	areas   *os.Root
+	private string
 	// root is the root's public key, which a provision grant's proof verifies
 	// against, and egress executes the calls (architecture §3.16.4).
 	root   string
@@ -80,6 +83,9 @@ type task struct {
 	// closing marks a close in flight, and detached a task whose session was
 	// cut meanwhile: if that close fails, the task fails as the session's.
 	closing, detached bool
+	// calls are the calls in flight on the task: its terminal event waits for
+	// them, so their charge is in its metrics (architecture §3.10).
+	calls sync.WaitGroup
 }
 
 // held is a delivery waiting for its Received: an assignment, or the result
@@ -90,7 +96,7 @@ type held struct {
 	confirmed chan struct{}
 }
 
-func newNode(id, credential string, cred *signing.Capability, js jetstream.JetStream, nc *nats.Conn, cfg *config, st *state, out *outbox, areas string) *node {
+func newNode(id, credential string, cred *signing.Capability, js jetstream.JetStream, nc *nats.Conn, cfg *config, st *state, out *outbox, areas *os.Root) *node {
 	n := &node{
 		id: id, cred: cred, js: js, cfg: cfg, st: st, out: out, areas: areas,
 		claimant: claim.New(id, credential, js, nc, cred.Topic),
@@ -462,6 +468,8 @@ func (n *node) cutOpen() {
 
 // lost closes a task of a cut session with task.failed (architecture §3.6.1).
 func (n *node) lost(t *task) {
+	// The cut ends the session's calls with it.
+	t.calls.Wait()
 	e, subject, err := n.claimant.Terminal(t.a, bus.TypeFailed, map[string]any{
 		"failure_reason": "the Node Runtime Interface session was cut", "failure_code": codeLogicContainerLost,
 	})

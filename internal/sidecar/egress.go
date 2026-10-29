@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,10 +36,18 @@ const callsDir = "calls"
 // task's metrics (implementation §3, Context Store and egress).
 func (sv *service) Call(ctx context.Context, req *nriv1.EgressRequest) (*nriv1.EgressResponse, error) {
 	n := sv.n
-	a, area, err := n.callTask(req.GetTaskId())
+	a, done, err := n.callTask(req.GetTaskId())
 	if err != nil {
 		return nil, err
 	}
+	defer done()
+	// The work area opens inside the shared volume: a work area the Logic
+	// Container replaced with a symlink out of it does not open.
+	area, err := n.areas.OpenRoot(filepath.Join(tasksDir, a.TaskID))
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "the work area of %s: %v", a.TaskID, err)
+	}
+	defer area.Close()
 
 	// Step 2: the slot is associated, with an entry that still implements its
 	// interface and still reaches the node.
@@ -87,7 +96,7 @@ func (sv *service) Call(ctx context.Context, req *nriv1.EgressRequest) (*nriv1.E
 	// Step 5: the execution, with the response's body left in the work area.
 	var out *os.File
 	if e.Interface.Operations[call.Operation].Body.Response {
-		if out, err = os.OpenFile(filepath.Join(area, "zobik-response-"+uuid.NewString()), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err != nil {
+		if out, err = area.OpenFile("zobik-response-"+uuid.NewString(), os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600); err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 		defer out.Close()
@@ -97,17 +106,21 @@ func (sv *service) Call(ctx context.Context, req *nriv1.EgressRequest) (*nriv1.E
 		dst = out
 	}
 	res, err := n.egress.Execute(ctx, e, call, body, dst)
+	// A call whose response could not be read was executed all the same: it
+	// carries its charge with the error.
+	if res != nil {
+		ch := res.Charge
+		for _, err := range ch.Errors {
+			log.Printf("sidecar: billing a call of %s on %s: %v", req.GetSlot(), a.TaskID, err)
+		}
+		a.Charge(claim.Spent{TokensIn: ch.TokensIn, TokensOut: ch.TokensOut, Cost: ch.Cost, BillingErrors: ch.BillingErrors})
+	}
 	if err != nil {
 		if out != nil {
-			os.Remove(out.Name())
+			_ = area.Remove(filepath.Base(out.Name()))
 		}
 		return nil, executeError(err)
 	}
-	ch := res.Charge
-	for _, err := range ch.Errors {
-		log.Printf("sidecar: billing a call of %s on %s: %v", req.GetSlot(), a.TaskID, err)
-	}
-	a.Charge(claim.Spent{TokensIn: ch.TokensIn, TokensOut: ch.TokensOut, Cost: ch.Cost, BillingErrors: ch.BillingErrors})
 
 	fields, err := json.Marshal(res.Response)
 	if err != nil {
@@ -120,15 +133,17 @@ func (sv *service) Call(ctx context.Context, req *nriv1.EgressRequest) (*nriv1.E
 	return resp, nil
 }
 
-// executeError is the status of a call that failed on executing.
+// executeError is the status of a call that failed on executing. A missing
+// rate table returns like a deny (implementation §8.5), and a response that
+// could not be read, as aborted: the destination executed the call.
 func executeError(err error) error {
 	switch {
 	case errors.Is(err, egress.ErrNoTable):
-		return status.Error(codes.FailedPrecondition, err.Error())
+		return status.Error(codes.PermissionDenied, err.Error())
 	case errors.Is(err, egress.ErrInvalid):
 		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, egress.ErrNoResponse):
-		return status.Error(codes.Unavailable, err.Error())
+	case errors.Is(err, egress.ErrUnreadable):
+		return status.Error(codes.Aborted, err.Error())
 	}
 	return status.Error(codes.Unavailable, err.Error())
 }
@@ -143,44 +158,40 @@ func grant(cred *signing.Capability, slot string) (signing.Grant, bool) {
 	return signing.Grant{}, false
 }
 
-// callTask is a task the node holds and is not closing, with its work area: a
-// call is charged to it (implementation §3, Context Store and egress).
-func (n *node) callTask(taskID string) (*claim.Assignment, string, error) {
+// callTask is a task the node holds and is not closing: a call is charged to
+// it, and its close waits until done is called (implementation §3, Context
+// Store and egress).
+func (n *node) callTask(taskID string) (*claim.Assignment, func(), error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	t := n.tasks[taskID]
 	if t == nil || t.closing {
-		return nil, "", status.Error(codes.FailedPrecondition, "the node holds no task "+taskID)
+		return nil, nil, status.Error(codes.FailedPrecondition, "the node holds no task "+taskID)
 	}
-	return t.a, filepath.Join(n.areas, tasksDir, taskID), nil
+	t.calls.Add(1)
+	return t.a, t.calls.Done, nil
 }
 
 // copyBody copies the call's body from the task's work area to the private
-// volume, resolving its path without leaving the area and without following a
-// symlink, and measures the copy (implementation §3, Context Store and egress).
-func (n *node) copyBody(area, name string, limit int64) (*os.File, int64, string, error) {
-	root, err := os.OpenRoot(area)
-	if err != nil {
-		return nil, 0, "", status.Error(codes.Internal, err.Error())
-	}
-	defer root.Close()
+// volume, opening it inside the area without following a symlink, and measures
+// the copy (implementation §3, Context Store and egress).
+func (n *node) copyBody(area *os.Root, name string, limit int64) (*os.File, int64, string, error) {
 	invalid := func(format string, args ...any) error {
 		return status.Errorf(codes.InvalidArgument, "body: "+format, args...)
 	}
-	info, err := root.Lstat(name)
+	// Opened once, and checked on the open file: a name the Logic Container
+	// swaps meanwhile is not what is measured. A FIFO does not block the open.
+	src, err := area.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil, 0, "", invalid("%s is not in the task's work area", name)
 	case err != nil:
-		return nil, 0, "", invalid("%v", err)
-	case !info.Mode().IsRegular():
-		return nil, 0, "", invalid("%s is not a regular file", name)
-	}
-	src, err := root.Open(name)
-	if err != nil {
-		return nil, 0, "", invalid("%v", err)
+		return nil, 0, "", invalid("%s does not open as a file of the work area", name)
 	}
 	defer src.Close()
+	if info, err := src.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil, 0, "", invalid("%s is not a regular file", name)
+	}
 	dir := filepath.Join(n.private, callsDir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, 0, "", status.Error(codes.Internal, err.Error())

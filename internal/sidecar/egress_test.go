@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -69,6 +70,9 @@ func newProvider(t *testing.T) *provider {
 			p.uploaded = append(p.uploaded, string(body))
 		}
 		p.mu.Unlock()
+		if strings.Contains(string(body), "slow") {
+			time.Sleep(500 * time.Millisecond)
+		}
 		if strings.Contains(string(body), "no usage") {
 			io.WriteString(w, `{"text":"done"}`)
 			return
@@ -252,12 +256,15 @@ func TestCallBody(t *testing.T) {
 	os.WriteFile(filepath.Join(area, "large"), []byte("too large"), 0o600)
 	os.WriteFile(filepath.Join(f.shared, "outside"), []byte("secret"), 0o600)
 	os.Symlink(filepath.Join(f.shared, "outside"), filepath.Join(area, "link"))
+	if err := syscall.Mkfifo(filepath.Join(area, "fifo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	call := func(body string) error {
 		_, err := l.client.Call(f.Ctx, &nriv1.EgressRequest{TaskId: taskID, Slot: "store", Operation: "put", Fields: []byte(`{"name":"a"}`), Body: body})
 		return err
 	}
-	for _, body := range []string{"", "missing", "../../outside", "link", "large"} {
+	for _, body := range []string{"", "missing", "../../outside", "link", "large", "fifo"} {
 		if err := call(body); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("body %q: %v", body, err)
 		}
@@ -269,5 +276,68 @@ func TestCallBody(t *testing.T) {
 	defer p.mu.Unlock()
 	if len(p.uploaded) != 1 || p.uploaded[0] != "uploaded" || p.auth[0] != "Bearer st-test" {
 		t.Errorf("uploaded %q with %v", p.uploaded, p.auth)
+	}
+}
+
+// A work area the Logic Container replaced with a symlink out of the shared
+// volume does not open: nothing of the Integration Sidecar's own goes out.
+func TestCallAreaSymlink(t *testing.T) {
+	f, p := callFixture(t)
+	l, err := f.attach(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID := f.held(l)
+	private := t.TempDir()
+	os.WriteFile(filepath.Join(private, "startup.json"), []byte("seed"), 0o600)
+	area := filepath.Join(f.shared, "tasks", taskID)
+	if err := os.RemoveAll(area); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(private, area); err != nil {
+		t.Fatal(err)
+	}
+	_, err = l.client.Call(f.Ctx, &nriv1.EgressRequest{TaskId: taskID, Slot: "store", Operation: "put", Fields: []byte(`{"name":"a"}`), Body: "startup.json"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("a symlinked work area: %v", err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.uploaded) != 0 {
+		t.Errorf("uploaded %q", p.uploaded)
+	}
+}
+
+// The terminal event waits for the task's calls in flight, so their charge is
+// in its metrics.
+func TestCloseWaitsForCalls(t *testing.T) {
+	f, _ := callFixture(t)
+	closes := f.Tap("task.completed." + f.requester + ".>")
+	l, err := f.attach(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID := f.held(l)
+	called := make(chan error, 1)
+	go func() {
+		_, err := l.client.Call(f.Ctx, &nriv1.EgressRequest{TaskId: taskID, Slot: "model", Operation: "complete", Fields: []byte(`{"prompt":"slow"}`)})
+		called <- err
+	}()
+	time.Sleep(100 * time.Millisecond) // the call is at the provider
+	if _, err := l.client.Publish(f.Ctx, &nriv1.PublishRequest{TaskId: taskID, Body: &nriv1.PublishRequest_Complete{Complete: &nriv1.CompleteTask{}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-called; err != nil {
+		t.Fatal(err)
+	}
+	done := await(t, closes, 5*time.Second)
+	var data struct {
+		Metrics struct {
+			TokensIn int64 `json:"tokens_in"`
+		} `json:"metrics"`
+	}
+	_ = json.Unmarshal(done.Data, &data)
+	if data.Metrics.TokensIn != 100 {
+		t.Errorf("metrics %s: the call in flight is missing", done.Data)
 	}
 }

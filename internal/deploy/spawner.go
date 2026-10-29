@@ -94,14 +94,10 @@ func SpawnerIssuer(ctx context.Context, dir string) (*Issuer, *nats.Conn, error)
 		nc.Close()
 		return nil, nil, err
 	}
-	rates := func(name string) (*egress.Table, bool) {
-		t, ok, err := egress.ReadRate(ctx, js, name)
-		return t, ok && err == nil
-	}
 	return &Issuer{
 		ID: rt.ID, Sign: rt.Sign, Certificate: rt.Certificate, SigningKey: key,
 		Account: account.Subject, Root: rt.Root,
-		Egress: &egress.Executor{HTTP: egress.HTTPClient(), Credential: sc.Resolve, Rates: rates},
+		Egress: &egress.Executor{HTTP: egress.HTTPClient(), Credential: sc.Resolve, Rates: egress.BucketRates(ctx, js)},
 		close:  closeSecrets,
 	}, nc, nil
 }

@@ -242,10 +242,7 @@ func stampEmbedding(ctx context.Context, js jetstream.JetStream, e *bus.Event) e
 		Credential: func(context.Context, string) ([]byte, error) {
 			return nil, errors.New("zobik publish resolves no credential: stamp task_embedding by hand")
 		},
-		Rates: func(name string) (*egress.Table, bool) {
-			t, ok, err := egress.ReadRate(ctx, js, name)
-			return t, ok && err == nil
-		},
+		Rates: egress.BucketRates(ctx, js),
 	}
 	v, err := space.Query(ctx, x, text)
 	if err != nil {

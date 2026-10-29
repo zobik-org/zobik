@@ -241,7 +241,7 @@ func TestAdapterMapping(t *testing.T) {
 	// A response body over max_body_size makes the call fail.
 	e.MaxBodySize = 4
 	c, _ = e.NewCall("get", []byte(`{"name":"x"}`), false)
-	if _, err := executor("k").Execute(context.Background(), e, c, nil, io.Discard); !errors.Is(err, ErrNoResponse) {
+	if _, err := executor("k").Execute(context.Background(), e, c, nil, io.Discard); !errors.Is(err, ErrUnreadable) {
 		t.Errorf("a response over max_body_size: %v", err)
 	}
 }
@@ -272,5 +272,84 @@ func TestParseTable(t *testing.T) {
 		if _, err := ParseTable([]byte(raw)); err == nil {
 			t.Errorf("%s was accepted", raw)
 		}
+	}
+}
+
+// A credential placed in the query never reaches the error a failed call
+// returns, and a header field cannot carry a control character.
+func TestCredentialStaysOutOfErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	target := srv.URL
+	srv.Close() // nothing listens: the call gets no response
+	in := `{"protocol":"https","direction":"egress","operations":{
+	  "get":{"fields":{"type":"object","properties":{"trace":{"type":"string"}}},
+	    "https":{"method":"GET","path":"/x","fields":{"trace":{"in":"header","at":"X-Trace"}},"response":{}}}}}`
+	raw, _ := json.Marshal(map[string]any{
+		"interface": json.RawMessage(in), "target": target, "operations": []string{"get"},
+		"credential_handle": "k", "credential_placement": map[string]string{"query": "api_key"},
+		"rules": []map[string]string{{"then": "allow"}}, "billing_rule": map[string]any{"get": map[string]string{"cost": "0.0"}},
+	})
+	e, err := ParseEntry(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := e.NewCall("get", []byte(`{}`), false)
+	_, err = executor("SECRET123").Execute(context.Background(), e, c, nil, nil)
+	if !errors.Is(err, ErrNoResponse) || strings.Contains(err.Error(), "SECRET123") {
+		t.Errorf("a call without response: %v", err)
+	}
+	c, _ = e.NewCall("get", []byte("{\"trace\":\"a\\r\\nX-Other: b\"}"), false)
+	_, err = executor("SECRET123").Execute(context.Background(), e, c, nil, nil)
+	if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), "SECRET123") {
+		t.Errorf("a header field with CRLF: %v", err)
+	}
+}
+
+// A response that cannot be read whole was executed: it is charged max_per_call.
+func TestUnreadableResponseCharges(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write(bytes.Repeat([]byte(" "), maxJSONResponse+1))
+	}))
+	defer srv.Close()
+	e, err := ParseEntry(openAIEntry(t, func(e map[string]any) { e["target"] = srv.URL }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := e.NewCall("create_response", []byte(`{"model":"gpt-5","input":[]}`), false)
+	res, err := executor("k").Execute(context.Background(), e, c, nil, nil)
+	if !errors.Is(err, ErrUnreadable) || res == nil || res.Charge.Cost != 2.0 || res.Charge.BillingErrors != 1 {
+		t.Errorf("got %+v, %v", res, err)
+	}
+}
+
+// An empty body goes with Content-Length: 0.
+func TestEmptyBody(t *testing.T) {
+	var length int64 = -1
+	var chunked bool
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		length, chunked = r.ContentLength, len(r.TransferEncoding) > 0
+	}))
+	defer srv.Close()
+	in := `{"protocol":"https","direction":"egress","operations":{
+	  "put":{"fields":{"type":"object","properties":{}},"body":{"request":true,"response":false},
+	    "https":{"method":"PUT","path":"/f","fields":{},"response":{}}}}}`
+	raw, _ := json.Marshal(map[string]any{
+		"interface": json.RawMessage(in), "target": srv.URL, "operations": []string{"put"}, "max_body_size": 8,
+		"rules": []map[string]string{{"then": "allow"}}, "billing_rule": map[string]any{"put": map[string]string{"cost": "0.0"}},
+	})
+	e, err := ParseEntry(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "empty")
+	os.WriteFile(file, nil, 0o600)
+	body, _ := os.Open(file)
+	defer body.Close()
+	c, _ := e.NewCall("put", []byte(`{}`), true)
+	if _, err := executor("").Execute(context.Background(), e, c, body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if length != 0 || chunked {
+		t.Errorf("an empty body went with length %d, chunked %v", length, chunked)
 	}
 }

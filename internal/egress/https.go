@@ -63,7 +63,11 @@ func (e *Entry) newRequest(ctx context.Context, c *Call, body *os.File, credenti
 		case "query":
 			query.Add(fm.At, scalar(v))
 		case "header":
-			headers.Set(fm.At, scalar(v))
+			h := scalar(v)
+			if !headerValue(h) {
+				return nil, fmt.Errorf("%w: header field %s carries a control character", ErrInvalid, name)
+			}
+			headers.Set(fm.At, h)
 		case "json":
 			if doc == nil {
 				doc = map[string]any{}
@@ -99,6 +103,10 @@ func (e *Entry) newRequest(ctx context.Context, c *Call, body *os.File, credenti
 			return nil, err
 		}
 		reader, size = body, st.Size()
+		if size == 0 {
+			// An empty file goes with Content-Length: 0, not chunked.
+			reader = http.NoBody
+		}
 	case hasJSON:
 		if doc == nil {
 			doc = map[string]any{}
@@ -174,6 +182,17 @@ func (e *Entry) readResponse(op string, resp *http.Response, bodyOut io.Writer) 
 		}
 	}
 	return out, nil
+}
+
+// headerValue reports whether v can go in a header: no control character but
+// the tab, so a field does not add a header or split the request.
+func headerValue(v string) bool {
+	for i := 0; i < len(v); i++ {
+		if c := v[i]; (c < 0x20 && c != '\t') || c == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // scalar is a scalar field as it goes in a path, a query or a header.
@@ -262,6 +281,26 @@ var ErrNoTable = errors.New("egress: the rate table is not in the rates bucket")
 // failure. A 4xx or a 5xx is a response (implementation §8.3).
 var ErrNoResponse = errors.New("egress: the call got no response")
 
+// ErrUnreadable is a response that could not be read whole, such as one over
+// its bound: the destination executed the call, which is charged max_per_call.
+var ErrUnreadable = errors.New("egress: the response could not be read")
+
+// redacted is a transport error without the request's URL, whose query can
+// carry the credential (implementation §8.4): the error returns to the Logic
+// Container, which never sees it.
+func redacted(err error) error {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	u, perr := url.Parse(ue.URL)
+	if perr != nil {
+		return &url.Error{Op: ue.Op, URL: "(the entry's target)", Err: ue.Err}
+	}
+	u.RawQuery, u.User = "", nil
+	return &url.Error{Op: ue.Op, URL: u.String(), Err: ue.Err}
+}
+
 // Executor executes the calls the rules allowed (architecture §3.16.4, step 5).
 type Executor struct {
 	HTTP *http.Client
@@ -280,7 +319,8 @@ type Result struct {
 // Execute resolves the credential, builds the request, executes it and
 // composes the charge with the billing_rule and the current rate. With a
 // response body, it writes it to bodyOut. body is the copy of the call's body,
-// or nil.
+// or nil. A response that could not be read returns its charge with
+// ErrUnreadable.
 func (x *Executor) Execute(ctx context.Context, e *Entry, c *Call, body *os.File, bodyOut io.Writer) (*Result, error) {
 	var table *Table
 	if e.RateSource != "" {
@@ -303,12 +343,17 @@ func (x *Executor) Execute(ctx context.Context, e *Entry, c *Call, body *os.File
 	}
 	resp, err := x.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrNoResponse, err)
+		return nil, fmt.Errorf("%w: %w", ErrNoResponse, redacted(err))
 	}
 	defer resp.Body.Close()
 	response, err := e.readResponse(c.Operation, resp, bodyOut)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrNoResponse, err)
+		var maxPerCall float64
+		if table != nil {
+			maxPerCall = table.MaxPerCall
+		}
+		err = fmt.Errorf("%w: %w", ErrUnreadable, redacted(err))
+		return &Result{Charge: Charge{Cost: maxPerCall, BillingErrors: 1, Errors: []error{err}}}, err
 	}
 	return &Result{Response: response, Charge: e.Bill(c, response, table)}, nil
 }
