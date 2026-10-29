@@ -1,0 +1,151 @@
+{
+  "artifact_ref": "zobik-assistant:dev",
+  "capability_text": "Answers any question or request written in natural language: explains, summarizes, drafts, translates and gives advice.",
+  "requires": {
+    "memory_required": 256,
+    "egress_required": [
+      {
+        "name": "model",
+        "interface": {
+          "protocol": "https",
+          "direction": "egress",
+          "operations": {
+            "create_response": {
+              "fields": {
+                "type": "object",
+                "required": [
+                  "model",
+                  "input"
+                ],
+                "properties": {
+                  "model": {
+                    "type": "string"
+                  },
+                  "instructions": {
+                    "type": "string"
+                  },
+                  "input": {
+                    "type": "array",
+                    "items": {
+                      "opaque": true
+                    }
+                  },
+                  "tools": {
+                    "type": "array",
+                    "items": {
+                      "opaque": true
+                    }
+                  },
+                  "text_format": {
+                    "opaque": true
+                  },
+                  "max_output_tokens": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "reasoning": {
+                    "opaque": true
+                  },
+                  "store": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "response": {
+                "type": "object",
+                "properties": {
+                  "output": {
+                    "type": "array",
+                    "items": {
+                      "opaque": true
+                    }
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "usage": {
+                    "type": "object",
+                    "properties": {
+                      "input_tokens": {
+                        "type": "integer"
+                      },
+                      "input_tokens_details": {
+                        "type": "object",
+                        "properties": {
+                          "cached_tokens": {
+                            "type": "integer"
+                          }
+                        }
+                      },
+                      "output_tokens": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              },
+              "https": {
+                "method": "POST",
+                "path": "/v1/responses",
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "fields": {
+                  "model": {
+                    "in": "json",
+                    "at": "/model"
+                  },
+                  "instructions": {
+                    "in": "json",
+                    "at": "/instructions"
+                  },
+                  "input": {
+                    "in": "json",
+                    "at": "/input"
+                  },
+                  "tools": {
+                    "in": "json",
+                    "at": "/tools"
+                  },
+                  "text_format": {
+                    "in": "json",
+                    "at": "/text/format"
+                  },
+                  "max_output_tokens": {
+                    "in": "json",
+                    "at": "/max_output_tokens"
+                  },
+                  "reasoning": {
+                    "in": "json",
+                    "at": "/reasoning"
+                  },
+                  "store": {
+                    "in": "json",
+                    "at": "/store"
+                  }
+                },
+                "response": {
+                  "output": {
+                    "from": "json",
+                    "at": "/output"
+                  },
+                  "model": {
+                    "from": "json",
+                    "at": "/model"
+                  },
+                  "usage": {
+                    "from": "json",
+                    "at": "/usage"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operations": [
+          "create_response"
+        ]
+      }
+    ]
+  }
+}
