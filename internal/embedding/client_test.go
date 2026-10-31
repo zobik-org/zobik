@@ -19,7 +19,7 @@ import (
 const model = `{"entry":"embeddings","model":"nomic-embed-text","document_prefix":"search_document: ","query_prefix":"search_query: ","max_text_size":8192}`
 
 // executor reaches an entry without credential nor rate.
-var executor = &egress.Executor{HTTP: egress.HTTPClient(), Rates: func(string) (*egress.Table, bool) { return nil, false }}
+var executor = &egress.Executor{HTTP: egress.HTTPClient(nil), Rates: func(string) (*egress.Table, bool) { return nil, false }}
 
 func values(target string) map[string]json.RawMessage {
 	return map[string]json.RawMessage{
@@ -193,7 +193,7 @@ func TestGenerateThroughTheEntry(t *testing.T) {
 		return map[string]json.RawMessage{"embedding_model": json.RawMessage(model), "egress_registry": raw}
 	}
 	x := &egress.Executor{
-		HTTP:       egress.HTTPClient(),
+		HTTP:       egress.HTTPClient(nil),
 		Credential: func(context.Context, string) ([]byte, error) { return []byte("k"), nil },
 		Rates:      func(string) (*egress.Table, bool) { return nil, false },
 	}

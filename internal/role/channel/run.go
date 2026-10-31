@@ -122,7 +122,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 		rt: rt, js: js, audience: o.Audience, topic: topic,
 		claimant: claim.New(rt.ID, rt.Credential, js, nc, topic),
 		context:  contextv1.NewContextStoreClient(conn),
-		egress:   &egress.Executor{HTTP: egress.HTTPClient(), Credential: secretsClient.Resolve, Rates: egress.WatchRates(ctx, js).Table},
+		egress:   &egress.Executor{HTTP: egress.HTTPClient(nil), Credential: secretsClient.Resolve, Rates: egress.WatchRates(ctx, js).Table},
 		roots:    store, open: open, closed: closed,
 		byEntry: map[string]string{}, byDelivery: map[string]string{},
 		queries: map[string]*query{}, windows: map[string]time.Duration{},
