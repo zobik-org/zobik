@@ -64,6 +64,9 @@ type ProvisionRequest struct {
 	Topic        string    `json:"topic"`
 	Blueprint    Blueprint `json:"blueprint"`
 	SidecarImage string    `json:"sidecar_image"`
+	// Registry is the address the engine pulls the artifact from, the link's on
+	// 127.0.0.1 (implementation §6, The tenant CA, the link and the join code).
+	Registry string `json:"registry"`
 }
 
 // Node is what an act brought up.
@@ -142,6 +145,10 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	if b.ArtifactRef == "" || b.CapabilityText == "" {
 		return nil, refuse(codeRequestInvalid, "the blueprint needs artifact_ref and capability_text")
 	}
+	if !IsDigest(b.ArtifactRef) {
+		return nil, refuse(codeRequestInvalid, "artifact_ref %q is not a digest", b.ArtifactRef)
+	}
+	artifact := PullRef(req.Registry, b.ArtifactRef)
 	memoryMB, slots, ifaces, err := requires(b.Requires)
 	if err != nil {
 		return nil, err
@@ -183,12 +190,13 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 		return nil, refuse(codeEmbeddingUnavailable, "%v", err)
 	}
 
-	for _, img := range []string{b.ArtifactRef, req.SidecarImage} {
+	// The engine verifies the artifact it pulls by digest (implementation §1.2.16).
+	for _, img := range []string{artifact, req.SidecarImage} {
 		if err := e.EnsureImage(ctx, img); err != nil {
 			return nil, fmt.Errorf("deploy: image %s: %w", img, err)
 		}
 	}
-	img, err := e.InspectImage(ctx, b.ArtifactRef)
+	img, err := e.InspectImage(ctx, artifact)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +335,7 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	err = e.EnsureRunning(ctx, Spec{
 		Name:     node.Logic,
 		Labels:   logicLabels,
-		Image:    b.ArtifactRef,
+		Image:    artifact,
 		Mounts:   []mount.Mount{{Type: mount.TypeVolume, Source: node.Shared, Target: sidecar.SharedDir}},
 		User:     uid,
 		Memory:   memoryMB << 20,

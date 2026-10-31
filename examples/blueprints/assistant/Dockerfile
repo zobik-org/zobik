@@ -1,7 +1,9 @@
 # The assistant blueprint's Logic Container, on the base image, with LangGraph
 # and the OpenAI variant's model adapter.
-# Build from the repository root, after the base image:
-#   docker build -f examples/blueprints/assistant/Dockerfile -t zobik-assistant:dev .
+# Build from the repository root, on the base image zobik init seeded in the
+# tenant's registry (implementation §1.2.13):
+#   docker build -f examples/blueprints/assistant/Dockerfile -t zobik-assistant:dev \
+#     --build-arg BASE=$(zobik base-image) .
 ARG BASE=zobik-python:dev
 FROM ${BASE}
 COPY bundles/forge/openai/requirements.txt /tmp/requirements.txt

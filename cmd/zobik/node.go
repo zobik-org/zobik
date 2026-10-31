@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -24,6 +23,27 @@ import (
 // container engine's socket.
 func init() {
 	devCommands["node"] = nodeCmd
+	devCommands["base-image"] = baseImageCmd
+}
+
+// zobik base-image prints the reference the engine pulls the tenant's base
+// image by, through the link: the BASE a blueprint's Dockerfile is built on.
+func baseImageCmd(_ context.Context, args []string) error {
+	fs := flag.NewFlagSet("base-image", flag.ContinueOnError)
+	var n networkFlags
+	n.register(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := n.resolve(); err != nil {
+		return err
+	}
+	ref, err := deploy.BaseRef(n.dir)
+	if err != nil {
+		return err
+	}
+	fmt.Println(ref)
+	return nil
 }
 
 const provisionPath = "/run/zobik/provision.json"
@@ -64,15 +84,18 @@ func nodeCmd(ctx context.Context, args []string) error {
 		return err
 	}
 	defer e.Close()
-	// Without a registry, an image the engine has stands for its digest.
-	if !strings.HasPrefix(b.ArtifactRef, "sha256:") {
-		img, err := e.InspectImage(ctx, b.ArtifactRef)
-		if err != nil {
+	// Until the Catalog registers it, an image the engine has is pushed to the
+	// registry with the tag the act of registration puts (implementation §1.2.16).
+	if !deploy.IsDigest(b.ArtifactRef) {
+		if b.ArtifactRef, err = deploy.PushImage(ctx, e, n.dir, n.network, image, b.ArtifactRef, deploy.TagEntry); err != nil {
 			return fmt.Errorf("artifact_ref: %w", err)
 		}
-		b.ArtifactRef = img.ID
 	}
-	req, err := json.Marshal(deploy.ProvisionRequest{Network: n.network, Topic: *topic, Blueprint: b, SidecarImage: *sidecarImage})
+	registry, err := deploy.RegistryAddr(n.dir)
+	if err != nil {
+		return err
+	}
+	req, err := json.Marshal(deploy.ProvisionRequest{Network: n.network, Topic: *topic, Blueprint: b, SidecarImage: *sidecarImage, Registry: registry})
 	if err != nil {
 		return err
 	}

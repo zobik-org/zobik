@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"os"
 	"path"
 	"slices"
 	"strings"
@@ -163,6 +164,56 @@ func (e *Engine) EnsureImage(ctx context.Context, ref string) error {
 	return resp.Wait(ctx)
 }
 
+// SaveImage writes ref, as the engine exports it, to a temporary file; done
+// removes it.
+func (e *Engine) SaveImage(ctx context.Context, ref string) (f *os.File, done func(), err error) {
+	f, err = os.CreateTemp("", "zobik-image-*.tar")
+	if err != nil {
+		return nil, nil, err
+	}
+	done = func() {
+		f.Close()
+		os.Remove(f.Name())
+	}
+	saved, err := e.c.ImageSave(ctx, []string{ref})
+	if err == nil {
+		_, err = io.Copy(f, saved)
+		saved.Close()
+	}
+	if err == nil {
+		_, err = f.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		done()
+		return nil, nil, err
+	}
+	return f, done, nil
+}
+
+// Blob is a file too large to hold in memory, copied into a container.
+type Blob struct {
+	Path    string
+	Size    int64
+	Content io.Reader
+}
+
+// archive streams the tar CopyToContainer extracts at /.
+func (b *Blob) archive() io.Reader {
+	r, w := io.Pipe()
+	go func() {
+		tw := tar.NewWriter(w)
+		err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: b.Path[1:], Mode: 0o600, Size: b.Size, ModTime: time.Now()})
+		if err == nil {
+			_, err = io.Copy(tw, b.Content)
+		}
+		if err == nil {
+			err = tw.Close()
+		}
+		w.CloseWithError(err)
+	}()
+	return r
+}
+
 // Image is what the act of provisioning reads of an image the engine has.
 type Image struct {
 	ID     string
@@ -227,6 +278,9 @@ type Spec struct {
 	// Memory is the memory limit in bytes, with no swap beyond it
 	// (implementation §1.2.4); zero is none.
 	Memory int64
+	// Blob is one large file streamed into the container before it starts,
+	// beside Files.
+	Blob *Blob
 	// Confined is the Logic Container's spec (implementation §2.2): no network,
 	// no capability, no privilege escalation, the image's filesystem read-only
 	// with /tmp in memory, and relaunch on any exit (implementation §2.4). It
@@ -331,7 +385,15 @@ func (e *Engine) EnsureShared(ctx context.Context, s Spec) error {
 			return err
 		}
 	}
-	return e.connect(ctx, s.Name, s.Network, []string{s.Alias})
+	return e.connect(ctx, s.Name, s.Network, aliases(s.Alias))
+}
+
+// aliases is the alias list of a container's endpoint: none for an empty alias.
+func aliases(alias string) []string {
+	if alias == "" {
+		return nil
+	}
+	return []string{alias}
 }
 
 // hasLabels says whether the container's configuration carries labels.
@@ -537,10 +599,7 @@ func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
 	if s.Memory > 0 {
 		host.Memory, host.MemorySwap = s.Memory, s.Memory
 	}
-	endpoint := &network.EndpointSettings{}
-	if s.Alias != "" {
-		endpoint.Aliases = []string{s.Alias}
-	}
+	endpoint := &network.EndpointSettings{Aliases: aliases(s.Alias)}
 	networking := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{s.Network: endpoint}}
 	if s.Confined {
 		host.NetworkMode = network.NetworkNone
@@ -573,6 +632,12 @@ func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
 			return "", err
 		}
 		if _, err := e.c.CopyToContainer(ctx, res.ID, client.CopyToContainerOptions{DestinationPath: "/", Content: archive}); err != nil {
+			e.discard(ctx, res.ID)
+			return "", err
+		}
+	}
+	if s.Blob != nil {
+		if _, err := e.c.CopyToContainer(ctx, res.ID, client.CopyToContainerOptions{DestinationPath: "/", Content: s.Blob.archive()}); err != nil {
 			e.discard(ctx, res.ID)
 			return "", err
 		}

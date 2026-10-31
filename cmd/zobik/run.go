@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -15,6 +16,7 @@ import (
 	"zobik.org/zobik/internal/role/contextstore"
 	"zobik.org/zobik/internal/role/secrets"
 	"zobik.org/zobik/internal/role/taskbroker"
+	"zobik.org/zobik/internal/role/tenantlink"
 	"zobik.org/zobik/internal/role/tracingcollector"
 )
 
@@ -22,7 +24,7 @@ import (
 // the role's identifier (implementation §6, The roles of the binary).
 func runCmd(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	name := fs.String("role", "", "the role: config, task_broker, context, channel or tracing_collector")
+	name := fs.String("role", "", "the role: config, task_broker, context, channel, tracing_collector, secrets or tenant_link")
 	audience := fs.String("audience", "", "the audience a channel serves: operator or user")
 	storeSize := fs.Int64("store-size", 0, "context: the ceiling of the content volume, in bytes (context_store_size)")
 	traceSize := fs.Int64("trace-size", 0, "context: the ceiling of one trace, in bytes (context_trace_size)")
@@ -32,6 +34,15 @@ func runCmd(ctx context.Context, args []string) error {
 	}
 	var body role.Body
 	switch *name {
+	case "tenant_link":
+		// It runs without the Bus (implementation §6, The roles of the binary).
+		ca, err := os.ReadFile(deploy.LinkCAPath)
+		if err != nil {
+			return err
+		}
+		return tenantlink.Run(ctx, tenantlink.Options{
+			Listen: ":" + deploy.LinkPort, Registry: deploy.RegistryAlias + ":" + deploy.RegistryPort, CA: ca,
+		})
 	case "config":
 		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
 			return config.Run(ctx, rt, nc, config.Options{ContextAddr: role.AddrContext})

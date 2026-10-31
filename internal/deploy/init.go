@@ -27,6 +27,9 @@ type Options struct {
 	Password []byte
 	// Image is the zobik image the roles and the ephemeral acts run.
 	Image string
+	// BaseImage is the Logic Container base image zobik init seeds in the
+	// tenant's registry, as the engine has it (implementation §1.2.13).
+	BaseImage string
 	// Scopes are the roles the account issues for.
 	Scopes []bus.Scope
 	// Tenant names a tenant on this host for the network to join; empty creates
@@ -132,6 +135,12 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 
 	// The tenant-wide pieces (implementation §6, Installation and zobik init).
 	if err := ensureTracing(ctx, e, n, t, ca, tdir); err != nil {
+		return err
+	}
+	if err := ensureRegistry(ctx, e, n, t, ca, tdir, o.Image); err != nil {
+		return err
+	}
+	if err := seedBase(ctx, e, n, o.Image, o.BaseImage, tdir, tenantCA); err != nil {
 		return err
 	}
 	return startRoles(ctx, e, n, o.Dir, o.Image)

@@ -10,11 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"github.com/nats-io/jwt/v2"
@@ -36,13 +38,15 @@ import (
 const testBase = "alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8"
 
 type provisionFixture struct {
-	e       *Engine
-	js      jetstream.JetStream
-	iss     *Issuer
-	n       names
-	logic   string // an image that declares its NRI version and stays up
-	unnamed string // one that declares none
-	signer  string // the node scope's signing key
+	e        *Engine
+	js       jetstream.JetStream
+	iss      *Issuer
+	n        names
+	registry string // the address the engine pulls the artifacts from
+	logic    string // an artifact that declares its NRI version and stays up
+	sidecar  string // the image of the same, which the engine has
+	unnamed  string // an artifact that declares none
+	signer   string // the node scope's signing key
 }
 
 func newProvisionFixture(t *testing.T, ctx context.Context) *provisionFixture {
@@ -66,8 +70,10 @@ func newProvisionFixture(t *testing.T, ctx context.Context) *provisionFixture {
 	if err := e.EnsureImage(ctx, testBase); err != nil {
 		t.Fatal(err)
 	}
-	f.logic = f.image(t, ctx, "LABEL "+LabelNRIVersion+"=1.0", `CMD ["sleep", "3600"]`)
-	f.unnamed = f.image(t, ctx, `CMD ["sleep", "3600"]`)
+	f.registry = testRegistry(t, ctx, e)
+	f.sidecar = f.image(t, ctx, "LABEL "+LabelNRIVersion+"=1.0", `CMD ["sleep", "3600"]`)
+	f.logic = f.push(t, ctx, f.sidecar)
+	f.unnamed = f.artifact(t, ctx, `CMD ["sleep", "3600"]`)
 
 	fake := embeddingtest.NewServer(t)
 	f.js = jetStream(t)
@@ -107,6 +113,68 @@ func newProvisionFixture(t *testing.T, ctx context.Context) *provisionFixture {
 		Egress: &egress.Executor{HTTP: egress.HTTPClient(nil), Rates: func(string) (*egress.Table, bool) { return nil, false }},
 	}
 	return f
+}
+
+// artifact commits testBase with changes and pushes it to the test's registry,
+// and returns its digest.
+func (f *provisionFixture) artifact(t *testing.T, ctx context.Context, changes ...string) string {
+	t.Helper()
+	return f.push(t, ctx, f.image(t, ctx, changes...))
+}
+
+// push pushes an image the engine has to the test's registry, as the console
+// does through its ephemeral container, and returns its digest.
+func (f *provisionFixture) push(t *testing.T, ctx context.Context, ref string) string {
+	t.Helper()
+	saved, done, err := f.e.SaveImage(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	d, err := Push(ctx, saved.Name(), f.registry, TagEntry, http.DefaultTransport, name.Insecure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// testRegistry runs the registry image in the clear on a port of 127.0.0.1,
+// where the engine pulls from it as it does through the link, and returns its
+// address.
+func testRegistry(t *testing.T, ctx context.Context, e *Engine) string {
+	t.Helper()
+	if err := e.EnsureImage(ctx, RegistryImage); err != nil {
+		t.Fatal(err)
+	}
+	suffix := make([]byte, 4)
+	rand.Read(suffix)
+	port := freePort(t)
+	cname := "zobik-test-registry-" + hex.EncodeToString(suffix)
+	t.Cleanup(func() { e.Remove(context.Background(), []string{cname}, nil) })
+	config := `{"distSpecVersion":"1.1.1","storage":{"rootDirectory":"` + registryDataDir + `"},"http":{"address":"0.0.0.0","port":"` + RegistryPort + `"}}`
+	if err := e.EnsureRunning(ctx, Spec{
+		Name:    cname,
+		Network: "bridge",
+		Image:   RegistryImage,
+		Files:   []File{{Path: registryConfig, Mode: 0o644, Data: []byte(config)}},
+		Publish: map[string]string{RegistryPort + "/tcp": port},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	addr := "127.0.0.1:" + port
+	for deadline := time.Now().Add(time.Minute); ; {
+		resp, err := http.Get("http://" + addr + "/v2/")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return addr
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the test registry does not answer: %v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // image commits testBase with changes, and removes it when the test ends.
@@ -178,7 +246,7 @@ func (f *provisionFixture) request(b Blueprint) ProvisionRequest {
 	if b.CapabilityText == "" {
 		b.CapabilityText = "Repeats the text of the task."
 	}
-	return ProvisionRequest{Network: f.n.network, Topic: "echo", Blueprint: b, SidecarImage: f.logic}
+	return ProvisionRequest{Network: f.n.network, Topic: "echo", Blueprint: b, SidecarImage: f.sidecar, Registry: f.registry}
 }
 
 // The act brings up a node with everything architecture §3.13.1 enumerates,
@@ -327,12 +395,13 @@ func TestProvisionRefused(t *testing.T) {
 	}{
 		{"an egress slot no entry implements", Blueprint{Requires: map[string]json.RawMessage{"egress_required": json.RawMessage(`[{"name":"api","interface":` + iface + `,"operations":["read"]}]`)}}, codeEgressSlotUnbound},
 		{"a malformed egress slot", Blueprint{Requires: map[string]json.RawMessage{"egress_required": json.RawMessage(`[{"name":"model"}]`)}}, codeRequestInvalid},
+		{"an artifact_ref that is not a digest", Blueprint{ArtifactRef: f.sidecar[len("sha256:"):]}, codeRequestInvalid},
 		{"an unknown precondition", Blueprint{Requires: map[string]json.RawMessage{"gpu_required": json.RawMessage(`1`)}}, codeRequestInvalid},
-		{"an image that declares a volume", Blueprint{ArtifactRef: f.image(t, ctx, "LABEL "+LabelNRIVersion+"=1.0", "VOLUME /data")}, codeRequestInvalid},
+		{"an image that declares a volume", Blueprint{ArtifactRef: f.artifact(t, ctx, "LABEL "+LabelNRIVersion+"=1.0", "VOLUME /data")}, codeRequestInvalid},
 		{"memory under the engine's limit", Blueprint{Requires: map[string]json.RawMessage{"memory_required": json.RawMessage(`1`)}}, codeRequestInvalid},
 		{"an image without its NRI version", Blueprint{ArtifactRef: f.unnamed}, codeRuntimeUnsupported},
-		{"an image of a minor the sidecar does not speak", Blueprint{ArtifactRef: f.image(t, ctx, "LABEL "+LabelNRIVersion+"=1.1", `CMD ["sleep", "3600"]`)}, codeRuntimeUnsupported},
-		{"an image of another major", Blueprint{ArtifactRef: f.image(t, ctx, "LABEL "+LabelNRIVersion+"=2.0", `CMD ["sleep", "3600"]`)}, codeRuntimeUnsupported},
+		{"an image of a minor the sidecar does not speak", Blueprint{ArtifactRef: f.artifact(t, ctx, "LABEL "+LabelNRIVersion+"=1.1", `CMD ["sleep", "3600"]`)}, codeRuntimeUnsupported},
+		{"an image of another major", Blueprint{ArtifactRef: f.artifact(t, ctx, "LABEL "+LabelNRIVersion+"=2.0", `CMD ["sleep", "3600"]`)}, codeRuntimeUnsupported},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
