@@ -51,10 +51,11 @@ type factData struct {
 }
 
 type metrics struct {
-	TokensIn   int64   `json:"tokens_in"`
-	TokensOut  int64   `json:"tokens_out"`
-	Cost       float64 `json:"cost"`
-	DurationMs int64   `json:"duration_ms"`
+	TokensIn      int64   `json:"tokens_in"`
+	TokensOut     int64   `json:"tokens_out"`
+	Cost          float64 `json:"cost"`
+	BillingErrors int64   `json:"billing_errors,omitempty"`
+	DurationMs    int64   `json:"duration_ms"`
 }
 
 // newFact reads an event as the role keeps it, or returns false if it carries

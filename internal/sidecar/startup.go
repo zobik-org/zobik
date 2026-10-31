@@ -36,6 +36,9 @@ type Startup struct {
 	// NRIVersion is the io.zobik.nri.version label of the Logic Container's
 	// image (implementation §3, The interface version).
 	NRIVersion string `json:"nri_version"`
+	// TenantCA is the tenant CA's certificate, in PEM, which the https adapter
+	// trusts besides the system CAs (implementation §1.2.12).
+	TenantCA string `json:"tenant_ca,omitempty"`
 }
 
 // LoadStartup reads the startup configuration at path.

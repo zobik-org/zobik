@@ -4,11 +4,24 @@ package signing
 // no object expires. A verifier ignores the fields it does not know (implementation §9.3),
 // which encoding/json already does.
 
-// Grant associates a blueprint slot with a registry entry.
-type Grant struct {
+// Association associates a blueprint slot with a registry entry: what a
+// node_provision names (implementation §9.2).
+type Association struct {
 	Slot  string `json:"slot"`
 	Entry string `json:"entry"`
 }
+
+// Grant is a slot's association in the capability credential, with the digest
+// of the slot's interface, which the Integration Sidecar compares with the
+// entry's (architecture §3.16.3, §3.16.4).
+type Grant struct {
+	Slot      string `json:"slot"`
+	Entry     string `json:"entry"`
+	Interface string `json:"interface"`
+}
+
+// Association is the grant's slot and entry.
+func (g Grant) Association() Association { return Association{Slot: g.Slot, Entry: g.Entry} }
 
 // AttemptWindow has the shape of the act of registration (implementation §1.2.11).
 // A nil limit is no limit, and a nil FinalRound is true.
@@ -57,10 +70,10 @@ type OperatorProof struct {
 	DataDigest    string `json:"data_digest"`
 	PayloadDigest string `json:"payload_digest,omitempty"`
 	// Only in a node_provision.
-	ArtifactRef     string  `json:"artifact_ref,omitempty"`
-	Audience        string  `json:"audience,omitempty"`
-	EntryTopic      string  `json:"entry_topic,omitempty"`
-	ProvisionGrants []Grant `json:"provision_grants,omitempty"`
+	ArtifactRef     string        `json:"artifact_ref,omitempty"`
+	Audience        string        `json:"audience,omitempty"`
+	EntryTopic      string        `json:"entry_topic,omitempty"`
+	ProvisionGrants []Association `json:"provision_grants,omitempty"`
 }
 
 // ScopeToken is typ scope_token.

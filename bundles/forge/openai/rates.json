@@ -1,0 +1,12 @@
+{
+  "as_of": "2026-10-29",
+  "max_per_call": 1.0,
+  "rates": {
+    "gpt-5": {"input": 0.00000125, "cached_input": 0.000000125, "output": 0.00001},
+    "gpt-5-2025-08-07": {"input": 0.00000125, "cached_input": 0.000000125, "output": 0.00001},
+    "gpt-5-mini": {"input": 0.00000025, "cached_input": 0.000000025, "output": 0.000002},
+    "gpt-5-mini-2025-08-07": {"input": 0.00000025, "cached_input": 0.000000025, "output": 0.000002},
+    "gpt-5-nano": {"input": 0.00000005, "cached_input": 0.000000005, "output": 0.0000004},
+    "gpt-5-nano-2025-08-07": {"input": 0.00000005, "cached_input": 0.000000005, "output": 0.0000004}
+  }
+}

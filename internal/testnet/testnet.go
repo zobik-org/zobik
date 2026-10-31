@@ -27,10 +27,12 @@ import (
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role"
 	"zobik.org/zobik/internal/role/contextstore"
+	"zobik.org/zobik/internal/role/secrets"
 	"zobik.org/zobik/internal/rpcauth"
 	"zobik.org/zobik/internal/sidecar"
 	"zobik.org/zobik/internal/signing"
 	contextv1 "zobik.org/zobik/proto/zobik/context/v1"
+	secretsv1 "zobik.org/zobik/proto/zobik/secrets/v1"
 )
 
 // Net is a network inside a test.
@@ -257,6 +259,44 @@ func (n *Net) startContextStore() {
 	go g.Serve(ln)
 	n.T.Cleanup(g.Stop)
 	n.ContextAddr = ln.Addr().String()
+}
+
+// StartSecrets serves the secrets role over values, with the role's material,
+// and returns where it listens (implementation §1.2.18).
+func (n *Net) StartSecrets(values map[string][]byte) string {
+	n.T.Helper()
+	dir := n.dirs["secrets"]
+	key, err := secrets.NewKey()
+	if err != nil {
+		n.T.Fatal(err)
+	}
+	sealed, err := secrets.Seal(key, values)
+	if err != nil {
+		n.T.Fatal(err)
+	}
+	for name, data := range map[string][]byte{secrets.FileKey: []byte(key), secrets.FileStore: sealed, secrets.FileEntryNode: []byte(n.ID("channel_user"))} {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			n.T.Fatal(err)
+		}
+	}
+	srv := &secrets.Server{Root: n.RootPub, Dir: dir, Head: func(ctx context.Context) (map[string]json.RawMessage, error) {
+		head, _, err := globalconfig.Head(ctx, n.Console)
+		if err != nil {
+			return nil, err
+		}
+		return head.Values, nil
+	}}
+	g := grpc.NewServer(grpc.Creds(&rpcauth.Server{Account: func() (*jwt.AccountClaims, error) {
+		return rpcauth.AccountFromJWT(n.Account.JWT, n.RootPub)
+	}}))
+	secretsv1.RegisterSecretsServer(g, srv)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		n.T.Fatal(err)
+	}
+	go g.Serve(ln)
+	n.T.Cleanup(g.Stop)
+	return ln.Addr().String()
 }
 
 // ContextClient connects to the Context Store as the identity kp under scope.

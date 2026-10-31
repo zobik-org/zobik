@@ -18,6 +18,9 @@ import (
 
 const model = `{"entry":"embeddings","model":"nomic-embed-text","document_prefix":"search_document: ","query_prefix":"search_query: ","max_text_size":8192}`
 
+// executor reaches an entry without credential nor rate.
+var executor = &egress.Executor{HTTP: egress.HTTPClient(nil), Rates: func(string) (*egress.Table, bool) { return nil, false }}
+
 func values(target string) map[string]json.RawMessage {
 	return map[string]json.RawMessage{
 		"embedding_model": json.RawMessage(model),
@@ -81,14 +84,14 @@ func TestGenerate(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	q, err := s.Query(ctx, embedding.Client(), "echo this")
+	q, err := s.Query(ctx, executor, "echo this")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(q) != 2 || q[0] != 0.6 || q[1] != 0.8 {
 		t.Errorf("query vector %v, want it normalized to [0.6 0.8]", q)
 	}
-	d, err := s.Document(ctx, embedding.Client(), "echoes text")
+	d, err := s.Document(ctx, executor, "echoes text")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,8 +100,8 @@ func TestGenerate(t *testing.T) {
 	}
 
 	// A text without a vector set gets a deterministic one.
-	a, _ := s.Query(ctx, embedding.Client(), "anything")
-	b, _ := s.Query(ctx, embedding.Client(), "anything")
+	a, _ := s.Query(ctx, executor, "anything")
+	b, _ := s.Query(ctx, executor, "anything")
 	if sim, _ := embedding.Similarity(a, b); math.Abs(sim-1) > 1e-6 {
 		t.Errorf("the same text gave vectors at similarity %v", sim)
 	}
@@ -109,7 +112,7 @@ func TestGenerate(t *testing.T) {
 	if s.FitsQuery(long) || !s.FitsQuery(long[1:]) {
 		t.Error("FitsQuery does not count the prefix")
 	}
-	if _, err := s.Query(ctx, embedding.Client(), long); !errors.Is(err, embedding.ErrTooLong) {
+	if _, err := s.Query(ctx, executor, long); !errors.Is(err, embedding.ErrTooLong) {
 		t.Errorf("a text too long: %v", err)
 	}
 
@@ -127,7 +130,7 @@ func TestGenerateUnderPath(t *testing.T) {
 	}))
 	defer srv.Close()
 	s, _ := embedding.Resolve(values(srv.URL + "/openai"))
-	if _, err := s.Query(context.Background(), embedding.Client(), "x"); err != nil {
+	if _, err := s.Query(context.Background(), executor, "x"); err != nil {
 		t.Fatal(err)
 	}
 	if path != "/openai/v1/embeddings" {
@@ -142,13 +145,13 @@ func TestGenerateFailures(t *testing.T) {
 		want   string
 	}{
 		"an error status":  {http.StatusServiceUnavailable, `loading model`, "503"},
-		"not JSON":         {http.StatusOK, `<html>`, "response"},
+		"not JSON":         {http.StatusOK, `<html>`, "no single embedding"},
 		"no embedding":     {http.StatusOK, `{"data":[]}`, "no single embedding"},
 		"two embeddings":   {http.StatusOK, `{"data":[{"embedding":[1]},{"embedding":[1]}]}`, "no single embedding"},
 		"a zero vector":    {http.StatusOK, `{"data":[{"embedding":[0,0]}]}`, "no direction"},
 		"a redirect":       {http.StatusFound, ``, "302"},
 		"an empty vector":  {http.StatusOK, `{"data":[{"embedding":[]}]}`, "no single embedding"},
-		"a string element": {http.StatusOK, `{"data":[{"embedding":["1"]}]}`, "response"},
+		"a string element": {http.StatusOK, `{"data":[{"embedding":["1"]}]}`, "not a number"},
 	}
 	for name, c := range cases {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +162,7 @@ func TestGenerateFailures(t *testing.T) {
 			w.Write([]byte(c.body))
 		}))
 		s, _ := embedding.Resolve(values(srv.URL))
-		_, err := s.Query(context.Background(), embedding.Client(), "x")
+		_, err := s.Query(context.Background(), executor, "x")
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: got %v, want %q", name, err, c.want)
 		}
@@ -168,5 +171,41 @@ func TestGenerateFailures(t *testing.T) {
 
 	if _, err := embedding.Resolve(values("ftp://llama")); err == nil || !strings.Contains(err.Error(), "http or https") {
 		t.Errorf("an ftp target: %v", err)
+	}
+}
+
+// The embeddings go through the entry's rules and with its credential
+// (architecture §3.16.3).
+func TestGenerateThroughTheEntry(t *testing.T) {
+	var auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		w.Write([]byte(`{"data":[{"embedding":[1,0]}]}`))
+	}))
+	defer srv.Close()
+	entry := func(rules string) map[string]json.RawMessage {
+		var e map[string]any
+		_ = json.Unmarshal(egress.EmbeddingsEntry(srv.URL), &e)
+		e["credential_handle"] = "embeddings_key"
+		e["credential_placement"] = map[string]string{"header": "Authorization", "scheme": "Bearer"}
+		e["rules"] = json.RawMessage(rules)
+		raw, _ := json.Marshal(map[string]any{"embeddings": e})
+		return map[string]json.RawMessage{"embedding_model": json.RawMessage(model), "egress_registry": raw}
+	}
+	x := &egress.Executor{
+		HTTP:       egress.HTTPClient(nil),
+		Credential: func(context.Context, string) ([]byte, error) { return []byte("k"), nil },
+		Rates:      func(string) (*egress.Table, bool) { return nil, false },
+	}
+	s, err := embedding.Resolve(entry(`[{"then":"allow"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Query(context.Background(), x, "x"); err != nil || auth != "Bearer k" {
+		t.Errorf("allowed: %v, with %q", err, auth)
+	}
+	s, _ = embedding.Resolve(entry(`[{"when":"model == \"nomic-embed-text\"","then":"deny"},{"then":"allow"}]`))
+	if _, err := s.Query(context.Background(), x, "x"); err == nil || !strings.Contains(err.Error(), "deny") {
+		t.Errorf("denied: %v", err)
 	}
 }

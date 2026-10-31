@@ -103,6 +103,8 @@ func newProvisionFixture(t *testing.T, ctx context.Context) *provisionFixture {
 		Sign: func(typ signing.Type, claims any, signer string) (string, error) {
 			return signing.Sign(spawner, typ, claims, signer)
 		},
+		// The test's embeddings endpoint takes no credential and costs nothing.
+		Egress: &egress.Executor{HTTP: egress.HTTPClient(nil), Rates: func(string) (*egress.Table, bool) { return nil, false }},
 	}
 	return f
 }
@@ -323,7 +325,8 @@ func TestProvisionRefused(t *testing.T) {
 		b    Blueprint
 		code string
 	}{
-		{"an egress slot", Blueprint{Requires: map[string]json.RawMessage{"egress_required": json.RawMessage(`[{"name":"model"}]`)}}, codeEgressSlotUnbound},
+		{"an egress slot no entry implements", Blueprint{Requires: map[string]json.RawMessage{"egress_required": json.RawMessage(`[{"name":"api","interface":` + iface + `,"operations":["read"]}]`)}}, codeEgressSlotUnbound},
+		{"a malformed egress slot", Blueprint{Requires: map[string]json.RawMessage{"egress_required": json.RawMessage(`[{"name":"model"}]`)}}, codeRequestInvalid},
 		{"an unknown precondition", Blueprint{Requires: map[string]json.RawMessage{"gpu_required": json.RawMessage(`1`)}}, codeRequestInvalid},
 		{"an image that declares a volume", Blueprint{ArtifactRef: f.image(t, ctx, "LABEL "+LabelNRIVersion+"=1.0", "VOLUME /data")}, codeRequestInvalid},
 		{"memory under the engine's limit", Blueprint{Requires: map[string]json.RawMessage{"memory_required": json.RawMessage(`1`)}}, codeRequestInvalid},

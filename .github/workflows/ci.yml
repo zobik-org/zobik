@@ -73,6 +73,9 @@ jobs:
       - run: pip install --require-hashes -r sdk/python/requirements.txt
       - run: PYTHONPATH=src python -m unittest discover -s tests
         working-directory: sdk/python
+      - run: pip install --require-hashes -r bundles/forge/openai/requirements.txt
+      - run: PYTHONPATH=../../../sdk/python/src:. python -m unittest discover -s tests
+        working-directory: bundles/forge/openai
 
   e2e:
     runs-on: ubuntu-latest

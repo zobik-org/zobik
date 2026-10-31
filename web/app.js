@@ -317,9 +317,27 @@ function queryText(m) {
 
 function queryBody(m) {
   const d = queryText(m);
+  if (d && d.kind === "gate_approval") return gateBody(d);
   if (d && typeof d.task_text === "string") return el("div", { class: "text" }, d.task_text);
   // A query without task_text shows its data as it arrived (implementation §6).
   return el("pre", {}, JSON.stringify(m.data, null, 2));
+}
+
+// gateBody shows the egress gate by its kind (implementation §6): the call
+// as the Integration Sidecar rendered it, and the rule that asks for it
+// (architecture §3.16.4).
+function gateBody(d) {
+  const det = d.details || {};
+  const call = det.call || {};
+  const rows = [
+    ["Destination", call.target], ["Operation", call.operation], ["Entry", det.entry],
+    ["Rule", det.rule], ["Requested by", det.topic],
+  ];
+  if (call.body_digest) rows.push(["Body", size(call.body_size) + " · " + call.body_digest]);
+  return el("div", { class: "gate" },
+    el("div", { class: "text" }, "A node asks to make this call. It runs only if you approve it."),
+    el("dl", {}, ...rows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, String(v ?? ""))])),
+    el("pre", {}, JSON.stringify(call.fields ?? {}, null, 2)));
 }
 
 function queryState(m) {

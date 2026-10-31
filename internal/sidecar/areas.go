@@ -3,7 +3,6 @@ package sidecar
 import (
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"regexp"
 )
@@ -25,11 +24,11 @@ func (n *node) newArea(taskID string) error {
 	if !areaName.MatchString(taskID) {
 		return fmt.Errorf("the TaskID %q does not name a work area", taskID)
 	}
-	dir := filepath.Join(n.areas, tasksDir, taskID)
-	if err := os.RemoveAll(dir); err != nil {
+	dir := filepath.Join(tasksDir, taskID)
+	if err := n.areas.RemoveAll(dir); err != nil {
 		return err
 	}
-	return os.MkdirAll(dir, 0o700)
+	return n.areas.MkdirAll(dir, 0o700)
 }
 
 // removeArea deletes the work area of a task that closed.
@@ -37,7 +36,7 @@ func (n *node) removeArea(taskID string) {
 	if !areaName.MatchString(taskID) {
 		return
 	}
-	if err := os.RemoveAll(filepath.Join(n.areas, tasksDir, taskID)); err != nil {
+	if err := n.areas.RemoveAll(filepath.Join(tasksDir, taskID)); err != nil {
 		log.Printf("sidecar: deleting the work area of %s: %v", taskID, err)
 	}
 }
@@ -46,7 +45,7 @@ func (n *node) removeArea(taskID string) {
 // cut and at startup (implementation §3).
 func (n *node) clearAreas() {
 	for _, d := range []string{tasksDir, inboundDir} {
-		if err := os.RemoveAll(filepath.Join(n.areas, d)); err != nil {
+		if err := n.areas.RemoveAll(d); err != nil {
 			log.Printf("sidecar: deleting %s: %v", d, err)
 		}
 	}

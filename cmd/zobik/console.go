@@ -130,6 +130,14 @@ func newConsole(n networkFlags, idle time.Duration) (*console.Service, error) {
 			defer e.Close()
 			return deploy.WriteSecret(ctx, e, dir, n.network, image, handle, value)
 		},
+		WriteRates: func(ctx context.Context, creds []byte, name string, table []byte) error {
+			e, err := deploy.NewEngine(ctx)
+			if err != nil {
+				return err
+			}
+			defer e.Close()
+			return deploy.WriteRates(ctx, e, dir, n.network, image, creds, name, table)
+		},
 	}), nil
 }
 

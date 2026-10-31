@@ -2,7 +2,11 @@ package tracingcollector
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
+	"net"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -15,7 +19,7 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 
 	"zobik.org/zobik/internal/bus"
 )
@@ -35,11 +39,16 @@ type otlpBackend struct {
 	*otlptrace.Exporter
 }
 
-// Dial is the backend at addr. It goes in plain text: within one host, the
-// backend's alias is assigned only by whoever creates the containers
-// (implementation §6, The off-Bus interfaces).
-func Dial(ctx context.Context, addr string) (Backend, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+// Dial is the backend at host:port, over TLS against the tenant CA, given in
+// PEM: the backend is a tenant-wide piece, reached by its fixed name
+// (implementation §6, The tenant CA, the link and the join code).
+func Dial(ctx context.Context, host, port string, tenantCA []byte) (Backend, error) {
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(tenantCA) {
+		return nil, errors.New("tracing_collector: the tenant CA holds no certificate")
+	}
+	tc := credentials.NewTLS(&tls.Config{RootCAs: pool, ServerName: host, MinVersion: tls.VersionTLS13})
+	conn, err := grpc.NewClient(net.JoinHostPort(host, port), grpc.WithTransportCredentials(tc))
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +162,7 @@ func (s *span) attributes() []attribute.KeyValue {
 				attribute.Int64("zobik.metrics.tokens_in", m.TokensIn),
 				attribute.Int64("zobik.metrics.tokens_out", m.TokensOut),
 				attribute.Float64("zobik.metrics.cost", m.Cost),
+				attribute.Int64("zobik.metrics.billing_errors", m.BillingErrors),
 				attribute.Int64("zobik.metrics.duration_ms", m.DurationMs))
 		}
 	}

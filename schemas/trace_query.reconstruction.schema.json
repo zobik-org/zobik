@@ -65,6 +65,7 @@
               "tokens_in": {"type": "integer", "minimum": 0},
               "tokens_out": {"type": "integer", "minimum": 0},
               "cost": {"type": "number", "minimum": 0},
+              "billing_errors": {"type": "integer", "minimum": 0},
               "duration_ms": {"type": "integer", "minimum": 0}
             }
           },
