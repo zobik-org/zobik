@@ -5,7 +5,7 @@ import warnings
 
 from zobik.nri.v1 import nri_pb2 as zobik_dot_nri_dot_v1_dot_nri__pb2
 
-GRPC_GENERATED_VERSION = '1.84.0'
+GRPC_GENERATED_VERSION = '1.84.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
