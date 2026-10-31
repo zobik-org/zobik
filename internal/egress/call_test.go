@@ -22,7 +22,7 @@ var table = &Table{AsOf: "2026-10-01", MaxPerCall: 2.0, Rates: map[string]map[st
 
 func executor(credential string) *Executor {
 	return &Executor{
-		HTTP:       HTTPClient(),
+		HTTP:       HTTPClient(nil),
 		Credential: func(context.Context, string) ([]byte, error) { return []byte(credential), nil },
 		Rates: func(name string) (*Table, bool) {
 			if name == "openai" {

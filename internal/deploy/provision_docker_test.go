@@ -104,7 +104,7 @@ func newProvisionFixture(t *testing.T, ctx context.Context) *provisionFixture {
 			return signing.Sign(spawner, typ, claims, signer)
 		},
 		// The test's embeddings endpoint takes no credential and costs nothing.
-		Egress: &egress.Executor{HTTP: egress.HTTPClient(), Rates: func(string) (*egress.Table, bool) { return nil, false }},
+		Egress: &egress.Executor{HTTP: egress.HTTPClient(nil), Rates: func(string) (*egress.Table, bool) { return nil, false }},
 	}
 	return f
 }

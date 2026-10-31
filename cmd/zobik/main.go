@@ -72,25 +72,27 @@ func run(ctx context.Context, args []string) error {
 	}
 }
 
-// networkFlags are the flags that select a network and its directory on the host.
+// networkFlags are the flags that select a network and the console's home on
+// the host, which holds the network's directory.
 type networkFlags struct {
-	network, dir string
+	network, home string
+	dir           string // the network's directory, set by resolve
 }
 
 func (n *networkFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&n.network, "network", "main", "the network's name")
-	fs.StringVar(&n.dir, "dir", "", "the console's directory for the network (default: the user config directory)")
+	fs.StringVar(&n.home, "home", "", "the console's home, with a directory per network and per tenant (default: zobik in the user config directory)")
 }
 
 func (n *networkFlags) resolve() error {
-	if n.dir != "" {
-		return nil
+	if n.home == "" {
+		base, err := os.UserConfigDir()
+		if err != nil {
+			return err
+		}
+		n.home = filepath.Join(base, "zobik")
 	}
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return err
-	}
-	n.dir = filepath.Join(base, "zobik", n.network)
+	n.dir = deploy.NetworkDir(n.home, n.network)
 	return nil
 }
 

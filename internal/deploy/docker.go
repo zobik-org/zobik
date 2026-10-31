@@ -300,9 +300,9 @@ func (e *Engine) EnsureCurrent(ctx context.Context, s Spec) error {
 
 // EnsureShared is EnsureCurrent for a container that the networks of a tenant
 // share (implementation §6, The Docker network): it also connects it to
-// s.Network with s.Alias. One replaced for its image keeps the ports it
-// published and is connected again to every network it was on, so s.Publish
-// applies only to a new container.
+// s.Network with s.Alias. One replaced for its image or its labels keeps the
+// ports it published and is connected again to every network it was on, so
+// s.Publish applies only to a new container.
 func (e *Engine) EnsureShared(ctx context.Context, s Spec) error {
 	info, err := e.c.ContainerInspect(ctx, s.Name, client.ContainerInspectOptions{})
 	var attached map[string]*network.EndpointSettings
@@ -311,7 +311,7 @@ func (e *Engine) EnsureShared(ctx context.Context, s Spec) error {
 		if err != nil {
 			return err
 		}
-		if info.Container.Image != img.ID {
+		if info.Container.Image != img.ID || !hasLabels(info.Container.Config, s.Labels) {
 			s.Publish = published(info.Container.HostConfig)
 			if info.Container.NetworkSettings != nil {
 				attached = info.Container.NetworkSettings.Networks
@@ -332,6 +332,16 @@ func (e *Engine) EnsureShared(ctx context.Context, s Spec) error {
 		}
 	}
 	return e.connect(ctx, s.Name, s.Network, []string{s.Alias})
+}
+
+// hasLabels says whether the container's configuration carries labels.
+func hasLabels(config *container.Config, labels map[string]string) bool {
+	for k, v := range labels {
+		if config == nil || config.Labels[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // connect connects a container to a Docker network with aliases, unless it is

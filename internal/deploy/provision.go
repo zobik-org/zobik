@@ -49,6 +49,9 @@ type Issuer struct {
 	SigningKey  nkeys.KeyPair
 	// Account is the network's account public key, and Root the root's.
 	Account, Root string
+	// TenantCA is the tenant CA's certificate, which the Integration Sidecar
+	// receives in its startup configuration (implementation §1.2.4).
+	TenantCA string
 	// Egress executes the embeddings' calls, with the credential the secrets
 	// role resolves for the Spawner (implementation §1.2.15, §1.2.18).
 	Egress *egress.Executor
@@ -242,6 +245,7 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 		Credential: credential,
 		Root:       iss.Root,
 		NRIVersion: version.String(),
+		TenantCA:   iss.TenantCA,
 	})
 	if err != nil {
 		return nil, err
