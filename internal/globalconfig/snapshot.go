@@ -101,6 +101,11 @@ func (s *Schema) check(values Values, keys []string) (Values, error) {
 				return nil, &InvalidError{Key: name, Reason: k.Preconditions[i].Message}
 			}
 		}
+		for _, c := range k.checks {
+			if err := c(values); err != nil {
+				return nil, &InvalidError{Key: name, Reason: err.Error()}
+			}
+		}
 	}
 	return values, nil
 }

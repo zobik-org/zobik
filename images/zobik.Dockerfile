@@ -10,5 +10,7 @@ ARG TAGS=
 RUN CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -o /zobik ./cmd/zobik
 
 FROM scratch
+# The system CAs the https adapter trusts (implementation §1.2.12).
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /zobik /zobik
 ENTRYPOINT ["/zobik"]

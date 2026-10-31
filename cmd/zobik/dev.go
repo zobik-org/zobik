@@ -21,6 +21,7 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/deploy"
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/globalconfig"
 )
@@ -234,7 +235,16 @@ func stampEmbedding(ctx context.Context, js jetstream.JetStream, e *bus.Event) e
 	if err != nil {
 		return err
 	}
-	v, err := space.Query(ctx, embedding.Client(), text)
+	// zobik publish has no access to the secrets role: it reaches only an
+	// embedding model whose entry carries no credential.
+	x := &egress.Executor{
+		HTTP: egress.HTTPClient(nil),
+		Credential: func(context.Context, string) ([]byte, error) {
+			return nil, errors.New("zobik publish resolves no credential: stamp task_embedding by hand")
+		},
+		Rates: egress.BucketRates(ctx, js),
+	}
+	v, err := space.Query(ctx, x, text)
 	if err != nil {
 		return err
 	}

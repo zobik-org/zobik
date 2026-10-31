@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"zobik.org/zobik/internal/deploy"
 )
 
 // The Bus: an event published by hand appears in zobik tap.
@@ -46,8 +48,9 @@ func TestBus(t *testing.T) {
 }
 
 type network struct {
-	name, dir, bin string
-	root           string // the repository, where images are built from
+	name, home, bin string
+	dir             string // the network's directory in home
+	root            string // the repository, where images are built from
 }
 
 func newNetwork(t *testing.T, ctx context.Context) *network {
@@ -58,7 +61,8 @@ func newNetwork(t *testing.T, ctx context.Context) *network {
 	}
 	suffix := make([]byte, 4)
 	rand.Read(suffix)
-	z := &network{name: "e2e" + hex.EncodeToString(suffix), dir: t.TempDir(), bin: filepath.Join(t.TempDir(), "zobik"), root: root}
+	name, home := "e2e"+hex.EncodeToString(suffix), t.TempDir()
+	z := &network{name: name, home: home, dir: deploy.NetworkDir(home, name), bin: filepath.Join(t.TempDir(), "zobik"), root: root}
 
 	z.build(t, ctx, "images/zobik.Dockerfile", "zobik:dev", "--build-arg", "TAGS=dev")
 	gobuild := exec.CommandContext(ctx, "go", "build", "-tags", "dev", "-o", z.bin, "./cmd/zobik")
@@ -84,10 +88,10 @@ func (z *network) build(t *testing.T, ctx context.Context, dockerfile, tag strin
 // after the command's words, before the arguments the command parses itself.
 func (z *network) cmd(ctx context.Context, stdin string, args ...string) *exec.Cmd {
 	words := 1
-	if args[0] == "config" || args[0] == "node" {
+	if args[0] == "config" || args[0] == "node" || args[0] == "secret" || args[0] == "rates" {
 		words = 2
 	}
-	full := append(append([]string{}, args[:words]...), "--network", z.name, "--dir", z.dir)
+	full := append(append([]string{}, args[:words]...), "--network", z.name, "--home", z.home)
 	full = append(full, args[words:]...)
 	c := exec.CommandContext(ctx, z.bin, full...)
 	c.Stdin = strings.NewReader(stdin)

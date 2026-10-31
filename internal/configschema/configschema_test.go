@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/globalconfig"
 )
 
@@ -27,6 +28,7 @@ func TestV0(t *testing.T) {
 		"hitl_response_window":          `86400000`,
 		"result_delivery":               `{"audiences":{"user":"acceptance"},"default":"ack"}`,
 		"egress_registry":               `{}`,
+		"cost_unit":                     `"USD"`,
 		"task_similarity_floor":         `0.6`,
 		"default_memory_required":       `256`,
 		"runtime_interface_range":       `{"1":0}`,
@@ -47,8 +49,13 @@ func TestV0(t *testing.T) {
 
 var (
 	model    = `{"entry":"embeddings","model":"nomic-embed-text","document_prefix":"search_document: ","query_prefix":"search_query: ","max_text_size":8192}`
-	registry = `{"embeddings":{"target":"http://llama:8080"}}`
+	registry = at("embeddings", "http://llama:8080")
 )
+
+// at is a registry with the embeddings entry on target, under key.
+func at(key, target string) string {
+	return `{"` + key + `":` + string(egress.EmbeddingsEntry(target)) + `}`
+}
 
 func TestApplyVersioned(t *testing.T) {
 	s, err := Load()
@@ -80,15 +87,19 @@ func TestApplyVersioned(t *testing.T) {
 		{"the vector space without its entry", v0, map[string]string{"embedding_model": model}, "names no egress_registry entry"},
 		{"the entry and the vector space together", v0, map[string]string{"egress_registry": registry, "embedding_model": model}, ""},
 		{"remove the vector space's entry", with(reg, "embedding_model", model), map[string]string{"egress_registry": `{}`}, "names no egress_registry entry"},
-		{"an https target with a path", v0, map[string]string{"egress_registry": `{"e":{"target":"https://api.example.com/openai"}}`}, ""},
-		{"a target without a scheme", v0, map[string]string{"egress_registry": `{"e":{"target":"llama:8080"}}`}, "http or https URL"},
-		{"a target with credentials", v0, map[string]string{"egress_registry": `{"e":{"target":"https://u:p@api.example.com"}}`}, "http or https URL"},
-		{"a target with a query", v0, map[string]string{"egress_registry": `{"e":{"target":"https://api.example.com/?k=v"}}`}, "http or https URL"},
+		{"an https target with a path", v0, map[string]string{"egress_registry": at("e", "https://api.example.com/openai")}, ""},
+		{"a target without a scheme", v0, map[string]string{"egress_registry": at("e", "llama:8080")}, "http or https URL"},
+		{"a target with credentials", v0, map[string]string{"egress_registry": at("e", "https://u:p@api.example.com")}, "http or https URL"},
+		{"a target with a query", v0, map[string]string{"egress_registry": at("e", "https://api.example.com/?k=v")}, "http or https URL"},
 		{"an entry without a target", v0, map[string]string{"egress_registry": `{"e":{}}`}, "required"},
-		{"an IPv6 target", v0, map[string]string{"egress_registry": `{"e":{"target":"http://[::1]:8080"}}`}, ""},
-		{"a target with a space in its host", v0, map[string]string{"egress_registry": `{"e":{"target":"http://ll ama:8080"}}`}, "http or https URL"},
-		{"a target with a port that is no number", v0, map[string]string{"egress_registry": `{"e":{"target":"http://llama:port"}}`}, "http or https URL"},
-		{"a target without a host", v0, map[string]string{"egress_registry": `{"e":{"target":"http://:8080"}}`}, "http or https URL"},
+		{"an entry whose rule does not compile", v0, map[string]string{"egress_registry": strings.Replace(at("e", "http://llama:8080"), `"then":"allow"`, `"when":"price > 5","then":"allow"},{"then":"deny"`, 1)}, "undeclared reference"},
+		{"the vector space on an entry of another interface", with(v0, "egress_registry", strings.Replace(registry, `/v1/embeddings`, `/v2/embeddings`, 1)), map[string]string{"embedding_model": model}, "does not implement the embeddings interface"},
+		{"the vector space on an entry whose rule ends in an audience", with(v0, "egress_registry", strings.Replace(registry, `{"then":"allow"}`, `{"when":"size(input) > 1","then":"operator"},{"then":"allow"}`, 1)), map[string]string{"embedding_model": model}, "ends in the audience operator"},
+		{"a rate_source that is no bucket key", v0, map[string]string{"egress_registry": strings.Replace(at("e", "http://llama:8080"), `"target"`, `"rate_source":"a b","target"`, 1)}, "key of the rates bucket"},
+		{"an IPv6 target", v0, map[string]string{"egress_registry": at("e", "http://[::1]:8080")}, ""},
+		{"a target with a space in its host", v0, map[string]string{"egress_registry": at("e", "http://ll ama:8080")}, "http or https URL"},
+		{"a target with a port that is no number", v0, map[string]string{"egress_registry": at("e", "http://llama:port")}, "http or https URL"},
+		{"a target without a host", v0, map[string]string{"egress_registry": at("e", "http://:8080")}, "http or https URL"},
 		{"the vector space on a head without egress_registry", without(v0, "egress_registry"), map[string]string{"embedding_model": model}, "names no egress_registry entry"},
 	}
 	for _, c := range cases {

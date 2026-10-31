@@ -1,6 +1,8 @@
 package deploy
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nats-io/jwt/v2"
@@ -175,5 +177,27 @@ func TestRevoke(t *testing.T) {
 	}
 	if _, ok := ac.Revocations[pub]; !ok {
 		t.Error("the identity is not revoked")
+	}
+}
+
+// The Entry Node resolves the embedding model's credential, so it waits for the
+// secrets role (implementation §6, The roles of the binary).
+func TestEntryNodeWaitsForSecrets(t *testing.T) {
+	for _, r := range Roles {
+		if r.Unit == "channel_user" && !slices.Contains(r.WaitsFor, unitSecrets) {
+			t.Errorf("channel_user waits for %v", r.WaitsFor)
+		}
+	}
+}
+
+func TestHandleForm(t *testing.T) {
+	for h, want := range map[string]bool{
+		"openai": true, "zobik/listener/a.example": true, "a_b-c.d": true,
+		"": false, "a//b": false, "a/../b": false, "./a": false, "a/": false, "with space": false,
+		strings.Repeat("a", 129): false,
+	} {
+		if handleForm(h) != want {
+			t.Errorf("%q: %v", h, !want)
+		}
 	}
 }

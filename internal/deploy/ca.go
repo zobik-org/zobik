@@ -21,18 +21,22 @@ import (
 	"zobik.org/zobik/internal/console"
 )
 
-// The tenant CA in the console's directory of the network that creates the
-// tenant (implementation §6, The tenant CA, the link and the join code):
+// The tenant CA in the tenant's directory (implementation §6, The tenant CA,
+// the link and the join code):
 //
-//	tenant_ca.pem          the CA's certificate
-//	tenant_ca.sealed       its key, encrypted with the password
+//	tenant_ca.pem          the CA's certificate, which every network of the
+//	                       tenant on the host reads
+//	creator                the network that created the tenant, whose password
+//	                       opens what is sealed
+//	tenant_ca.sealed       the CA's key, encrypted with that password
 //	tracing_client.pem     the console's client certificate for the tracing
 //	                       backend's query (implementation §1.2.17)
-//	tracing_client.sealed  its key, encrypted with the password
+//	tracing_client.sealed  its key, encrypted with that password
 //
 // tenant_ca.sealed is written last: its presence means the rest is complete.
 const (
 	fileCACert          = "tenant_ca.pem"
+	fileCreator         = "creator"
 	fileCAKey           = "tenant_ca.sealed"
 	fileTracingCert     = "tracing_client.pem"
 	fileTracingKey      = "tracing_client.sealed"
@@ -114,9 +118,10 @@ func (a *authority) fingerprint() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// writeAuthority mints the tenant CA and the console's client certificate,
-// and writes them to dir sealed with the password.
-func writeAuthority(dir string, t tenant, password []byte) (*authority, error) {
+// writeAuthority mints the tenant CA and the console's client certificate, and
+// writes them to the tenant's directory tdir sealed with the password of
+// network, which creates the tenant.
+func writeAuthority(tdir string, t tenant, network string, password []byte) (*authority, error) {
 	a, err := mintAuthority(t)
 	if err != nil {
 		return nil, err
@@ -129,22 +134,28 @@ func writeAuthority(dir string, t tenant, password []byte) (*authority, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := writeFile(dir, fileTracingCert, clientCert); err != nil {
+	if err := os.MkdirAll(tdir, 0o700); err != nil {
 		return nil, err
 	}
-	if err := writeSecret(dir, fileTracingKey, clientKey, password); err != nil {
+	if err := writeFile(tdir, fileCreator, []byte(network)); err != nil {
 		return nil, err
 	}
-	if err := writeFile(dir, fileCACert, a.certPEM()); err != nil {
+	if err := writeFile(tdir, fileTracingCert, clientCert); err != nil {
 		return nil, err
 	}
-	return a, writeSecret(dir, fileCAKey, pemBlock("PRIVATE KEY", caKey), password)
+	if err := writeSecret(tdir, fileTracingKey, clientKey, password); err != nil {
+		return nil, err
+	}
+	if err := writeFile(tdir, fileCACert, a.certPEM()); err != nil {
+		return nil, err
+	}
+	return a, writeSecret(tdir, fileCAKey, pemBlock("PRIVATE KEY", caKey), password)
 }
 
-// openAuthority opens the tenant CA in dir with the password, or returns nil
-// if the network did not create its tenant.
-func openAuthority(dir string, password []byte) (*authority, error) {
-	sealed, err := os.ReadFile(filepath.Join(dir, fileCAKey))
+// openAuthority opens the tenant CA in the tenant's directory tdir with the
+// password, or returns nil if it has not been minted.
+func openAuthority(tdir string, password []byte) (*authority, error) {
+	sealed, err := os.ReadFile(filepath.Join(tdir, fileCAKey))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -155,7 +166,7 @@ func openAuthority(dir string, password []byte) (*authority, error) {
 	if err != nil {
 		return nil, err
 	}
-	certPEM, err := os.ReadFile(filepath.Join(dir, fileCACert))
+	certPEM, err := os.ReadFile(filepath.Join(tdir, fileCACert))
 	if err != nil {
 		return nil, err
 	}
@@ -170,14 +181,24 @@ func openAuthority(dir string, password []byte) (*authority, error) {
 	return &authority{cert: pair.Leaf, key: key}, nil
 }
 
-// OpenTracingClient returns the TLS with which the console reaches the tracing
-// backend's query (implementation §1.2.17), opened with the password, or nil if
-// the network did not create its tenant.
-func OpenTracingClient(dir string, password []byte) (*tls.Config, error) {
-	sealed, err := os.ReadFile(filepath.Join(dir, fileTracingKey))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+// readTenantCA reads the tenant CA's certificate from the tenant's directory.
+func readTenantCA(tdir string) ([]byte, error) {
+	b, err := os.ReadFile(filepath.Join(tdir, fileCACert))
+	if err != nil {
+		return nil, fmt.Errorf("deploy: the tenant CA: %w", err)
 	}
+	return b, nil
+}
+
+// OpenTracingClient returns the TLS with which the console of the network in
+// dir reaches the tracing backend's query (implementation §1.2.17), opened with
+// the password, or nil if the network did not create its tenant.
+func OpenTracingClient(dir string, password []byte) (*tls.Config, error) {
+	tdir, ok, err := createdTenant(dir)
+	if err != nil || !ok {
+		return nil, err
+	}
+	sealed, err := os.ReadFile(filepath.Join(tdir, fileTracingKey))
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +206,7 @@ func OpenTracingClient(dir string, password []byte) (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	certPEM, err := os.ReadFile(filepath.Join(dir, fileTracingCert))
+	certPEM, err := os.ReadFile(filepath.Join(tdir, fileTracingCert))
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +215,7 @@ func OpenTracingClient(dir string, password []byte) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("deploy: tracing client certificate: %w", err)
 	}
-	caPEM, err := os.ReadFile(filepath.Join(dir, fileCACert))
+	caPEM, err := readTenantCA(tdir)
 	if err != nil {
 		return nil, err
 	}

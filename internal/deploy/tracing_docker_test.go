@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -64,20 +65,17 @@ func TestTracingShared(t *testing.T) {
 	})
 	a := testNetwork(t, ctx, e, "tracing-a")
 	b := testNetwork(t, ctx, e, "tracing-b")
-	dir, password := t.TempDir(), []byte("pw")
-	ca, err := writeAuthority(dir, tn, password)
-	if err != nil {
-		t.Fatal(err)
-	}
+	password := []byte("pw")
+	dir, tdir, ca := createTenant(t, t.TempDir(), a.network, tn, password)
 
-	if err := ensureTracing(ctx, e, a, tn, ca, dir); err != nil {
+	if err := ensureTracing(ctx, e, a, tn, ca, tdir); err != nil {
 		t.Fatal(err)
 	}
 	first := containerID(t, ctx, e, tn.tracing())
-	if err := ensureTracing(ctx, e, b, tn, nil, t.TempDir()); err != nil { // joins
+	if err := ensureTracing(ctx, e, b, tn, nil, tdir); err != nil { // joins
 		t.Fatal(err)
 	}
-	if err := ensureTracing(ctx, e, a, tn, ca, dir); err != nil { // converges
+	if err := ensureTracing(ctx, e, a, tn, ca, tdir); err != nil { // converges
 		t.Fatal(err)
 	}
 	if id := containerID(t, ctx, e, tn.tracing()); id != first {
@@ -100,11 +98,7 @@ func TestTracingShared(t *testing.T) {
 	if err := query(ctx, addr, &tls.Config{RootCAs: own.RootCAs, ServerName: TracingAlias}); err == nil {
 		t.Error("the query answered without a client certificate")
 	}
-	otherDir := t.TempDir()
-	other, err := writeAuthority(otherDir, tn, password)
-	if err != nil {
-		t.Fatal(err)
-	}
+	otherDir, otherTenantDir, other := createTenant(t, t.TempDir(), a.network, tn, password)
 	foreign, err := OpenTracingClient(otherDir, password)
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +107,7 @@ func TestTracingShared(t *testing.T) {
 	if err := query(ctx, addr, foreign); err == nil {
 		t.Error("the query answered a certificate from another CA")
 	}
-	if err := ensureTracing(ctx, e, a, tn, other, otherDir); err == nil {
+	if err := ensureTracing(ctx, e, a, tn, other, otherTenantDir); err == nil {
 		t.Error("a backend of another CA was taken as the tenant's")
 	}
 
@@ -142,18 +136,18 @@ func TestChooseTenant(t *testing.T) {
 	}
 	t.Cleanup(func() { e.Remove(context.Background(), []string{tn.tracing()}, []string{tn.tracing()}) })
 	n := testNetwork(t, ctx, e, "tenant")
-	dir := t.TempDir()
-	ca, err := writeAuthority(dir, tn, []byte("pw"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureTracing(ctx, e, n, tn, ca, dir); err != nil {
+	home := t.TempDir()
+	_, tdir, ca := createTenant(t, home, n.network, tn, []byte("pw"))
+	if err := ensureTracing(ctx, e, n, tn, ca, tdir); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := chooseTenant(ctx, e, t.TempDir(), string(tn))
+	got, err := chooseTenant(ctx, e, NetworkDir(home, "joins"), string(tn))
 	if err != nil || got != tn {
 		t.Fatalf("joining %s: %s, %v", tn, got, err)
+	}
+	if _, err := chooseTenant(ctx, e, NetworkDir(t.TempDir(), "joins"), string(tn)); err == nil {
+		t.Error("a network joined a tenant whose directory is in another home")
 	}
 	other, _ := newTenant()
 	if _, err := chooseTenant(ctx, e, t.TempDir(), string(other)); err == nil {
@@ -167,7 +161,7 @@ func TestChooseTenant(t *testing.T) {
 		t.Errorf("a new tenant: %q, %v", fresh, err)
 	}
 
-	dir = t.TempDir()
+	dir := t.TempDir()
 	if err := recordTenant(dir, tn); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +173,8 @@ func TestChooseTenant(t *testing.T) {
 	}
 }
 
-// A shared container replaced for its image keeps its ports and its networks.
+// A shared container replaced for its image or its labels keeps its ports and
+// its networks.
 func TestEnsureSharedReplaced(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -225,6 +220,43 @@ func TestEnsureSharedReplaced(t *testing.T) {
 			t.Errorf("on %s the replaced container has the aliases %v", net, ep.Aliases)
 		}
 	}
+
+	spec.Labels = map[string]string{labelConfig: "changed"}
+	if err := e.EnsureShared(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	relabeled, err := e.c.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relabeled.Container.ID == info.Container.ID {
+		t.Error("a container with other labels was not replaced")
+	}
+	if got := published(relabeled.Container.HostConfig); got["80/tcp"] != port {
+		t.Errorf("the relabeled container publishes %v, not port %s", got, port)
+	}
+	if relabeled.Container.NetworkSettings.Networks[a.dockerNetwork()] == nil {
+		t.Errorf("the relabeled container is not on %s", a.dockerNetwork())
+	}
+}
+
+// createTenant creates tn in home for network, as its zobik init does, and
+// returns the network's directory, the tenant's and its CA.
+func createTenant(t *testing.T, home, network string, tn tenant, password []byte) (string, string, *authority) {
+	t.Helper()
+	dir := NetworkDir(home, network)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordTenant(dir, tn); err != nil {
+		t.Fatal(err)
+	}
+	tdir := tenantDir(dir, tn)
+	ca, err := writeAuthority(tdir, tn, network, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir, tdir, ca
 }
 
 func containerID(t *testing.T, ctx context.Context, e *Engine, name string) string {

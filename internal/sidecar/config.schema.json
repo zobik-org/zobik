@@ -30,14 +30,74 @@
         {"rule": "!has(config.embedding_model) || (has(config.egress_registry) && config.embedding_model.entry in config.egress_registry)", "message": "embedding_model.entry names no egress_registry entry (architecture §2.3)"}
       ]
     },
+    "cost_unit": {
+      "description": "The unit in which cost is denominated in data.metrics, and the rates of the egress_registry (architecture §2.3, §3.10).",
+      "type": "string",
+      "minLength": 1,
+      "default": "USD",
+      "query_class": "current",
+      "storage": "versioned"
+    },
     "egress_registry": {
-      "description": "The egress classes the network has authorized, one entry per key (architecture §3.16.2). An entry declares the target of the embeddings endpoint, reached with no credential (implementation §1.2.15).",
+      "description": "The egress classes the network has authorized, one entry per key (architecture §3.16.2). What the schema does not express—the interface's format, and the conditions and billing_rule compiled against its fields—the binary checks (implementation §8).",
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["target"],
+        "required": ["interface", "target", "operations", "rules", "billing_rule"],
         "properties": {
-          "target": {"description": "The destination: the root URL, http or https, the operation's path resolves under.", "type": "string", "minLength": 1}
+          "interface": {
+            "description": "The operation interface the entry implements, copied whole, in the format of schemas/interface.schema.json (implementation §8.1).",
+            "type": "object",
+            "required": ["protocol", "direction", "operations"],
+            "properties": {
+              "protocol": {"description": "The range of the deployed Integration Sidecar's adapters (implementation §1.2.12).", "type": "string", "enum": ["https"]},
+              "direction": {"type": "string", "enum": ["egress"]},
+              "operations": {"type": "object", "additionalProperties": {"opaque": true}},
+              "verification": {"opaque": true}
+            }
+          },
+          "target": {"description": "The destination: the root URL, http or https, every request resolves under.", "type": "string", "minLength": 1},
+          "operations": {"description": "The operations of the interface the entry admits, declared explicitly.", "type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "grant_scope": {"description": "Which nodes reach the entry; open when absent (architecture §3.16.3).", "type": "string", "enum": ["open", "topics", "provision"]},
+          "grantee_topics": {"description": "The topics a topics entry reaches.", "type": "array", "items": {"type": "string", "minLength": 1}},
+          "credential_handle": {"description": "What the credential is resolved with in the Secret Store (architecture §3.16.6).", "type": "string", "minLength": 1},
+          "credential_placement": {
+            "description": "Where the credential goes in an https request: a header, with an optional scheme, or a query parameter (implementation §8.4).",
+            "type": "object",
+            "properties": {
+              "header": {"type": "string", "minLength": 1},
+              "scheme": {"type": "string", "enum": ["Bearer", "Basic"]},
+              "query": {"type": "string", "minLength": 1}
+            }
+          },
+          "rules": {
+            "description": "The ordered rules: the first whose when holds gives the outcome, allow, deny or an audience; the last carries no when (architecture §3.16.2).",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["then"],
+              "properties": {
+                "when": {"type": "string", "minLength": 1},
+                "then": {"type": "string", "minLength": 1}
+              }
+            }
+          },
+          "billing_rule": {
+            "description": "Per admitted operation, the cost expression and the optional token expressions (implementation §8.5).",
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["cost"],
+              "properties": {
+                "cost": {"type": "string", "minLength": 1},
+                "tokens_in": {"type": "string", "minLength": 1},
+                "tokens_out": {"type": "string", "minLength": 1}
+              }
+            }
+          },
+          "rate_source": {"description": "The key of the rate table in the rates bucket; absent in an entry that costs nothing (implementation §8.5).", "type": "string", "minLength": 1},
+          "max_body_size": {"description": "The largest body of a call and of its response, in bytes, when the interface declares any (architecture §3.16.2).", "type": "integer", "exclusiveMinimum": 0}
         }
       },
       "default": {},
@@ -45,6 +105,7 @@
       "storage": "versioned",
       "preconditions": [
         {"rule": "config.egress_registry.all(k, config.egress_registry[k].target.matches('^https?://([A-Za-z0-9.-]+|[[][0-9A-Fa-f:.]+[]])(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$'))", "message": "a target is an http or https URL of a host, an optional port and an optional path, with no credentials, query or fragment (architecture §3.16.2)"},
+        {"rule": "config.egress_registry.all(k, !has(config.egress_registry[k].rate_source) || config.egress_registry[k].rate_source.matches('^[-/_=A-Za-z0-9]+([.][-/_=A-Za-z0-9]+)*$'))", "message": "a rate_source is a key of the rates bucket (implementation §8.5)"},
         {"rule": "!has(config.embedding_model) || (has(config.egress_registry) && config.embedding_model.entry in config.egress_registry)", "message": "embedding_model.entry names no egress_registry entry (architecture §2.3)"}
       ]
     }

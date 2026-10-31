@@ -77,7 +77,7 @@ func (c *channel) trySend(r *root) error {
 		}
 		if modelID != space.ModelID {
 			ctx, cancel := context.WithTimeout(c.ctx, embedTimeout)
-			v, err := space.Query(ctx, c.http, text)
+			v, err := space.Query(ctx, c.egress, text)
 			cancel()
 			if err != nil {
 				return err

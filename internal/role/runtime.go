@@ -46,6 +46,10 @@ const (
 	// channel's service admits (implementation §6, The service between the
 	// console and the channels).
 	FileConsolePub = "console.pub"
+	// FileTenantCA is the tenant CA's certificate, in PEM, which a role that
+	// reaches the tenant-wide pieces by their names verifies them with
+	// (implementation §6, The tenant CA, the link and the join code).
+	FileTenantCA = "tenant_ca.pem"
 
 	// DataDir is where a role with a data volume mounts it: the Context Store's content.
 	DataDir = "/var/lib/zobik-data"
@@ -59,6 +63,10 @@ const (
 	// PortChannel is where a channel serves the console, published on the
 	// host's 127.0.0.1 (implementation §6, The off-Bus interfaces).
 	PortChannel = "7002"
+	PortSecrets = "7003"
+	// AddrSecrets is where the Integration Sidecars and the roles reach the
+	// secrets role (implementation §1.2.18).
+	AddrSecrets = "secrets:" + PortSecrets
 )
 
 // Runtime is what a role runs with.
@@ -238,6 +246,15 @@ func (rt *Runtime) Dir() string { return rt.dir }
 // signerCredential (implementation §9.1).
 func (rt *Runtime) Sign(typ signing.Type, claims any, signerCredential string) (string, error) {
 	return signing.Sign(rt.key, typ, claims, signerCredential)
+}
+
+// TenantCA reads the tenant CA's certificate from the volume.
+func (rt *Runtime) TenantCA() ([]byte, error) {
+	b, err := os.ReadFile(filepath.Join(rt.dir, FileTenantCA))
+	if err != nil {
+		return nil, fmt.Errorf("role: the tenant CA: %w", err)
+	}
+	return b, nil
 }
 
 // Account reads the network's account JWT from the volume and verifies it

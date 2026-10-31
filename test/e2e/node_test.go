@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/egress"
 )
 
 const (
@@ -53,7 +54,7 @@ func TestNode(t *testing.T) {
 	z.embeddings(t, ctx, map[string][]float32{documentPrefix + b.CapabilityText: same, queryPrefix + text: same})
 
 	z.run(t, ctx, credentials, "config", "set",
-		`egress_registry={"embeddings":{"target":"http://embeddings:8080"}}`,
+		embeddingsRegistry,
 		`embedding_model={"entry":"embeddings","model":"fake","document_prefix":"`+documentPrefix+`","query_prefix":"`+queryPrefix+`","max_text_size":8192}`)
 	z.run(t, ctx, credentials, "config", "set", "network_admission=open")
 
@@ -68,6 +69,10 @@ func TestNode(t *testing.T) {
 	z.run(t, ctx, "", "publish", "--topic", "echo", "--task", task, "--text", text)
 	lifecycle(t, events, task)
 }
+
+// embeddingsRegistry assigns the egress_registry with the entry of the fake
+// embeddings endpoint (implementation §1.2.15).
+var embeddingsRegistry = `egress_registry={"embeddings":` + string(egress.EmbeddingsEntry("http://embeddings:8080")) + `}`
 
 // embeddings runs the fake embeddings endpoint on the network's Docker network,
 // reached at http://embeddings:8080, answering the inputs of fixed with their

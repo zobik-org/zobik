@@ -40,6 +40,10 @@ type lineage struct {
 	embed bool
 	// terminal is the type of the last attempt's terminal event, once received.
 	terminal string
+	// gate receives the answer of an egress gate, which the node opened itself
+	// and the Logic Container does not know; stop ends its wait.
+	gate chan *bus.Event
+	stop chan struct{}
 }
 
 // opening is a subtask request: an AnnounceTask, or an AskRequester when ask.
@@ -137,7 +141,7 @@ func (n *node) reopenable(o opening) (*lineage, error) {
 		return nil, status.Errorf(codes.FailedPrecondition, "%s cannot be reopened: %s", o.previous, why)
 	}
 	switch {
-	case l == nil || l.parent != o.taskID:
+	case l == nil || l.parent != o.taskID || l.gate != nil:
 		return reject("it is not a subtask the node opened from " + o.taskID)
 	case l.known != o.previous:
 		return reject("it is not the last attempt of its lineage")
@@ -196,7 +200,9 @@ func (n *node) onResult(e *bus.Event, m jetstream.Msg) bool {
 		FailureCode string `json:"failure_code"`
 	}
 	_ = json.Unmarshal(e.Data, &d) // a field of another type reads as absent
-	if e.Type == bus.TypeFailed && d.FailureCode == codeStaleVectorSpace {
+	// A query of the gate without an answer is reopened while there is no
+	// final round (architecture §3.5.2, §3.16.4).
+	if e.Type == bus.TypeFailed && (d.FailureCode == codeStaleVectorSpace || l.gate != nil) {
 		err := n.restale(l)
 		n.mu.Unlock()
 		if err != nil {
@@ -208,6 +214,13 @@ func (n *node) onResult(e *bus.Event, m jetstream.Msg) bool {
 		return true
 	}
 	l.terminal = e.Type
+	if l.gate != nil {
+		n.forgetLineage(l)
+		n.mu.Unlock()
+		l.gate <- e
+		n.settle(e.ID, m)
+		return true
+	}
 	known := l.known
 	n.hold(e.ID, l.parent, m, s.done)
 	n.mu.Unlock()

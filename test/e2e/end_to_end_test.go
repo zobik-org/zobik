@@ -57,7 +57,7 @@ func TestEndToEnd(t *testing.T) {
 	z.embeddings(t, ctx, map[string][]float32{documentPrefix + b.CapabilityText: same, queryPrefix + text: same, queryPrefix + question: same})
 
 	z.run(t, ctx, credentials, "config", "set",
-		`egress_registry={"embeddings":{"target":"http://embeddings:8080"}}`,
+		embeddingsRegistry,
 		`embedding_model={"entry":"embeddings","model":"fake","document_prefix":"`+documentPrefix+`","query_prefix":"`+queryPrefix+`","max_text_size":8192}`)
 	z.run(t, ctx, credentials, "config", "set", "network_admission=open")
 	if out := z.run(t, ctx, "", "node", "up", "--topic", "intake", blueprint); !strings.Contains(out, "provisioned node") {

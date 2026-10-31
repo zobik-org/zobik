@@ -74,6 +74,10 @@ type Role struct {
 	// Unstarted roles receive their volume and their material, and no container:
 	// their acts run in an ephemeral container that mounts the volume.
 	Unstarted bool
+	// TenantCA gives it the tenant CA's certificate, for a role that reaches the
+	// tenant-wide pieces by their names (implementation §6, The tenant CA, the
+	// link and the join code).
+	TenantCA bool
 }
 
 // The defaults of the deployment parameters the context role enforces
@@ -109,7 +113,7 @@ var Roles = []Role{
 	// (architecture §3.2, implementation §1.2.6). Its consumer of the task
 	// family also brings it the cycle of trace_query (architecture §3.10).
 	{Unit: "tracing_collector", Scope: bus.TracingCollectorScope, Topic: "trace_query",
-		Args: []string{"--role=tracing_collector"}, NamesNetwork: true, WaitsFor: []string{"config"}, Data: true,
+		Args: []string{"--role=tracing_collector"}, NamesNetwork: true, WaitsFor: []string{"config"}, Data: true, TenantCA: true,
 		Consumers: func(id string) []bus.Consumer {
 			return []bus.Consumer{
 				{Stream: "task", Name: id, Filters: []string{"task.>"}},
@@ -119,24 +123,26 @@ var Roles = []Role{
 		}},
 	// The Spawner's container comes with its decisions; until then the act of
 	// provisioning runs with its material (Provision).
-	{Unit: "spawner", Scope: bus.SpawnerScope, Certificate: signing.RoleSpawner, Issues: &bus.NodeScope, Unstarted: true},
+	{Unit: "spawner", Scope: bus.SpawnerScope, Certificate: signing.RoleSpawner, Issues: &bus.NodeScope, Unstarted: true, TenantCA: true},
+	// The Secret Store's resolver, with the store and its key in its volume
+	// (implementation §1.2.18). It uses the Bus only to read the configuration.
+	{Unit: unitSecrets, Scope: bus.SecretsScope, Args: []string{"--role=secrets"}},
 	// The panel's channels go first and last in their audience (implementation §6,
-	// The operator console). The Entry Node reaches the embeddings endpoint
-	// without a credential until the secrets role enters, so it waits only for
-	// config.
-	panelChannel("user"),
-	panelChannel("operator"),
+	// The operator console). The Entry Node resolves the embedding model's
+	// credential (implementation §1.2.15).
+	panelChannel("user", "config", unitSecrets),
+	panelChannel("operator", "config"),
 }
 
 // panelChannel is the channel role of one of the panel's audiences. A channel
 // also receives the closes of the tasks it opens. Its window has no upper limit
 // until the Spawner closes the vacant rounds: without that close no query
 // reaches the final round, and one let go in round 1 would stay vacant.
-func panelChannel(audience string) Role {
+func panelChannel(audience string, waitsFor ...string) Role {
 	topic := signing.HITLPrefix + audience
 	return Role{Unit: "channel_" + audience, Scope: bus.ChannelScope, Topic: topic,
 		AttemptWindow: &signing.AttemptWindow{From: ptr(1), FinalRound: ptr(true)},
-		Args:          []string{"--role=channel", "--audience=" + audience}, WaitsFor: []string{"config"},
+		Args:          []string{"--role=channel", "--audience=" + audience}, WaitsFor: waitsFor,
 		ServesConsole: true,
 		Consumers: func(id string) []bus.Consumer {
 			c := claimant(topic)(id)
@@ -159,10 +165,11 @@ func claimant(topic string) func(id string) []bus.Consumer {
 
 func ptr[T any](v T) *T { return &v }
 
-// ensureRoles gives each role its volume and its material. A role that already
-// has its identity keeps it and only receives a renewed JWT; one whose volume is
-// new receives a new identity, and the one it replaces is revoked in the account.
-func ensureRoles(ctx context.Context, e *Engine, n names, m *material, dir, image string) (map[string]string, error) {
+// ensureRoles gives each role its volume and its material, tenantCA included
+// for those that reach the tenant-wide pieces. A role that already has its
+// identity keeps it and only receives a renewed JWT; one whose volume is new
+// receives a new identity, and the one it replaces is revoked in the account.
+func ensureRoles(ctx context.Context, e *Engine, n names, m *material, dir, image string, tenantCA []byte) (map[string]string, error) {
 	if err := os.MkdirAll(filepath.Join(dir, dirIdentities), 0o700); err != nil {
 		return nil, err
 	}
@@ -223,6 +230,16 @@ func ensureRoles(ctx context.Context, e *Engine, n names, m *material, dir, imag
 		write := append(files[r.Unit], accountFile)
 		if r.ServesConsole {
 			write = append(write, File{Path: role.FileConsolePub, Mode: 0o644, Data: []byte(consolePub)})
+		}
+		if r.TenantCA {
+			write = append(write, File{Path: role.FileTenantCA, Mode: 0o644, Data: tenantCA})
+		}
+		if r.Unit == unitSecrets {
+			store, err := secretsFiles(dir, ids["channel_user"])
+			if err != nil {
+				return nil, err
+			}
+			write = append(write, store...)
 		}
 		if err := e.WriteVolume(ctx, n.volume(r.Unit), image, role.Dir, write); err != nil {
 			return nil, fmt.Errorf("deploy: writing %s's material: %w", r.Unit, err)

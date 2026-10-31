@@ -119,6 +119,7 @@
         "tokens_in": {"type": "integer", "minimum": 0},
         "tokens_out": {"type": "integer", "minimum": 0},
         "cost": {"description": "Monetary cost of any origin.", "type": "number", "minimum": 0},
+        "billing_errors": {"description": "The calls whose billing data could not be read from the response; absent is 0.", "type": "integer", "minimum": 0},
         "duration_ms": {"type": "integer", "minimum": 0}
       }
     },

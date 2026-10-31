@@ -6,8 +6,10 @@ var families = []string{"task.>", "prop.>", "lease.>", "notice.>"}
 // The JetStream resources outside the families: the Config Store's head and
 // history (implementation §1.2.5) and the Task Broker's state (implementation §1.2.7).
 const (
-	BucketConfig  = "config"
-	BucketTasks   = "tasks"
+	BucketConfig = "config"
+	BucketTasks  = "tasks"
+	// BucketRates holds the rate tables, one key per rate_source (implementation §8.5).
+	BucketRates   = "rates"
 	StreamHistory = "config_history"
 	// SubjectHistory prefixes each published version: config.history.<config_version>.
 	SubjectHistory = "config.history"
@@ -18,7 +20,7 @@ const (
 // Installation and zobik init).
 var ConsoleScope = Scope{
 	Role:      "console",
-	Publish:   []string{"$JS.API.>", "$KV." + BucketConfig + ".>", SubjectHistory + ".>"},
+	Publish:   []string{"$JS.API.>", "$KV." + BucketConfig + ".>", "$KV." + BucketRates + ".>", SubjectHistory + ".>"},
 	Subscribe: []string{"_INBOX.>"},
 }
 
@@ -35,7 +37,7 @@ var TapScope = Scope{
 // registers it only in a development binary.
 var PublishScope = Scope{
 	Role:      "publish",
-	Publish:   join([]string{"task.>", "prop.>", "notice.>"}, configRead),
+	Publish:   join([]string{"task.>", "prop.>", "notice.>"}, configRead, ratesRead),
 	Subscribe: []string{"_INBOX.>"},
 }
 
@@ -66,6 +68,19 @@ var (
 		"$JS.API.STREAM.INFO." + StreamHistory,
 		"$JS.API.DIRECT.GET." + StreamHistory,
 		"$JS.API.DIRECT.GET." + StreamHistory + ".>",
+	}
+
+	// ratesRead reads and watches the rates bucket without writing it
+	// (implementation §1.2.1, §8.5): a watch is an ordered consumer, with its
+	// flow control.
+	ratesRead = []string{
+		"$JS.API.STREAM.INFO.KV_" + BucketRates,
+		"$JS.API.DIRECT.GET.KV_" + BucketRates + ".>",
+		"$JS.API.CONSUMER.CREATE.KV_" + BucketRates,
+		"$JS.API.CONSUMER.CREATE.KV_" + BucketRates + ".>",
+		"$JS.API.CONSUMER.INFO.KV_" + BucketRates + ".>",
+		"$JS.API.CONSUMER.DELETE.KV_" + BucketRates + ".>",
+		"$JS.FC.KV_" + BucketRates + ".>",
 	}
 
 	// participant is what a node publishes in the CNP cycle: its proposals and
@@ -127,19 +142,22 @@ var ContextScope = Scope{
 }
 
 // ChannelScope is the channel role's: it opens traces and their entry subtasks,
-// and claims and closes the queries of its audience (architecture §3.5).
+// and claims and closes the queries of its audience (architecture §3.5). It
+// reads the rates bucket, as a node does, for the entry subtask's embedding
+// (implementation §1.2.15).
 var ChannelScope = Scope{
 	Role:      "channel",
-	Publish:   join(consumerPub, configRead, participant, []string{"task.announced.>"}),
+	Publish:   join(consumerPub, configRead, ratesRead, participant, []string{"task.announced.>"}),
 	Subscribe: inboxSub,
 }
 
 // SpawnerScope is the Spawner's: it reads the configuration a node is
-// provisioned under and creates and deletes the nodes' durable consumers
-// (architecture §3.13.1, implementation §1.2.1).
+// provisioned under and the rates its embeddings are valued with, and creates
+// and deletes the nodes' durable consumers (architecture §3.13.1,
+// implementation §1.2.1, §8.5).
 var SpawnerScope = Scope{
 	Role: "spawner",
-	Publish: join(configRead, []string{
+	Publish: join(configRead, ratesRead, []string{
 		"$JS.API.CONSUMER.CREATE.task.>",
 		"$JS.API.CONSUMER.DELETE.task.>",
 	}),
@@ -155,16 +173,25 @@ var TracingCollectorScope = Scope{
 	Subscribe: inboxSub,
 }
 
+// SecretsScope is the secrets role's: it uses the Bus only to read the
+// configuration (implementation §1.2.18).
+var SecretsScope = Scope{
+	Role:      "secrets",
+	Publish:   configRead,
+	Subscribe: inboxSub,
+}
+
 // RoleScopes are the scopes zobik init registers for the structural roles.
-var RoleScopes = []Scope{ConfigScope, TaskBrokerScope, ContextScope, ChannelScope, SpawnerScope, TracingCollectorScope}
+var RoleScopes = []Scope{ConfigScope, TaskBrokerScope, ContextScope, ChannelScope, SpawnerScope, TracingCollectorScope, SecretsScope}
 
 // NodeScope is every node's: it announces, proposes and renews under its own
 // identity, closes the tasks of any destination and pulls from its consumer
 // (implementation §1.2.1). Its signing key is not the console's: the Spawner
 // keeps it in its volume and issues the fleet's identities with it
-// (implementation §6, The root and the split Operator Channel).
+// (implementation §6, The root and the split Operator Channel). It reads the
+// rates bucket without writing it (implementation §8.5).
 var NodeScope = Scope{
 	Role:      "node",
-	Publish:   join(consumerPub, configRead, participant, []string{"task.announced.>"}),
+	Publish:   join(consumerPub, configRead, ratesRead, participant, []string{"task.announced.>"}),
 	Subscribe: inboxSub,
 }

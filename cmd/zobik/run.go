@@ -13,6 +13,7 @@ import (
 	"zobik.org/zobik/internal/role/channel"
 	"zobik.org/zobik/internal/role/config"
 	"zobik.org/zobik/internal/role/contextstore"
+	"zobik.org/zobik/internal/role/secrets"
 	"zobik.org/zobik/internal/role/taskbroker"
 	"zobik.org/zobik/internal/role/tracingcollector"
 )
@@ -37,6 +38,8 @@ func runCmd(ctx context.Context, args []string) error {
 		}
 	case "task_broker":
 		body = taskbroker.Run
+	case "secrets":
+		body = secrets.Run
 	case "context":
 		if *storeSize <= 0 || *traceSize <= 0 {
 			return fmt.Errorf("the context role needs --store-size and --trace-size")
@@ -58,7 +61,11 @@ func runCmd(ctx context.Context, args []string) error {
 			return fmt.Errorf("the tracing_collector role needs --network")
 		}
 		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
-			backend, err := tracingcollector.Dial(ctx, deploy.TracingAlias+":"+deploy.TracingOTLP)
+			tenantCA, err := rt.TenantCA()
+			if err != nil {
+				return err
+			}
+			backend, err := tracingcollector.Dial(ctx, deploy.TracingAlias, deploy.TracingOTLP, tenantCA)
 			if err != nil {
 				return err
 			}
