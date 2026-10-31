@@ -5,10 +5,12 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,16 +27,17 @@ const (
 	queryPrefix     = "search_query: "
 )
 
-// Un nodo: a task.announced published by hand is won by echo, which completes it.
+// Un nodo: a task.announced published by hand is won by echo, which completes
+// it. echo is built on the base image in the tenant's registry, and the engine
+// pulls it from there by digest.
 func TestNode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	z := newNetwork(t, ctx)
 	z.build(t, ctx, "images/zobik-sidecar.Dockerfile", "zobik-sidecar:dev")
-	z.build(t, ctx, "images/zobik-python.Dockerfile", "zobik-python:dev")
-	z.build(t, ctx, "examples/blueprints/echo/Dockerfile", "zobik-echo:dev")
 	z.build(t, ctx, "test/e2e/embeddings/Dockerfile", embeddingsImage)
 	z.init(t, ctx)
+	z.blueprint(t, ctx, "examples/blueprints/echo/Dockerfile", "zobik-echo:dev")
 
 	blueprint := filepath.Join(z.root, "examples/blueprints/echo/blueprint.json")
 	raw, err := os.ReadFile(blueprint)
@@ -62,12 +65,78 @@ func TestNode(t *testing.T) {
 	waitFor(t, lines, regexp.MustCompile(`^tap: listening`))
 	events := tapEvents(lines)
 
-	if out := z.run(t, ctx, "", "node", "up", "--topic", "echo", blueprint); !strings.Contains(out, "provisioned node") {
+	out := z.run(t, ctx, "", "node", "up", "--topic", "echo", blueprint)
+	m := regexp.MustCompile(`provisioned node \S+ on echo: (\S+) and`).FindStringSubmatch(out)
+	if m == nil {
 		t.Fatalf("node up said: %s", out)
 	}
+	z.pulledFromRegistry(t, ctx, m[1])
 	task := uuid.NewString()
 	z.run(t, ctx, "", "publish", "--topic", "echo", "--task", task, "--text", text)
 	lifecycle(t, events, task)
+}
+
+// pulledFromRegistry checks that the engine runs logic from an image it pulled
+// through the link by digest, built on the base image, and that the link's
+// port only reads (implementation §1.2.16; §6, The tenant CA, the link and the
+// join code).
+func (z *network) pulledFromRegistry(t *testing.T, ctx context.Context, logic string) {
+	t.Helper()
+	image, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Config.Image}}", logic).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := strings.TrimSpace(z.run(t, ctx, "", "base-image"))
+	addr, _, _ := strings.Cut(base, "/")
+	m := regexp.MustCompile(`^` + regexp.QuoteMeta(addr) + `/artifacts@(sha256:[0-9a-f]{64})$`).FindStringSubmatch(strings.TrimSpace(string(image)))
+	if m == nil {
+		t.Fatalf("the Logic Container runs %s, not an image of the registry at %s by digest", image, addr)
+	}
+	artifact := "http://" + addr + "/v2/artifacts/manifests/" + m[1]
+	_, baseDigest, _ := strings.Cut(base, "@")
+	echoLayers, baseLayers := manifestLayers(t, ctx, artifact), manifestLayers(t, ctx, "http://"+addr+"/v2/artifacts/manifests/"+baseDigest)
+	if len(echoLayers) <= len(baseLayers) || !slices.Equal(echoLayers[:len(baseLayers)], baseLayers) {
+		t.Errorf("the artifact's layers %v do not start with the base image's %v", echoLayers, baseLayers)
+	}
+	for _, method := range []string{http.MethodDelete, http.MethodPut} {
+		req, _ := http.NewRequestWithContext(ctx, method, artifact, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s through the link: %s", method, resp.Status)
+		}
+	}
+}
+
+// manifestLayers reads the digests of the layers of the manifest at u.
+func manifestLayers(t *testing.T, ctx context.Context, u string) []string {
+	t.Helper()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	req.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s through the link: %s", u, resp.Status)
+	}
+	var manifest struct {
+		Layers []struct {
+			Digest string `json:"digest"`
+		} `json:"layers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, l := range manifest.Layers {
+		out = append(out, l.Digest)
+	}
+	return out
 }
 
 // embeddingsRegistry assigns the egress_registry with the entry of the fake

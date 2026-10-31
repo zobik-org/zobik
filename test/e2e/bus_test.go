@@ -65,6 +65,7 @@ func newNetwork(t *testing.T, ctx context.Context) *network {
 	z := &network{name: name, home: home, dir: deploy.NetworkDir(home, name), bin: filepath.Join(t.TempDir(), "zobik"), root: root}
 
 	z.build(t, ctx, "images/zobik.Dockerfile", "zobik:dev", "--build-arg", "TAGS=dev")
+	z.build(t, ctx, "images/zobik-python.Dockerfile", "zobik-python:dev")
 	gobuild := exec.CommandContext(ctx, "go", "build", "-tags", "dev", "-o", z.bin, "./cmd/zobik")
 	gobuild.Dir = root
 	if out, err := gobuild.CombinedOutput(); err != nil {
@@ -82,6 +83,14 @@ func (z *network) build(t *testing.T, ctx context.Context, dockerfile, tag strin
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("building %s: %v\n%s", tag, err, out)
 	}
+}
+
+// blueprint builds a blueprint's image on the base image zobik init seeded in
+// the tenant's registry, which the engine pulls through the link by digest.
+func (z *network) blueprint(t *testing.T, ctx context.Context, dockerfile, tag string) {
+	t.Helper()
+	base := strings.TrimSpace(z.run(t, ctx, "", "base-image"))
+	z.build(t, ctx, dockerfile, tag, "--build-arg", "BASE="+base)
 }
 
 // cmd runs a subcommand on the test's network. The network's flags go right
@@ -188,11 +197,21 @@ func waitWithin(t *testing.T, lines <-chan string, re *regexp.Regexp, within tim
 // and the tenant init created for it.
 func (z *network) remove(t *testing.T) {
 	if tenant, err := os.ReadFile(filepath.Join(z.dir, "tenant")); err == nil {
-		tracing := "zobik-tenant-" + string(tenant) + "-tracing"
-		exec.Command("docker", "rm", "-f", tracing).Run()
-		exec.Command("docker", "volume", "rm", tracing).Run()
+		removeLabeled("label=org.zobik.tenant=" + string(tenant))
+		// The images the engine pulled through the link.
+		if port, err := os.ReadFile(filepath.Join(z.home, "tenants", string(tenant), "ports", "registry")); err == nil {
+			pulled, _ := exec.Command("docker", "images", "-q", "--filter", "reference=127.0.0.1:"+string(port)+"/*").Output()
+			if f := strings.Fields(string(pulled)); len(f) > 0 {
+				exec.Command("docker", append([]string{"rmi", "-f"}, f...)...).Run()
+			}
+		}
 	}
-	label := "label=org.zobik.network=" + z.name
+	removeLabeled("label=org.zobik.network=" + z.name)
+	exec.Command("docker", "network", "rm", "zobik-"+z.name).Run()
+}
+
+// removeLabeled removes the containers and then the volumes that carry label.
+func removeLabeled(label string) {
 	ids, _ := exec.Command("docker", "ps", "-aq", "--filter", label).Output()
 	if f := strings.Fields(string(ids)); len(f) > 0 {
 		exec.Command("docker", append([]string{"rm", "-f"}, f...)...).Run()
@@ -201,5 +220,4 @@ func (z *network) remove(t *testing.T) {
 	if f := strings.Fields(string(vols)); len(f) > 0 {
 		exec.Command("docker", append([]string{"volume", "rm"}, f...)...).Run()
 	}
-	exec.Command("docker", "network", "rm", "zobik-"+z.name).Run()
 }

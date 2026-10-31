@@ -3,10 +3,8 @@ package deploy
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base32"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -173,15 +171,17 @@ func checkLegacyAuthority(dir string) error {
 // checkTenant fails if the engine holds a resource under t's names that does
 // not carry t's label.
 func (e *Engine) checkTenant(ctx context.Context, t tenant) error {
-	if labels, ok, err := e.containerLabels(ctx, t.tracing()); err != nil {
-		return err
-	} else if ok && labels[labelTenant] != string(t) {
-		return fmt.Errorf("deploy: the container %s does not belong to the tenant %s", t.tracing(), t)
-	}
-	if labels, ok, err := e.volumeLabels(ctx, t.tracing()); err != nil {
-		return err
-	} else if ok && labels[labelTenant] != string(t) {
-		return fmt.Errorf("deploy: the volume %s does not belong to the tenant %s", t.tracing(), t)
+	for _, name := range []string{t.tracing(), t.registry(), t.link()} {
+		if labels, ok, err := e.containerLabels(ctx, name); err != nil {
+			return err
+		} else if ok && labels[labelTenant] != string(t) {
+			return fmt.Errorf("deploy: the container %s does not belong to the tenant %s", name, t)
+		}
+		if labels, ok, err := e.volumeLabels(ctx, name); err != nil {
+			return err
+		} else if ok && labels[labelTenant] != string(t) {
+			return fmt.Errorf("deploy: the volume %s does not belong to the tenant %s", name, t)
+		}
 	}
 	return nil
 }
@@ -236,15 +236,11 @@ func ensureTracing(ctx context.Context, e *Engine, n names, t tenant, ca *author
 		return err
 	}
 	config := tracingConfigYAML()
-	sum := sha256.Sum256(config)
-	withCA := t.labels()
-	withCA[labelTenantCA] = ca.fingerprint()
-	withCA[labelConfig] = hex.EncodeToString(sum[:])
 	if err := e.EnsureShared(ctx, Spec{
 		Name:    t.tracing(),
 		Alias:   TracingAlias,
 		Network: n.dockerNetwork(),
-		Labels:  withCA,
+		Labels:  sharedLabels(t, ca, config),
 		Image:   TracingImage,
 		Cmd:     []string{"--config", tracingConfig},
 		Mounts:  []mount.Mount{{Type: mount.TypeVolume, Source: t.tracing(), Target: tracingDataDir}},

@@ -33,10 +33,9 @@ func TestEndToEnd(t *testing.T) {
 	defer cancel()
 	z := newNetwork(t, ctx)
 	z.build(t, ctx, "images/zobik-sidecar.Dockerfile", "zobik-sidecar:dev")
-	z.build(t, ctx, "images/zobik-python.Dockerfile", "zobik-python:dev")
-	z.build(t, ctx, "examples/blueprints/echo/Dockerfile", "zobik-echo:dev")
 	z.build(t, ctx, "test/e2e/embeddings/Dockerfile", embeddingsImage)
 	link, _ := z.init(t, ctx)
+	z.blueprint(t, ctx, "examples/blueprints/echo/Dockerfile", "zobik-echo:dev")
 	p := signIn(t, ctx, link)
 
 	blueprint := filepath.Join(z.root, "examples/blueprints/echo/blueprint.json")

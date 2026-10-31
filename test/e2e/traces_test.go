@@ -33,10 +33,9 @@ func TestTraces(t *testing.T) {
 	defer cancel()
 	z := newNetwork(t, ctx)
 	z.build(t, ctx, "images/zobik-sidecar.Dockerfile", "zobik-sidecar:dev")
-	z.build(t, ctx, "images/zobik-python.Dockerfile", "zobik-python:dev")
-	z.build(t, ctx, "examples/blueprints/historian/Dockerfile", "zobik-historian:dev")
 	z.build(t, ctx, "test/e2e/embeddings/Dockerfile", embeddingsImage)
 	z.init(t, ctx)
+	z.blueprint(t, ctx, "examples/blueprints/historian/Dockerfile", "zobik-historian:dev")
 	jaeger := z.jaeger(t)
 
 	blueprint := filepath.Join(z.root, "examples/blueprints/historian/blueprint.json")

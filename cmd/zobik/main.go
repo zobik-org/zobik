@@ -25,6 +25,10 @@ import (
 // build pins it by digest.
 var image = "zobik:dev"
 
+// baseImage is the Logic Container base image zobik init seeds in the tenant's
+// registry (implementation §1.2.13); the release build pins it by digest.
+var baseImage = "zobik-python:dev"
+
 // devScopes are the scopes only a development binary registers (dev.go).
 var devScopes []bus.Scope
 
@@ -59,6 +63,11 @@ func run(ctx context.Context, args []string) error {
 		return secretCmd(ctx, rest)
 	case "rates":
 		return ratesCmd(ctx, rest)
+	case deploy.PushCommand:
+		if len(rest) != 1 {
+			return fmt.Errorf("usage: zobik %s <tag prefix>", deploy.PushCommand)
+		}
+		return deploy.RunPush(ctx, rest[0])
 	case deploy.ActCommand:
 		if len(rest) != 1 {
 			return fmt.Errorf("usage: zobik %s <act>", deploy.ActCommand)
@@ -102,6 +111,7 @@ func initCmd(ctx context.Context, args []string) error {
 	n.register(fs)
 	var o deploy.Options
 	fs.StringVar(&o.Tenant, "tenant", "", "the identifier of a tenant on this host to join (default: a new tenant)")
+	fs.StringVar(&o.BaseImage, "base-image", baseImage, "the Logic Container base image to seed in the tenant's registry")
 	idle := registerIdleTimeout(fs)
 	if err := fs.Parse(args); err != nil {
 		return err

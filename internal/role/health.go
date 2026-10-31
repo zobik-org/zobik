@@ -24,6 +24,12 @@ const (
 // ServeHealth answers each connection to path with whether the role is ready,
 // until ctx ends.
 func (rt *Runtime) ServeHealth(ctx context.Context, path string) error {
+	return ServeHealth(ctx, path, rt.Ready)
+}
+
+// ServeHealth answers each connection to path with what ready says, until ctx
+// ends: the health of a role that runs without the Bus.
+func ServeHealth(ctx context.Context, path string, ready func() bool) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
@@ -43,7 +49,7 @@ func (rt *Runtime) ServeHealth(ctx context.Context, path string) error {
 				return
 			}
 			answer := answerNotReady
-			if rt.Ready() {
+			if ready() {
 				answer = answerReady
 			}
 			// A checker that does not read in time reads nothing: it is not ready.
