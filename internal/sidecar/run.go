@@ -141,7 +141,11 @@ func Run(ctx context.Context, nc *nats.Conn, startup *Startup, o Options) error 
 	if err := checkCredentials(ctx, cfg, cred, startup.Root, secretsClient.Check); err != nil {
 		return err
 	}
-	x := &egress.Executor{HTTP: egress.HTTPClient(), Credential: secretsClient.Resolve, Rates: egress.WatchRates(ctx, js).Table}
+	roots, err := egress.Roots([]byte(startup.TenantCA))
+	if err != nil {
+		return err
+	}
+	x := &egress.Executor{HTTP: egress.HTTPClient(roots), Credential: secretsClient.Resolve, Rates: egress.WatchRates(ctx, js).Table}
 	clearCalls(o.State)
 
 	_ = os.Remove(o.Socket)

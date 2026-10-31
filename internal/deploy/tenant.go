@@ -3,8 +3,10 @@ package deploy
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base32"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -42,16 +44,65 @@ const (
 // (implementation §1.2.17).
 const tracingRetention = 30 * 24 * time.Hour
 
-// The label every tenant-wide resource carries, with the tenant's identifier,
-// and the one the tracing backend carries with the fingerprint of the CA its
-// certificates come from.
+// The label every tenant-wide resource carries, with the tenant's identifier;
+// the one the tracing backend carries with the fingerprint of the CA its
+// certificates come from; and the one with the digest of its configuration,
+// certificates aside, which replaces the container when it changes.
 const (
 	labelTenant   = "org.zobik.tenant"
 	labelTenantCA = "org.zobik.tenant_ca"
+	labelConfig   = "org.zobik.config"
 )
+
+// The console's home holds a directory per network, networks/<network>, and
+// one per tenant, tenants/<tenant>, which every network of the tenant on the
+// host reads.
+const (
+	dirNetworks = "networks"
+	dirTenants  = "tenants"
+)
+
+// NetworkDir is the console's directory for network in home.
+func NetworkDir(home, network string) string { return filepath.Join(home, dirNetworks, network) }
+
+// tenantDir is the directory of t in the home of the network directory dir.
+func tenantDir(dir string, t tenant) string {
+	return filepath.Join(filepath.Dir(filepath.Dir(dir)), dirTenants, string(t))
+}
 
 // fileTenant, in the console's directory, records the tenant the network belongs to.
 const fileTenant = "tenant"
+
+// recordedTenant is the tenant the directory records, if any.
+func recordedTenant(dir string) (tenant, bool, error) {
+	b, err := os.ReadFile(filepath.Join(dir, fileTenant))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return tenant(b), true, nil
+}
+
+// createdTenant returns the directory of the tenant the network in dir created,
+// or false if it joined its tenant: only the creator's password opens what the
+// tenant's directory seals.
+func createdTenant(dir string) (string, bool, error) {
+	t, ok, err := recordedTenant(dir)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	tdir := tenantDir(dir, t)
+	creator, err := os.ReadFile(filepath.Join(tdir, fileCreator))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return tdir, string(creator) == filepath.Base(dir), nil
+}
 
 // tenant is a tenant's identifier: eight random lowercase characters, a valid
 // DNS label in zobik-tenant-<tenant> (implementation §6, The tenant CA, the link
@@ -75,18 +126,18 @@ func (t tenant) labels() map[string]string { return map[string]string{labelTenan
 
 // chooseTenant returns the tenant of the network in dir, without writing
 // anything: the one the directory records, or with none, join, or a new one. A
-// join names a tenant whose pieces are on this host.
+// join names a tenant whose pieces are on this host and whose directory is in
+// the same home.
 func chooseTenant(ctx context.Context, e *Engine, dir, join string) (tenant, error) {
-	b, err := os.ReadFile(filepath.Join(dir, fileTenant))
+	recorded, ok, err := recordedTenant(dir)
 	switch {
-	case err == nil:
-		recorded := tenant(b)
+	case err != nil:
+		return "", err
+	case ok:
 		if join != "" && tenant(join) != recorded {
 			return "", fmt.Errorf("deploy: the network belongs to the tenant %s", recorded)
 		}
 		return recorded, e.checkTenant(ctx, recorded)
-	case !errors.Is(err, fs.ErrNotExist):
-		return "", err
 	case join == "":
 		return newTenant()
 	}
@@ -102,7 +153,21 @@ func chooseTenant(ctx context.Context, e *Engine, dir, join string) (tenant, err
 	} else if !exists {
 		return "", fmt.Errorf("deploy: there is no tenant %s on this host", t)
 	}
+	if _, err := os.Stat(filepath.Join(tenantDir(dir, t), fileCACert)); err != nil {
+		return "", fmt.Errorf("deploy: the tenant %s has no directory beside this network's: %w", t, err)
+	}
 	return t, nil
+}
+
+// checkLegacyAuthority refuses a network directory that keeps the tenant CA,
+// from before the tenant's directory: such a tenant is not converted.
+func checkLegacyAuthority(dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, fileCAKey)); err == nil {
+		return errors.New("deploy: the network keeps its tenant's CA in its own directory: remove the tenant's networks and its tracing backend, and create them again")
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // checkTenant fails if the engine holds a resource under t's names that does
@@ -123,12 +188,12 @@ func (e *Engine) checkTenant(ctx context.Context, t tenant) error {
 
 // ensureTracing brings up the tenant's tracing backend if it is not up, connects
 // it to the network's Docker network with its fixed name, and waits until it is
-// ready. ca is the tenant CA when the network created the tenant: the backend's
-// query then takes its server certificate and asks for a client certificate
-// from the CA, and is published on the port of dir's ports/tracing
-// (implementation §1.2.17). A network that joined the tenant finds the backend
-// up and only connects to it.
-func ensureTracing(ctx context.Context, e *Engine, n names, t tenant, ca *authority, dir string) error {
+// ready. ca is the tenant CA when the network created the tenant: the backend
+// then takes its server certificate for OTLP and the query, asks the query for
+// a client certificate from the CA, and publishes it on the port of the tenant
+// directory tdir's ports/tracing (implementation §1.2.17). A network that
+// joined the tenant finds the backend up and only connects to it.
+func ensureTracing(ctx context.Context, e *Engine, n names, t tenant, ca *authority, tdir string) error {
 	labels, ok, err := e.containerLabels(ctx, t.tracing())
 	if err != nil {
 		return err
@@ -159,7 +224,7 @@ func ensureTracing(ctx context.Context, e *Engine, n names, t tenant, ca *author
 			return fmt.Errorf("deploy: tracing volume: %w", err)
 		}
 	}
-	port, err := ConsolePort(dir, unitTracing)
+	port, err := ConsolePort(tdir, unitTracing)
 	if err != nil {
 		return err
 	}
@@ -170,8 +235,11 @@ func ensureTracing(ctx context.Context, e *Engine, n names, t tenant, ca *author
 	if err != nil {
 		return err
 	}
+	config := tracingConfigYAML()
+	sum := sha256.Sum256(config)
 	withCA := t.labels()
 	withCA[labelTenantCA] = ca.fingerprint()
+	withCA[labelConfig] = hex.EncodeToString(sum[:])
 	if err := e.EnsureShared(ctx, Spec{
 		Name:    t.tracing(),
 		Alias:   TracingAlias,
@@ -181,7 +249,7 @@ func ensureTracing(ctx context.Context, e *Engine, n names, t tenant, ca *author
 		Cmd:     []string{"--config", tracingConfig},
 		Mounts:  []mount.Mount{{Type: mount.TypeVolume, Source: t.tracing(), Target: tracingDataDir}},
 		Files: []File{
-			{Path: tracingConfig, Mode: 0o644, Data: tracingConfigYAML()},
+			{Path: tracingConfig, Mode: 0o644, Data: config},
 			{Path: tracingCA, Mode: 0o644, Data: ca.certPEM()},
 			{Path: tracingCert, Mode: 0o644, Data: cert},
 			{Path: tracingKey, Mode: 0o600, UID: tracingUID, Data: key},
@@ -204,12 +272,16 @@ const unitTracing = "tracing"
 var ErrNoTracing = errors.New("deploy: the network did not create its tenant")
 
 // TracingAddr is the address on 127.0.0.1 of the tracing backend's query, which
-// only the network that created the tenant knows.
+// only the console of the network that created the tenant reaches.
 func TracingAddr(dir string) (string, error) {
-	if _, err := os.Stat(filepath.Join(dir, fileTracingKey)); errors.Is(err, fs.ErrNotExist) {
+	tdir, ok, err := createdTenant(dir)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
 		return "", ErrNoTracing
 	}
-	b, err := os.ReadFile(filepath.Join(dir, dirPorts, unitTracing))
+	b, err := os.ReadFile(filepath.Join(tdir, dirPorts, unitTracing))
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", ErrNoTracing
 	}
@@ -228,9 +300,10 @@ var tracingHealthcheck = &container.HealthConfig{
 	StartInterval: time.Second,
 }
 
-// tracingConfigYAML is Jaeger's configuration: OTLP over gRPC in, Badger with
-// the spans' TTL, and the query service, over HTTP and gRPC, only for clients
-// with a certificate from the tenant CA (implementation §1.2.17).
+// tracingConfigYAML is Jaeger's configuration: OTLP over gRPC with TLS in,
+// without a client certificate, Badger with the spans' TTL, and the query
+// service, over HTTP and gRPC, only for clients with a certificate from the
+// tenant CA (implementation §1.2.17).
 func tracingConfigYAML() []byte {
 	return fmt.Appendf(nil, `service:
   extensions: [jaeger_storage, jaeger_query, healthcheckv2]
@@ -279,6 +352,10 @@ receivers:
     protocols:
       grpc:
         endpoint: 0.0.0.0:%[2]s
+        tls:
+          cert_file: %[7]s
+          key_file: %[8]s
+          min_version: "1.3"
 processors:
   batch:
 exporters:

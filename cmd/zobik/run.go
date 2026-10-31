@@ -61,7 +61,11 @@ func runCmd(ctx context.Context, args []string) error {
 			return fmt.Errorf("the tracing_collector role needs --network")
 		}
 		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
-			backend, err := tracingcollector.Dial(ctx, deploy.TracingAlias+":"+deploy.TracingOTLP)
+			tenantCA, err := rt.TenantCA()
+			if err != nil {
+				return err
+			}
+			backend, err := tracingcollector.Dial(ctx, deploy.TracingAlias, deploy.TracingOTLP, tenantCA)
 			if err != nil {
 				return err
 			}

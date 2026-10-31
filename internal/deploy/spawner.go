@@ -87,6 +87,16 @@ func SpawnerIssuer(ctx context.Context, dir string) (*Issuer, *nats.Conn, error)
 		nc.Close()
 		return nil, nil, err
 	}
+	tenantCA, err := rt.TenantCA()
+	if err != nil {
+		nc.Close()
+		return nil, nil, err
+	}
+	roots, err := egress.Roots(tenantCA)
+	if err != nil {
+		nc.Close()
+		return nil, nil, err
+	}
 	// The Spawner resolves the embedding model's credential and reads the rate
 	// its embeddings are valued with (implementation §1.2.15, §8.5).
 	sc, closeSecrets, err := secrets.Dial(role.AddrSecrets, rt.RPCCredentials(), "")
@@ -96,8 +106,8 @@ func SpawnerIssuer(ctx context.Context, dir string) (*Issuer, *nats.Conn, error)
 	}
 	return &Issuer{
 		ID: rt.ID, Sign: rt.Sign, Certificate: rt.Certificate, SigningKey: key,
-		Account: account.Subject, Root: rt.Root,
-		Egress: &egress.Executor{HTTP: egress.HTTPClient(), Credential: sc.Resolve, Rates: egress.BucketRates(ctx, js)},
+		Account: account.Subject, Root: rt.Root, TenantCA: string(tenantCA),
+		Egress: &egress.Executor{HTTP: egress.HTTPClient(roots), Credential: sc.Resolve, Rates: egress.BucketRates(ctx, js)},
 		close:  closeSecrets,
 	}, nc, nil
 }

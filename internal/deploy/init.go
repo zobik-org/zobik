@@ -18,7 +18,8 @@ import (
 type Options struct {
 	// Network names the network; it prefixes every engine resource.
 	Network string
-	// Dir is the console's directory for this network on the host.
+	// Dir is the console's directory for this network on the host, NetworkDir
+	// of its home, where the tenant's directory also lives.
 	Dir string
 	// User and Password are the only thing zobik init asks the person
 	// (implementation §6, The root and the split Operator Channel).
@@ -49,6 +50,13 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 	if err := e.CheckOwner(ctx, names{o.Network, root}); err != nil {
 		return err
 	}
+	if err := checkLegacyAuthority(o.Dir); err != nil {
+		return err
+	}
+	_, recorded, err := recordedTenant(o.Dir)
+	if err != nil {
+		return err
+	}
 	t, err := chooseTenant(ctx, e, o.Dir, o.Tenant)
 	if err != nil {
 		return err
@@ -61,6 +69,21 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 		return err
 	}
 	n := names{o.Network, root}
+
+	// The tenant CA goes before the roles, which receive its certificate
+	// (implementation §6, The tenant CA, the link and the join code).
+	tdir := tenantDir(o.Dir, t)
+	ca, err := tenantAuthority(tdir, o.Network, t, !recorded && o.Tenant == "", o.Password)
+	if err != nil {
+		return err
+	}
+	if err := recordTenant(o.Dir, t); err != nil {
+		return err
+	}
+	tenantCA, err := readTenantCA(tdir)
+	if err != nil {
+		return err
+	}
 
 	if err := e.EnsureNetwork(ctx, n.dockerNetwork(), n.labels()); err != nil {
 		return fmt.Errorf("deploy: network: %w", err)
@@ -81,7 +104,7 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 	if err := e.EnsureImage(ctx, o.Image); err != nil {
 		return fmt.Errorf("deploy: zobik image %s: %w", o.Image, err)
 	}
-	ids, err := ensureRoles(ctx, e, n, m, o.Dir, o.Image)
+	ids, err := ensureRoles(ctx, e, n, m, o.Dir, o.Image, tenantCA)
 	if err != nil {
 		return err
 	}
@@ -108,34 +131,32 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 	}
 
 	// The tenant-wide pieces (implementation §6, Installation and zobik init).
-	ca, err := tenantAuthority(o.Dir, t, o.Tenant, o.Password)
-	if err != nil {
-		return err
-	}
-	if err := recordTenant(o.Dir, t); err != nil {
-		return err
-	}
-	if err := ensureTracing(ctx, e, n, t, ca, o.Dir); err != nil {
+	if err := ensureTracing(ctx, e, n, t, ca, tdir); err != nil {
 		return err
 	}
 	return startRoles(ctx, e, n, o.Dir, o.Image)
 }
 
-// tenantAuthority opens the tenant CA of the network in dir, and mints it when
-// the network creates its tenant t; a network that joined a tenant has none.
-func tenantAuthority(dir string, t tenant, join string, password []byte) (*authority, error) {
-	ca, err := openAuthority(dir, password)
-	if err != nil || ca != nil {
-		return ca, err
-	}
-	_, err = os.Stat(filepath.Join(dir, fileTenant))
+// tenantAuthority opens the tenant CA in the tenant's directory tdir when
+// network created the tenant t, and mints it when creates says network creates
+// it now; a network that joined the tenant opens none.
+func tenantAuthority(tdir, network string, t tenant, creates bool, password []byte) (*authority, error) {
+	creator, err := os.ReadFile(filepath.Join(tdir, fileCreator))
 	switch {
-	case err == nil || join != "":
+	case err == nil && string(creator) == network:
+		// A run cut short before writing the key mints the CA again.
+		ca, err := openAuthority(tdir, password)
+		if err != nil || ca != nil {
+			return ca, err
+		}
+	case err == nil:
 		return nil, nil
 	case !errors.Is(err, fs.ErrNotExist):
 		return nil, err
+	case !creates:
+		return nil, fmt.Errorf("deploy: the tenant %s has no CA in %s", t, tdir)
 	}
-	return writeAuthority(dir, t, password)
+	return writeAuthority(tdir, t, network, password)
 }
 
 func runAct(ctx context.Context, e *Engine, n names, image, act string, creds []byte, files ...File) error {

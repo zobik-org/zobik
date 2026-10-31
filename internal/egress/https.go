@@ -3,6 +3,8 @@ package egress
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -23,12 +25,32 @@ import (
 const maxJSONResponse = 3 << 20
 
 // HTTPClient is the adapter's client: it follows no redirect, which would take
-// the request out of the entry's target (implementation §8.3). It trusts the
-// system CAs.
-func HTTPClient() *http.Client {
-	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+// the request out of the entry's target (implementation §8.3). It trusts roots,
+// or the system CAs when roots is nil.
+func HTTPClient(roots *x509.CertPool) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{RootCAs: roots}
+	return &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
+}
+
+// Roots are the system CAs plus tenantCA, the tenant CA in PEM, which the
+// adapter trusts on every call; the CA's name constraint keeps it to names
+// under zobik.internal (implementation §1.2.12, §6, The tenant CA, the link and
+// the join code). Without tenantCA they are nil: the system CAs alone.
+func Roots(tenantCA []byte) (*x509.CertPool, error) {
+	if len(tenantCA) == 0 {
+		return nil, nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, fmt.Errorf("egress: the system CAs: %w", err)
+	}
+	if !pool.AppendCertsFromPEM(tenantCA) {
+		return nil, errors.New("egress: the tenant CA holds no certificate")
+	}
+	return pool, nil
 }
 
 // newRequest builds the request of a call, with body the copy of its body when
