@@ -625,6 +625,15 @@ message CheckAck {}
 
 The component belongs to the tenant (§2.1) and the content of the analysis is two different things, so the row chooses twice. **Trivy resolves the embedded secrets and credentials** (Apache-2.0): it scans OCI image layers, brings secret detection out of the box and runs as a single binary with no daemon. **The injection patterns are own rules**, because no off-the-shelf piece rules on prompts embedded in an image—it is the case §3.13.6 names when it says the artifact is the same object whether the node is deterministic or semantic. Both stay behind the same interface, the `scanner` role of `zobik`, which invokes the Trivy binary the role image brings next to its own (§6), following the pattern of thesis 7: what the network queries is a service with its own contract, and what fulfills it inside is free.
 
+**The ruleset is the set of rules the analysis applies, and the analysis grows by adding rules.** Each rule has an identifier, and `findings` carries the identifiers of the rules an image breaks: Trivy's built-in rules keep Trivy's (`private-key`, `aws-access-key-id`), and the own ones start with `zobik-`. A rule is of one of these kinds:
+
+* **A content pattern**, a regular expression over the text of each file of each layer and over the image configuration. Trivy runs the own patterns as custom secret rules next to its built-in ones. It analyzes layer by layer, so it also finds what a later layer deletes and the image still carries.
+* **A structural check**, over the manifest, the configuration and the metadata of the layers' files, for what a pattern over text does not express. The `scanner` role runs it in Go, over the same image.
+
+**The own injection rules look for invisible characters in text:** Unicode tag characters (U+E0000–U+E007F), which carry instructions a person reading the file does not see, and bidirectional controls (U+202A–U+202E, U+2066–U+2069), which show a person the text in an order other than the one the model reads. A legitimate prompt has no use for them, in any language.
+
+**`ruleset_version` is the SHA-256 of the ruleset**: the Trivy version, whose built-in rules come compiled into the binary, the own patterns and the identifier and revision of each structural check. It changes only when a rule changes, and that is what starts the re-analysis of the stored entries (below).
+
 **The verdict is cached by digest, and that is what takes it off the hot path.** The `scan_result` is a field without a qualifier of the entry (§3.13.3) and its natural key is the digest of the `artifact_ref`, so provisioning does not scan: it reads a verdict and checks that it is `pass` and of the `ruleset_version` that the `catalog` role reports as current (§1.2.11). Scanning happens on registration, be it a derived, imported or seeded artifact, and when the ruleset has moved forward—never once per network and per instance.
 
 **Only the `catalog` role calls it, on registration** (§3.13.3), over gRPC on a Unix domain socket that the `scanner` role serves in a volume only `catalog` mounts, like `docker_reader` (§6):

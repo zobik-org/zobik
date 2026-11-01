@@ -1,0 +1,37 @@
+# The own content patterns, which Trivy runs as custom secret rules next to its
+# built-in ones (implementation §1.2.19). Each rule's id starts with zobik-, and
+# each comes with a test image that triggers it (scanner_docker_test.go).
+# Editing this file changes the ruleset_version.
+rules:
+  # Unicode tag characters carry instructions a person reading the file does not see.
+  - id: zobik-unicode-tags
+    category: Zobik
+    title: Unicode tag characters
+    severity: CRITICAL
+    regex: '[\x{E0000}-\x{E007F}]+'
+  # Bidirectional controls show a person the text in an order other than the
+  # one the model reads.
+  - id: zobik-bidi-controls
+    category: Zobik
+    title: Bidirectional control characters
+    severity: CRITICAL
+    regex: '[\x{202A}-\x{202E}\x{2066}-\x{2069}]+'
+
+# Trivy's built-in allow rules skip whole paths—tests, examples, Markdown,
+# /usr/lib, Python's site-packages—where an artifact can carry a secret or a
+# hidden instruction just the same, so the analysis reads every text file of
+# every layer.
+disable-allow-rules:
+  - dist-info
+  - tests
+  - examples
+  - vendor
+  - usr-dirs
+  - locale-dir
+  - markdown
+  - node.js
+  - golang
+  - python
+  - rubygems
+  - wordpress
+  - anaconda-log

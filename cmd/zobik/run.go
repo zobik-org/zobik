@@ -14,6 +14,7 @@ import (
 	"zobik.org/zobik/internal/role/channel"
 	"zobik.org/zobik/internal/role/config"
 	"zobik.org/zobik/internal/role/contextstore"
+	"zobik.org/zobik/internal/role/scanner"
 	"zobik.org/zobik/internal/role/secrets"
 	"zobik.org/zobik/internal/role/taskbroker"
 	"zobik.org/zobik/internal/role/tenantlink"
@@ -24,7 +25,7 @@ import (
 // the role's identifier (implementation §6, The roles of the binary).
 func runCmd(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	name := fs.String("role", "", "the role: config, task_broker, context, channel, tracing_collector, secrets or tenant_link")
+	name := fs.String("role", "", "the role: config, task_broker, context, channel, tracing_collector, secrets, tenant_link or scanner")
 	audience := fs.String("audience", "", "the audience a channel serves: operator or user")
 	storeSize := fs.Int64("store-size", 0, "context: the ceiling of the content volume, in bytes (context_store_size)")
 	traceSize := fs.Int64("trace-size", 0, "context: the ceiling of one trace, in bytes (context_trace_size)")
@@ -36,13 +37,21 @@ func runCmd(ctx context.Context, args []string) error {
 	switch *name {
 	case "tenant_link":
 		// It runs without the Bus (implementation §6, The roles of the binary).
-		ca, err := os.ReadFile(deploy.LinkCAPath)
+		ca, err := os.ReadFile(deploy.TenantCAPath)
 		if err != nil {
 			return err
 		}
 		return tenantlink.Run(ctx, tenantlink.Options{
 			Listen: ":" + deploy.LinkPort, Registry: deploy.RegistryAlias + ":" + deploy.RegistryPort, CA: ca,
 		})
+	case "scanner":
+		// It runs without the Bus, and only catalog reaches it (implementation §1.2.19).
+		return scanner.Run(ctx, scanner.Options{
+			Repository: deploy.RegistryAlias + ":" + deploy.RegistryPort + "/" + deploy.Repository,
+			CAFile:     deploy.TenantCAPath,
+			Trivy:      scanner.TrivyPath,
+			WorkDir:    os.TempDir(),
+		}, scanner.Socket)
 	case "config":
 		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
 			return config.Run(ctx, rt, nc, config.Options{ContextAddr: role.AddrContext})
