@@ -107,7 +107,7 @@ func ensureRegistry(ctx context.Context, e *Engine, n names, t tenant, ca *autho
 		Labels:      sharedLabels(t, ca, nil),
 		Image:       image,
 		Cmd:         []string{"run", "--role=tenant_link"},
-		Files:       []File{{Path: LinkCAPath, Mode: 0o644, Data: ca.certPEM()}},
+		Files:       []File{{Path: TenantCAPath, Mode: 0o644, Data: ca.certPEM()}},
 		Restart:     true,
 		Healthcheck: roleHealthcheck,
 		Publish:     map[string]string{LinkPort + "/tcp": port},
@@ -117,10 +117,11 @@ func ensureRegistry(ctx context.Context, e *Engine, n names, t tenant, ca *autho
 	return e.WaitHealthy(ctx, t.link(), roleReadyTimeout)
 }
 
-// The link's port inside its container, and where it finds the tenant CA.
+// The link's port inside its container, and where a tenant-wide role that
+// reaches the registry finds the tenant CA.
 const (
-	LinkPort   = "5000"
-	LinkCAPath = "/etc/zobik/tenant_ca.pem"
+	LinkPort     = "5000"
+	TenantCAPath = "/etc/zobik/tenant_ca.pem"
 )
 
 // sharedLabels are the labels of a tenant-wide container: the tenant, the

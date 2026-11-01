@@ -1,0 +1,21 @@
+// The Admission Scanner's service, which only the catalog role reaches, over a
+// Unix domain socket (implementation §1.2.19).
+syntax = "proto3";
+package zobik.scanner.v1;
+
+option go_package = "zobik.org/zobik/proto/zobik/scanner/v1;scannerv1";
+
+service Scanner {
+  rpc Scan(ScanRequest) returns (ScanResult);
+}
+
+message ScanRequest {
+  string artifact_ref = 1;  // digest in the tenant's Registry
+}
+
+message ScanResult {
+  string          verdict         = 1;  // pass | fail
+  string          ruleset_version = 2;
+  repeated string findings        = 3;  // rules violated, without the content that triggered them
+  string          nri_version     = 4;  // io.zobik.nri.version label of the manifest
+}
