@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_provision.completed.schema.json",
+  "description": "The data of the task.completed with which the Spawner closes a node_provision (architecture §3.13.8, implementation §10.1). The common fields are in data.schema.json.",
+  "type": "object",
+  "required": ["node_id"],
+  "properties": {
+    "node_id": {
+      "description": "The provisioned node, by its platform identity: the identifier node_review and node_query name it with (architecture §3.12.3).",
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

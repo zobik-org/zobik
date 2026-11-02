@@ -18,20 +18,22 @@ func TestV0(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"auction_timeout":               `2000`,
-		"reannounce_backoff_base":       `5000`,
-		"max_reannounce_backoff":        `300000`,
-		"task_lease_ttl":                `30000`,
-		"similarity_precision_decimals": `3`,
-		"network_admission":             `"frozen"`,
-		"context_retention_grace":       `604800000`,
-		"hitl_response_window":          `86400000`,
-		"result_delivery":               `{"audiences":{"user":"acceptance"},"default":"ack"}`,
-		"egress_registry":               `{}`,
-		"cost_unit":                     `"USD"`,
-		"task_similarity_floor":         `0.6`,
-		"default_memory_required":       `256`,
-		"runtime_interface_range":       `{"1":0}`,
+		"auction_timeout":                `2000`,
+		"reannounce_backoff_base":        `5000`,
+		"max_reannounce_backoff":         `300000`,
+		"task_lease_ttl":                 `30000`,
+		"similarity_precision_decimals":  `3`,
+		"network_admission":              `"frozen"`,
+		"context_retention_grace":        `604800000`,
+		"hitl_response_window":           `86400000`,
+		"result_delivery":                `{"audiences":{"user":"acceptance"},"default":"ack"}`,
+		"egress_registry":                `{}`,
+		"cost_unit":                      `"USD"`,
+		"task_similarity_floor":          `0.6`,
+		"default_memory_required":        `256`,
+		"catalog_presence_ttl":           `300000`,
+		"embedding_regeneration_backoff": `{"attempts":6,"initial":5000}`,
+		"runtime_interface_range":        `{"1":0}`,
 	}
 	v0 := s.V0()
 	if len(v0) != len(want) {

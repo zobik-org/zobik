@@ -68,9 +68,7 @@ func TestSemanticNode(t *testing.T) {
 		`egress_registry={"embeddings":`+string(egress.EmbeddingsEntry("http://embeddings:8080"))+`,"openai":`+strings.TrimSpace(string(entry))+`}`,
 		`embedding_model={"entry":"embeddings","model":"fake","document_prefix":"`+documentPrefix+`","query_prefix":"`+queryPrefix+`","max_text_size":8192}`)
 	z.run(t, ctx, credentials, "config", "set", "network_admission=open")
-	if out := z.run(t, ctx, "", "node", "up", "--topic", "intake", blueprint); !strings.Contains(out, "provisioned node") {
-		t.Fatalf("node up said: %s", out)
-	}
+	z.provision(t, ctx, "intake", blueprint)
 
 	changed := p.events(t, ctx)
 	var conv console.Conversation

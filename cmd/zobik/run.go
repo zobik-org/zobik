@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"zobik.org/zobik/internal/deploy"
 	"zobik.org/zobik/internal/role"
@@ -17,6 +18,7 @@ import (
 	"zobik.org/zobik/internal/role/contextstore"
 	"zobik.org/zobik/internal/role/scanner"
 	"zobik.org/zobik/internal/role/secrets"
+	"zobik.org/zobik/internal/role/spawner"
 	"zobik.org/zobik/internal/role/taskbroker"
 	"zobik.org/zobik/internal/role/tenantlink"
 	"zobik.org/zobik/internal/role/tracingcollector"
@@ -26,12 +28,16 @@ import (
 // the role's identifier (implementation §6, The roles of the binary).
 func runCmd(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	name := fs.String("role", "", "the role: config, task_broker, context, channel, tracing_collector, secrets, tenant_link, scanner or catalog")
+	name := fs.String("role", "", "the role: config, task_broker, context, channel, tracing_collector, secrets, spawner, tenant_link, scanner or catalog")
 	capacity := fs.Int64("storage-capacity", 0, "catalog: the artifact storage capacity, in bytes")
 	audience := fs.String("audience", "", "the audience a channel serves: operator or user")
 	storeSize := fs.Int64("store-size", 0, "context: the ceiling of the content volume, in bytes (context_store_size)")
 	traceSize := fs.Int64("trace-size", 0, "context: the ceiling of one trace, in bytes (context_trace_size)")
-	network := fs.String("network", "", "tracing_collector: the network's name, the spans' service.name")
+	network := fs.String("network", "", "tracing_collector and spawner: the network's name")
+	fleetCapacity := fs.Int64("fleet-capacity", 0, "spawner: fleet_capacity, in MB")
+	sidecarImage := fs.String("sidecar-image", "", "spawner: the Integration Sidecar's image")
+	registry := fs.String("registry", "", "spawner: the address the engine pulls the artifacts from")
+	lifetime := fs.Duration("node-identity-lifetime", deploy.NodeIdentityLifetime, "spawner: the life of a node's user JWT")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -107,6 +113,36 @@ func runCmd(ctx context.Context, args []string) error {
 			}
 			return tracingcollector.Run(ctx, rt, nc, tracingcollector.Options{
 				Network: *network, Backend: backend, DataDir: role.DataDir, ContextAddr: role.AddrContext,
+			})
+		}
+	case "spawner":
+		if *network == "" || *fleetCapacity <= 0 || *sidecarImage == "" || *registry == "" {
+			return fmt.Errorf("the spawner role needs --network, --fleet-capacity, --sidecar-image and --registry")
+		}
+		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
+			js, err := jetstream.New(nc)
+			if err != nil {
+				return err
+			}
+			iss, err := deploy.NewIssuer(ctx, rt, js)
+			if err != nil {
+				return err
+			}
+			defer iss.Close()
+			e, err := deploy.NewEngine(ctx)
+			if err != nil {
+				return err
+			}
+			defer e.Close()
+			return spawner.Run(ctx, rt, nc, spawner.Options{
+				Network: *network,
+				Driver: &deploy.Driver{
+					Engine: e, JS: js, Issuer: iss, Network: *network,
+					SidecarImage: *sidecarImage, Registry: *registry,
+					FleetCapacityMB: *fleetCapacity, IdentityLifetime: *lifetime,
+				},
+				Catalog:          deploy.SpawnerCatalog(iss),
+				IdentityLifetime: *lifetime,
 			})
 		}
 	default:

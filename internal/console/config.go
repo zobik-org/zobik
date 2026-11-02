@@ -73,26 +73,29 @@ func (o *Operator) ConfigSet(ctx context.Context, base *Snapshot, assignments ma
 	if err != nil {
 		return nil, err
 	}
-	// The data the proof covers carries what the channel would otherwise stamp,
-	// so it does not change after the signature (implementation §9.2).
+	return o.open(ctx, topicConfigChange, map[string]any{}, signing.OperatorProof{PayloadDigest: digest.Bytes(edit)}, edit)
+}
+
+// open signs the act on topic over data and proof's clear fields, and opens it
+// through the channel with payload, if any, by Claim-Check. The data the proof
+// covers carries what the channel would otherwise stamp, so it does not change
+// after the signature (implementation §9.2).
+func (o *Operator) open(ctx context.Context, topic string, data map[string]any, proof signing.OperatorProof, payload []byte) (*Opened, error) {
 	taskID := uuid.NewString()
-	data := map[string]any{"topic": topicConfigChange, "requester_identity": o.ChannelID, "origin_audience": "operator"}
+	data["topic"], data["requester_identity"], data["origin_audience"] = topic, o.ChannelID, "operator"
 	raw, err := json.Marshal(data)
 	if err != nil {
 		return nil, err
 	}
-	dataDigest, err := digest.RequestData(raw)
+	if proof.DataDigest, err = digest.RequestData(raw); err != nil {
+		return nil, err
+	}
+	proof.Iat, proof.Act, proof.TaskID = time.Now().Unix(), topic, taskID
+	signed, err := signing.Sign(o.Root, signing.TypeOperatorProof, proof, "")
 	if err != nil {
 		return nil, err
 	}
-	proof, err := signing.Sign(o.Root, signing.TypeOperatorProof, signing.OperatorProof{
-		Iat: time.Now().Unix(), Act: topicConfigChange, TaskID: taskID,
-		DataDigest: dataDigest, PayloadDigest: digest.Bytes(edit),
-	}, "")
-	if err != nil {
-		return nil, err
-	}
-	data["operator_proof"] = proof
+	data["operator_proof"] = signed
 	if raw, err = json.Marshal(data); err != nil {
 		return nil, err
 	}
@@ -101,11 +104,12 @@ func (o *Operator) ConfigSet(ctx context.Context, base *Snapshot, assignments ma
 	if err != nil {
 		return nil, err
 	}
+	parts := []*channelv1.OpenTrace{{Part: &channelv1.OpenTrace_Header{Header: &channelv1.OpenHeader{Topic: topic, TaskId: taskID, Data: raw}}}}
+	if payload != nil {
+		parts = append(parts, &channelv1.OpenTrace{Part: &channelv1.OpenTrace_Chunk{Chunk: payload}})
+	}
 	// A Send the channel ended returns io.EOF, and CloseAndRecv carries its status.
-	for _, part := range []*channelv1.OpenTrace{
-		{Part: &channelv1.OpenTrace_Header{Header: &channelv1.OpenHeader{Topic: topicConfigChange, TaskId: taskID, Data: raw}}},
-		{Part: &channelv1.OpenTrace_Chunk{Chunk: edit}},
-	} {
+	for _, part := range parts {
 		if err := open.Send(part); err != nil && !errors.Is(err, io.EOF) {
 			return nil, err
 		}

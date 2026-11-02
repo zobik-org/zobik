@@ -17,6 +17,26 @@
       "default": 256,
       "query_class": "current",
       "storage": "versioned"
+    },
+    "catalog_presence_ttl": {
+      "description": "How long the presence mark with which a network declares that it runs an entry lasts without renewal, in milliseconds; the Spawner renews it at a fifth of it (architecture §3.13.3, implementation §6, The initial Global Configuration).",
+      "type": "integer",
+      "minimum": 5000,
+      "default": 300000,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "embedding_regeneration_backoff": {
+      "description": "The retries of a failed embedding generation: the first interval, in milliseconds, which doubles on each retry, and how many attempts are made before the generation counts as failed (architecture §3.13.7).",
+      "type": "object",
+      "required": ["initial", "attempts"],
+      "properties": {
+        "initial": {"description": "The first interval, in milliseconds.", "type": "integer", "exclusiveMinimum": 0},
+        "attempts": {"description": "The attempts, the first included.", "type": "integer", "minimum": 1}
+      },
+      "default": {"initial": 5000, "attempts": 6},
+      "query_class": "current",
+      "storage": "versioned"
     }
   }
 }

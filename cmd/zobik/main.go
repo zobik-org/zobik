@@ -29,8 +29,15 @@ var image = "zobik:dev"
 // registry (implementation §1.2.13); the release build pins it by digest.
 var baseImage = "zobik-python:dev"
 
+// sidecarImage is the Integration Sidecar's image the Spawner provisions with;
+// the release build pins it by digest.
+var sidecarImage = "zobik-sidecar:dev"
+
 // devScopes are the scopes only a development binary registers (dev.go).
 var devScopes []bus.Scope
+
+// devInitFlags are the flags of zobik init only a development binary has.
+var devInitFlags []func(fs *flag.FlagSet, o *deploy.Options)
 
 // devCommands are the subcommands only a development binary has (dev.go).
 var devCommands = map[string]func(ctx context.Context, args []string) error{}
@@ -57,6 +64,8 @@ func run(ctx context.Context, args []string) error {
 		return healthCmd(ctx, rest)
 	case "config":
 		return configCmd(ctx, rest)
+	case "node":
+		return nodeCmd(ctx, rest)
 	case "console":
 		return consoleCmd(ctx, rest)
 	case "secret":
@@ -112,6 +121,11 @@ func initCmd(ctx context.Context, args []string) error {
 	var o deploy.Options
 	fs.StringVar(&o.Tenant, "tenant", "", "the identifier of a tenant on this host to join (default: a new tenant)")
 	fs.StringVar(&o.BaseImage, "base-image", baseImage, "the Logic Container base image to seed in the tenant's registry")
+	fs.StringVar(&o.SidecarImage, "sidecar-image", sidecarImage, "the Integration Sidecar's image the Spawner provisions with")
+	fs.Int64Var(&o.FleetCapacityMB, "fleet-capacity", deploy.DefaultFleetCapacityMB, "fleet_capacity: the memory the fleet reserves at most, in MB")
+	for _, register := range devInitFlags {
+		register(fs, &o)
+	}
 	idle := registerIdleTimeout(fs)
 	if err := fs.Parse(args); err != nil {
 		return err

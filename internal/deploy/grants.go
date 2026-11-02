@@ -51,14 +51,41 @@ func parseSlots(raw json.RawMessage) ([]slot, []*egress.Interface, error) {
 	return slots, ifaces, nil
 }
 
-// associate associates each slot by the Spawner's rule: with the single open or
-// topics entry that implements its interface, admits its operations and reaches
-// the node; with none or several, the blueprint is not provisioned
-// (architecture §3.16.3). A provision entry does not count, because only a
-// node_provision associates it.
-func associate(slots []slot, ifaces []*egress.Interface, registry map[string]*egress.Entry, topic string) ([]signing.Grant, error) {
-	var grants []signing.Grant
+// associate associates each slot: with the entry the request names for it,
+// which implements its interface, admits its operations and reaches the node,
+// or else by the Spawner's rule, with the single open or topics entry that
+// does. A provision entry only the request associates, and only with its proof
+// carrying the association (architecture §3.16.3). provisioned says whether a
+// grant is of a provision entry.
+func associate(slots []slot, ifaces []*egress.Interface, registry map[string]*egress.Entry, req ProvisionRequest) (grants []signing.Grant, provisioned bool, err error) {
+	known := map[string]bool{}
+	for _, s := range slots {
+		known[s.Name] = true
+	}
+	for _, name := range slices.Sorted(maps.Keys(req.Associations)) {
+		if !known[name] {
+			return nil, false, refuse(codeRequestInvalid, "the request associates slot %s, which egress_required lacks", name)
+		}
+	}
 	for i, s := range slots {
+		if key, ok := req.Associations[s.Name]; ok {
+			e := registry[key]
+			switch {
+			case e == nil:
+				return nil, false, refuse(codeEgressSlotUnbound, "slot %s: the request associates %s, which egress_registry lacks", s.Name, key)
+			case e.Interface.Digest != ifaces[i].Digest || !admits(e, s.Operations):
+				return nil, false, refuse(codeEgressSlotUnbound, "slot %s: %s does not implement its interface or admit its operations", s.Name, key)
+			case e.GrantScope == egress.ScopeTopics && !slices.Contains(e.GranteeTopics, req.Topic):
+				return nil, false, refuse(codeEgressSlotUnbound, "slot %s: %s does not reach %s", s.Name, key, req.Topic)
+			case e.GrantScope == egress.ScopeProvision:
+				if !slices.Contains(req.ProvisionGrants, signing.Association{Slot: s.Name, Entry: key}) {
+					return nil, false, refuse(codeEgressSlotUnbound, "slot %s: the proof does not carry its association with %s", s.Name, key)
+				}
+				provisioned = true
+			}
+			grants = append(grants, signing.Grant{Slot: s.Name, Entry: key, Interface: ifaces[i].Digest})
+			continue
+		}
 		var candidates []string
 		provision := false
 		for _, key := range slices.Sorted(maps.Keys(registry)) {
@@ -70,7 +97,7 @@ func associate(slots []slot, ifaces []*egress.Interface, registry map[string]*eg
 			case egress.ScopeOpen:
 				candidates = append(candidates, key)
 			case egress.ScopeTopics:
-				if slices.Contains(e.GranteeTopics, topic) {
+				if slices.Contains(e.GranteeTopics, req.Topic) {
 					candidates = append(candidates, key)
 				}
 			case egress.ScopeProvision:
@@ -81,14 +108,14 @@ func associate(slots []slot, ifaces []*egress.Interface, registry map[string]*eg
 		case len(candidates) == 1:
 			grants = append(grants, signing.Grant{Slot: s.Name, Entry: candidates[0], Interface: ifaces[i].Digest})
 		case len(candidates) > 1:
-			return nil, refuse(codeEgressSlotUnbound, "slot %s: entries %v implement its interface; choosing among them is the operator's", s.Name, candidates)
+			return nil, false, refuse(codeEgressSlotUnbound, "slot %s: entries %v implement its interface; choosing among them is the operator's", s.Name, candidates)
 		case provision:
-			return nil, refuse(codeEgressSlotUnbound, "slot %s: only a provision entry implements its interface, which the operator associates", s.Name)
+			return nil, false, refuse(codeEgressSlotUnbound, "slot %s: only a provision entry implements its interface, which the operator associates", s.Name)
 		default:
-			return nil, refuse(codeEgressSlotUnbound, "slot %s: no entry implements its interface, admits its operations and reaches %s", s.Name, topic)
+			return nil, false, refuse(codeEgressSlotUnbound, "slot %s: no entry implements its interface, admits its operations and reaches %s", s.Name, req.Topic)
 		}
 	}
-	return grants, nil
+	return grants, provisioned, nil
 }
 
 func admits(e *egress.Entry, ops []string) bool {

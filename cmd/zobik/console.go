@@ -138,6 +138,27 @@ func newConsole(n networkFlags, idle time.Duration) (*console.Service, error) {
 			defer e.Close()
 			return deploy.WriteRates(ctx, e, dir, n.network, image, creds, name, table)
 		},
+		EntryTopic: func(ctx context.Context, artifactRef string) (string, error) {
+			cred, err := deploy.ReadSecret(dir, deploy.HandleCatalogRead)
+			if err != nil {
+				return "", err
+			}
+			if cred == nil {
+				return "", errors.New("the network has no Catalog credential: only the network that created its tenant receives them")
+			}
+			c, err := deploy.CatalogClient(dir, string(cred))
+			if err != nil {
+				return "", err
+			}
+			entry, ok, err := c.Entry(ctx, artifactRef)
+			if err != nil {
+				return "", err
+			}
+			if !ok {
+				return "", fmt.Errorf("%w: %s", console.ErrNoEntry, artifactRef)
+			}
+			return entry.Topic, nil
+		},
 	}), nil
 }
 

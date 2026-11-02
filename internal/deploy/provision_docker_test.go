@@ -29,6 +29,8 @@ import (
 	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/embedding/embeddingtest"
 	"zobik.org/zobik/internal/globalconfig"
+	"zobik.org/zobik/internal/role/catalog"
+	"zobik.org/zobik/internal/role/spawner"
 	"zobik.org/zobik/internal/sidecar"
 	"zobik.org/zobik/internal/signing"
 )
@@ -406,7 +408,7 @@ func TestProvisionRefused(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Provision(ctx, f.e, f.js, f.iss, f.request(tc.b))
-			var pe *ProvisionError
+			var pe *spawner.Refusal
 			if !errors.As(err, &pe) || pe.Code != tc.code {
 				t.Fatalf("got %v, want %s", err, tc.code)
 			}
@@ -450,4 +452,65 @@ func (f *provisionFixture) readFile(t *testing.T, ctx context.Context, name, pat
 		t.Fatal(err)
 	}
 	return b
+}
+
+// The Spawner's driver admits against fleet_capacity, lists the fleet by its
+// labels and renews a node's JWT in its startup configuration
+// (implementation §1.2.4).
+func TestDriver(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	f := newProvisionFixture(t, ctx)
+	// One node of 64 MB fits with its Integration Sidecar, 96 MB; a second does not.
+	d := &Driver{Engine: f.e, JS: f.js, Issuer: f.iss, Network: f.n.network, SidecarImage: f.sidecar, Registry: f.registry,
+		FleetCapacityMB: 150, IdentityLifetime: time.Minute}
+	entry := &catalog.Entry{Registration: catalog.Registration{
+		ArtifactRef: f.logic, CapabilityText: "Repeats the text of the task.",
+		Requires: map[string]json.RawMessage{"memory_required": json.RawMessage(`64`)},
+	}}
+	node, err := d.Provision(ctx, spawner.Provisioning{Topic: "echo", Entry: entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Provision(ctx, spawner.Provisioning{Topic: "echo", Entry: entry}); !isRefusal(err, codeCapacityExhausted) {
+		t.Errorf("a second node: %v, want %s", err, codeCapacityExhausted)
+	}
+	if _, err := d.Provision(ctx, spawner.Provisioning{Topic: "echo", Entry: entry, MemoryMB: 200}); !isRefusal(err, codeCapacityExhausted) {
+		t.Errorf("a reservation above the capacity: %v, want %s", err, codeCapacityExhausted)
+	}
+
+	fleet, err := d.Fleet(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []spawner.Running{{NodeID: node.ID, Topic: "echo", ArtifactRef: f.logic}}; !slices.Equal(fleet, want) {
+		t.Errorf("the fleet %+v, want %+v", fleet, want)
+	}
+
+	sidecarName := f.n.container("node-"+strings.ToLower(node.ID[:12])) + "-sidecar"
+	var before sidecar.Startup
+	if err := json.Unmarshal(f.readFile(t, ctx, sidecarName, sidecar.StartupPath), &before); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond) // a JWT's expiry is in seconds
+	if err := d.Renew(ctx, fleet[0]); err != nil {
+		t.Fatal(err)
+	}
+	var after sidecar.Startup
+	if err := json.Unmarshal(f.readFile(t, ctx, sidecarName, sidecar.StartupPath), &after); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := jwt.DecodeUserClaims(before.BusJWT)
+	renewed, err := jwt.DecodeUserClaims(after.BusJWT)
+	if err != nil || renewed.Subject != node.ID || renewed.Expires <= old.Expires {
+		t.Errorf("the renewed JWT: %+v %v, before it expired at %d", renewed, err, old.Expires)
+	}
+	if after.Identity != before.Identity || after.Credential != before.Credential {
+		t.Error("the renewal changed more than the JWT")
+	}
+}
+
+func isRefusal(err error, code string) bool {
+	var r *spawner.Refusal
+	return errors.As(err, &r) && r.Code == code
 }

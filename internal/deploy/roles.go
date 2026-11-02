@@ -18,8 +18,12 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/role"
+	"zobik.org/zobik/internal/role/spawner"
 	"zobik.org/zobik/internal/signing"
 )
+
+// unitSpawner is the Spawner's unit.
+const unitSpawner = "spawner"
 
 // The structural roles' material (implementation §6, The root and the split
 // Operator Channel). Each role keeps its key and what the root signed for it in
@@ -71,9 +75,9 @@ type Role struct {
 	// issue identities without the console. Minting the role rotates the key, so
 	// the identities a lost volume's key issued stop being admitted.
 	Issues *bus.Scope
-	// Unstarted roles receive their volume and their material, and no container:
-	// their acts run in an ephemeral container that mounts the volume.
-	Unstarted bool
+	// Engine mounts the container engine's socket in full: only the Spawner
+	// (implementation §6, The roles of the binary).
+	Engine bool
 	// TenantCA gives it the tenant CA's certificate, for a role that reaches the
 	// tenant-wide pieces by their names (implementation §6, The tenant CA, the
 	// link and the join code).
@@ -121,12 +125,15 @@ var Roles = []Role{
 				{Stream: "notice", Name: id, Filters: []string{"notice.>"}},
 			}
 		}},
-	// The Spawner's container comes with its decisions; until then the act of
-	// provisioning runs with its material (Provision).
-	{Unit: "spawner", Scope: bus.SpawnerScope, Certificate: signing.RoleSpawner, Issues: &bus.NodeScope, Unstarted: true, TenantCA: true},
 	// The Secret Store's resolver, with the store and its key in its volume
 	// (implementation §1.2.18). It uses the Bus only to read the configuration.
 	{Unit: unitSecrets, Scope: bus.SecretsScope, Args: []string{"--role=secrets"}},
+	// The Spawner claims the operator's requests on the fleet, and provisions on
+	// the container engine; zobik init adds its deployment parameters to Args
+	// (implementation §1.2.4).
+	{Unit: unitSpawner, Scope: bus.SpawnerScope, Topic: spawner.TopicProvision, Consumers: claimant(spawner.TopicProvision),
+		Certificate: signing.RoleSpawner, Issues: &bus.NodeScope, Engine: true, TenantCA: true,
+		Args: []string{"--role=spawner"}, NamesNetwork: true, WaitsFor: []string{"config", unitSecrets}},
 	// The panel's channels go first and last in their audience (implementation §6,
 	// The operator console). The Entry Node resolves the embedding model's
 	// credential (implementation §1.2.15).
@@ -359,8 +366,11 @@ var roleHealthcheck = &container.HealthConfig{
 // roleSpec is a role's container: the roles' image with another invocation, its
 // volume, its alias on the network's Docker network and the unless-stopped
 // restart (implementation §6, The roles of the binary).
-func roleSpec(n names, r Role, image, port string) Spec {
+func roleSpec(n names, r Role, image, port string, args []string) Spec {
 	mounts := []mount.Mount{{Type: mount.TypeVolume, Source: n.volume(r.Unit), Target: role.Dir}}
+	if r.Engine {
+		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: engineSocket, Target: engineSocket})
+	}
 	var publish map[string]string
 	if port != "" {
 		publish = map[string]string{role.PortChannel + "/tcp": port}
@@ -368,7 +378,7 @@ func roleSpec(n names, r Role, image, port string) Spec {
 	if r.Data {
 		mounts = append(mounts, mount.Mount{Type: mount.TypeVolume, Source: n.volume(r.Unit + "_data"), Target: role.DataDir})
 	}
-	cmd := append([]string{"run"}, r.Args...)
+	cmd := append(append([]string{"run"}, r.Args...), args...)
 	if r.NamesNetwork {
 		cmd = append(cmd, "--network="+n.network)
 	}
@@ -387,12 +397,9 @@ func roleSpec(n names, r Role, image, port string) Spec {
 }
 
 // startRoles brings up each role once what it waits for is ready, and returns
-// when all of them are.
-func startRoles(ctx context.Context, e *Engine, n names, dir, image string) error {
+// when all of them are. args are what zobik init adds to a unit's invocation.
+func startRoles(ctx context.Context, e *Engine, n names, dir, image string, args map[string][]string) error {
 	for _, r := range Roles {
-		if r.Unstarted {
-			continue
-		}
 		for _, dep := range r.WaitsFor {
 			if err := e.WaitHealthy(ctx, n.container(dep), roleReadyTimeout); err != nil {
 				return err
@@ -405,14 +412,11 @@ func startRoles(ctx context.Context, e *Engine, n names, dir, image string) erro
 				return err
 			}
 		}
-		if err := e.EnsureCurrent(ctx, roleSpec(n, r, image, port)); err != nil {
+		if err := e.EnsureCurrent(ctx, roleSpec(n, r, image, port, args[r.Unit])); err != nil {
 			return fmt.Errorf("deploy: %s: %w", r.Unit, err)
 		}
 	}
 	for _, r := range Roles {
-		if r.Unstarted {
-			continue
-		}
 		if err := e.WaitHealthy(ctx, n.container(r.Unit), roleReadyTimeout); err != nil {
 			return err
 		}
