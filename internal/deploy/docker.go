@@ -275,6 +275,8 @@ type Spec struct {
 	Publish map[string]string
 	// User is the UID:GID the process runs as; empty is the image's.
 	User string
+	// Tmpfs are directories mounted in memory.
+	Tmpfs []string
 	// Memory is the memory limit in bytes, with no swap beyond it
 	// (implementation §1.2.4); zero is none.
 	Memory int64
@@ -598,6 +600,12 @@ func (e *Engine) create(ctx context.Context, s Spec) (string, error) {
 	}
 	if s.Memory > 0 {
 		host.Memory, host.MemorySwap = s.Memory, s.Memory
+	}
+	for _, dir := range s.Tmpfs {
+		if host.Tmpfs == nil {
+			host.Tmpfs = map[string]string{}
+		}
+		host.Tmpfs[dir] = ""
 	}
 	endpoint := &network.EndpointSettings{Aliases: aliases(s.Alias)}
 	networking := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{s.Network: endpoint}}

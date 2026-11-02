@@ -75,6 +75,11 @@ func WriteSecret(ctx context.Context, e *Engine, dir, network, image, handle str
 	if !handleForm(handle) {
 		return fmt.Errorf("%w: %q", console.ErrHandle, handle)
 	}
+	return writeSecrets(ctx, e, dir, network, image, map[string][]byte{handle: value})
+}
+
+// writeSecrets is WriteSecret for several handles at once.
+func writeSecrets(ctx context.Context, e *Engine, dir, network, image string, changes map[string][]byte) error {
 	root, err := readRoot(dir)
 	if err != nil {
 		return err
@@ -94,10 +99,12 @@ func WriteSecret(ctx context.Context, e *Engine, dir, network, image, handle str
 	if err != nil {
 		return err
 	}
-	if value == nil {
-		delete(values, handle)
-	} else {
-		values[handle] = value
+	for handle, value := range changes {
+		if value == nil {
+			delete(values, handle)
+		} else {
+			values[handle] = value
+		}
 	}
 	if sealed, err = secrets.Seal(key, values); err != nil {
 		return err
@@ -113,4 +120,28 @@ func WriteSecret(ctx context.Context, e *Engine, dir, network, image, handle str
 		return err
 	}
 	return writeFile(dir, fileSecretsStore, sealed)
+}
+
+// ReadSecret returns the value behind handle in the Secret Store of the network
+// in dir, or nil if it has none: the console holds the store's key.
+func ReadSecret(dir, handle string) ([]byte, error) {
+	key, err := os.ReadFile(filepath.Join(dir, fileSecretsKey))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	sealed, err := os.ReadFile(filepath.Join(dir, fileSecretsStore))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	values, err := secrets.Unseal(string(key), sealed)
+	if err != nil {
+		return nil, err
+	}
+	return values[handle], nil
 }

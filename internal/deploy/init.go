@@ -143,6 +143,23 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 	if err := seedBase(ctx, e, n, o.Image, o.BaseImage, tdir, tenantCA); err != nil {
 		return err
 	}
+	var admin string
+	if ca != nil {
+		if admin, err = catalogAdmin(tdir, o.Password); err != nil {
+			return err
+		}
+	}
+	if err := ensureCatalog(ctx, e, n, t, ca, tdir, o.Image, admin); err != nil {
+		return err
+	}
+	// Until the installation leaves one console per host, only the network
+	// that created the tenant opens the administration credential: one that
+	// joined comes up without Catalog credentials.
+	if ca != nil {
+		if err := ensureCatalogCredentials(ctx, e, o.Dir, o.Network, o.Image, admin); err != nil {
+			return err
+		}
+	}
 	return startRoles(ctx, e, n, o.Dir, o.Image)
 }
 
