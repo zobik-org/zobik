@@ -82,11 +82,7 @@ func TestTraces(t *testing.T) {
 	waitFor(t, lines, regexp.MustCompile(`^tap: listening`))
 	events := tapEvents(lines)
 
-	out = z.run(t, ctx, "", "node", "up", "--topic", "historian", blueprint)
-	node := regexp.MustCompile(`provisioned node \S+ on historian: (\S+) and`).FindStringSubmatch(out)
-	if node == nil {
-		t.Fatalf("node up said: %s", out)
-	}
+	_, historian := z.provision(t, ctx, "historian", blueprint)
 	// zobik publish opens the trace without a root task: the root span never
 	// closes, so it never reaches Jaeger.
 	traceID, rootSpan := randomHex(16), randomHex(8)
@@ -97,7 +93,7 @@ func TestTraces(t *testing.T) {
 
 	// The reconstruction historian printed: its task, open while it asked, and
 	// the query hanging from it.
-	r := reconstruction(t, ctx, node[1])
+	r := reconstruction(t, ctx, historian)
 	if r.TraceID != traceID {
 		t.Errorf("the reconstruction is of the trace %s, not %s", r.TraceID, traceID)
 	}

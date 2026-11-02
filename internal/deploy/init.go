@@ -35,6 +35,14 @@ type Options struct {
 	// Tenant names a tenant on this host for the network to join; empty creates
 	// a new one (implementation §6, The deployment parameters).
 	Tenant string
+	// SidecarImage is the Integration Sidecar's image the Spawner provisions with.
+	SidecarImage string
+	// FleetCapacityMB is fleet_capacity, in MB (implementation §6, The deployment
+	// parameters); zero is DefaultFleetCapacityMB.
+	FleetCapacityMB int64
+	// NodeIdentityLifetime is the life of a node's user JWT; zero is
+	// NodeIdentityLifetime. Only a development binary changes it, to see renewals.
+	NodeIdentityLifetime time.Duration
 }
 
 // actIdentityLifetime bounds the identity an ephemeral act connects with: it
@@ -160,7 +168,35 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 			return err
 		}
 	}
-	return startRoles(ctx, e, n, o.Dir, o.Image)
+	args, err := spawnerArgs(o)
+	if err != nil {
+		return err
+	}
+	return startRoles(ctx, e, n, o.Dir, o.Image, map[string][]string{unitSpawner: args})
+}
+
+// spawnerArgs are the Spawner's deployment parameters, as its invocation
+// carries them: fleet_capacity, the Integration Sidecar's image, the address
+// the engine pulls the artifacts from, and the life of the nodes' identities.
+func spawnerArgs(o Options) ([]string, error) {
+	registry, err := RegistryAddr(o.Dir)
+	if err != nil {
+		return nil, err
+	}
+	capacity := o.FleetCapacityMB
+	if capacity == 0 {
+		capacity = DefaultFleetCapacityMB
+	}
+	lifetime := o.NodeIdentityLifetime
+	if lifetime == 0 {
+		lifetime = NodeIdentityLifetime
+	}
+	return []string{
+		fmt.Sprintf("--fleet-capacity=%d", capacity),
+		"--sidecar-image=" + o.SidecarImage,
+		"--registry=" + registry,
+		"--node-identity-lifetime=" + lifetime.String(),
+	}, nil
 }
 
 // tenantAuthority opens the tenant CA in the tenant's directory tdir when

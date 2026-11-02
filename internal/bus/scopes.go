@@ -151,13 +151,13 @@ var ChannelScope = Scope{
 	Subscribe: inboxSub,
 }
 
-// SpawnerScope is the Spawner's: it reads the configuration a node is
-// provisioned under and the rates its embeddings are valued with, and creates
-// and deletes the nodes' durable consumers (architecture §3.13.1,
-// implementation §1.2.1, §8.5).
+// SpawnerScope is the Spawner's: it claims the operator's requests on the
+// fleet, reads the configuration a node is provisioned under and the rates its
+// embeddings are valued with, and creates and deletes the nodes' durable
+// consumers (architecture §3.13.1, implementation §1.2.1, §8.5).
 var SpawnerScope = Scope{
 	Role: "spawner",
-	Publish: join(configRead, ratesRead, []string{
+	Publish: join(consumerPub, configRead, ratesRead, participant, []string{
 		"$JS.API.CONSUMER.CREATE.task.>",
 		"$JS.API.CONSUMER.DELETE.task.>",
 	}),

@@ -65,15 +65,43 @@ func TestNode(t *testing.T) {
 	waitFor(t, lines, regexp.MustCompile(`^tap: listening`))
 	events := tapEvents(lines)
 
-	out := z.run(t, ctx, "", "node", "up", "--topic", "echo", blueprint)
-	m := regexp.MustCompile(`provisioned node \S+ on echo: (\S+) and`).FindStringSubmatch(out)
-	if m == nil {
-		t.Fatalf("node up said: %s", out)
-	}
-	z.pulledFromRegistry(t, ctx, m[1])
+	_, logic := z.provision(t, ctx, "echo", blueprint)
+	z.pulledFromRegistry(t, ctx, logic)
 	task := uuid.NewString()
 	z.run(t, ctx, "", "publish", "--topic", "echo", "--task", task, "--text", text)
 	lifecycle(t, events, task)
+}
+
+// provision registers a blueprint on topic with zobik register and instantiates
+// it with zobik node provision, and returns the node's identity and its Logic
+// Container (architecture §3.13.8).
+func (z *network) provision(t *testing.T, ctx context.Context, topic, blueprint string, args ...string) (node, logic string) {
+	t.Helper()
+	ref := z.register(t, ctx, topic, blueprint)
+	out := z.run(t, ctx, credentials, append(append([]string{"node", "provision"}, args...), ref)...)
+	m := regexp.MustCompile(`provisioned node (U[A-Z0-9]+)`).FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("node provision said: %s", out)
+	}
+	return m[1], z.logic(m[1])
+}
+
+// register registers a blueprint on topic, and returns its artifact_ref.
+func (z *network) register(t *testing.T, ctx context.Context, topic, blueprint string) string {
+	t.Helper()
+	var e struct {
+		ArtifactRef string `json:"artifact_ref"`
+	}
+	out := z.run(t, ctx, "", "register", "--topic", topic, blueprint)
+	if err := json.Unmarshal([]byte(lastLine(out)), &e); err != nil || e.ArtifactRef == "" {
+		t.Fatalf("register said: %s", out)
+	}
+	return e.ArtifactRef
+}
+
+// logic names a node's Logic Container (implementation §6, The Docker network).
+func (z *network) logic(node string) string {
+	return "zobik-" + z.name + "-node-" + strings.ToLower(node[:12]) + "-logic"
 }
 
 // pulledFromRegistry checks that the engine runs logic from an image it pulled

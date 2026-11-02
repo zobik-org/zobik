@@ -44,6 +44,9 @@ type Options struct {
 	// with the console's identity for the act in creds: an act of deployment
 	// (implementation §8.5).
 	WriteRates func(ctx context.Context, creds []byte, name string, table []byte) error
+	// EntryTopic reads the topic of the Catalog entry artifactRef, or fails with
+	// ErrNoEntry (implementation §1.2.11).
+	EntryTopic func(ctx context.Context, artifactRef string) (string, error)
 }
 
 // Service is the console's local API: the session, and the acts the panel and

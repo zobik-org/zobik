@@ -78,6 +78,16 @@ type ScanResult struct {
 	AsOf           time.Time `json:"as_of"`
 }
 
+// Entry is an entry as the reads return it: the half it was registered with,
+// without acquisition, and what the Catalog adds (implementation §1.2.11).
+type Entry struct {
+	Registration
+	ScanResult   ScanResult `json:"scan_result"`
+	NRIVersion   string     `json:"nri_version"`
+	ArtifactSize int64      `json:"artifact_size"`
+	DeletionMark bool       `json:"deletion_mark"`
+}
+
 // Failure is the body of a rejected registration: 422 with its reason.
 type Failure struct {
 	Reason         string   `json:"reason"`

@@ -19,6 +19,7 @@ import (
 	"zobik.org/zobik/internal/egress"
 	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/globalconfig"
+	"zobik.org/zobik/internal/role/spawner"
 	"zobik.org/zobik/internal/sidecar"
 	"zobik.org/zobik/internal/signing"
 )
@@ -55,44 +56,52 @@ type Issuer struct {
 	// Egress executes the embeddings' calls, with the credential the secrets
 	// role resolves for the Spawner (implementation §1.2.15, §1.2.18).
 	Egress *egress.Executor
-	close  func() error
+	// Resolve resolves a handle through the secrets role.
+	Resolve func(ctx context.Context, handle string) ([]byte, error)
+	close   func() error
 }
 
 // ProvisionRequest is one act: a blueprint on a topic, in a network.
 type ProvisionRequest struct {
-	Network      string    `json:"network"`
-	Topic        string    `json:"topic"`
-	Blueprint    Blueprint `json:"blueprint"`
-	SidecarImage string    `json:"sidecar_image"`
+	Network      string
+	Topic        string
+	Blueprint    Blueprint
+	SidecarImage string
 	// Registry is the address the engine pulls the artifact from, the link's on
 	// 127.0.0.1 (implementation §6, The tenant CA, the link and the join code).
-	Registry string `json:"registry"`
+	Registry string
+	// Associations, Proof and ProvisionGrants are the request's: the egress
+	// slots the person associates, the operator proof as it arrived and the
+	// provision grants it carries in the clear (architecture §3.16.3).
+	Associations    map[string]string
+	Proof           string
+	ProvisionGrants []signing.Association
+	// MemoryMB is the entry's effective reservation, or zero to take the one it
+	// declares (architecture §3.13.10).
+	MemoryMB int64
+	// FleetCapacityMB is fleet_capacity, what the network's fleet reserves at
+	// most (implementation §1.2.4).
+	FleetCapacityMB int64
+	// IdentityLifetime is how long the node's user JWT is valid.
+	IdentityLifetime time.Duration
 }
 
 // Node is what an act brought up.
 type Node struct {
 	// ID is the node's platform identity.
-	ID               string
-	Logic, Sidecar   string
-	Shared, Private  string
-	ModelID          string
+	ID              string
+	Logic, Sidecar  string
+	Shared, Private string
+	ModelID         string
+	// Embedding is the capability embedding it competes with, encoded as the
+	// credential carries it.
+	Embedding        string
 	SimilarityFloor  float64
 	MemoryRequiredMB int64
 	EgressGrants     []signing.Grant
 }
 
-// ProvisionError is a precondition the act does not meet, with the failure_code
-// a vacant task is closed with (implementation §10.1).
-type ProvisionError struct {
-	Code   string
-	Reason string
-}
-
-func (e *ProvisionError) Error() string { return e.Code + ": " + e.Reason }
-
-func refuse(code, format string, a ...any) error {
-	return &ProvisionError{Code: code, Reason: fmt.Sprintf(format, a...)}
-}
+func refuse(code, format string, a ...any) error { return spawner.Refuse(code, format, a...) }
 
 const (
 	// nodeUID runs both halves of every node, and owns the shared volume and the
@@ -107,6 +116,9 @@ const (
 	// NodeIdentityLifetime is how long a node's user JWT is valid; the Spawner
 	// renews it while the deployment lives (implementation §1.2.4).
 	NodeIdentityLifetime = time.Hour
+	// DefaultFleetCapacityMB is fleet_capacity while zobik init does not
+	// measure the idle: the fleet of the reference machine (implementation thesis 8).
+	DefaultFleetCapacityMB = 1700
 	// LabelNRIVersion is the NRI version an image declares (implementation §3,
 	// The interface version).
 	LabelNRIVersion = "io.zobik.nri.version"
@@ -129,11 +141,12 @@ const (
 
 // The failure codes of the act's preconditions (implementation §10.1).
 const (
-	codeRequestInvalid       = "request_invalid"
-	codeRuntimeUnsupported   = "runtime_interface_unsupported"
-	codeEgressSlotUnbound    = "egress_slot_unbound"
-	codeIngressSlotUnbound   = "ingress_slot_unbound"
-	codeEmbeddingUnavailable = "embedding_unavailable"
+	codeRequestInvalid       = spawner.CodeRequestInvalid
+	codeRuntimeUnsupported   = spawner.CodeRuntimeUnsupported
+	codeEgressSlotUnbound    = spawner.CodeEgressSlotUnbound
+	codeIngressSlotUnbound   = spawner.CodeIngressSlotUnbound
+	codeCapacityExhausted    = spawner.CodeCapacityExhausted
+	codeEmbeddingUnavailable = spawner.CodeEmbeddingUnavailable
 )
 
 // Provision executes the act. A failed act removes what it created.
@@ -158,10 +171,16 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	if err != nil {
 		return nil, fmt.Errorf("deploy: reading the configuration: %w", err)
 	}
+	if req.MemoryMB > 0 {
+		memoryMB = req.MemoryMB
+	}
 	if memoryMB == 0 {
 		if memoryMB, err = intValue(head.Values, "default_memory_required"); err != nil {
 			return nil, err
 		}
+	}
+	if err := admit(ctx, e, req, memoryMB); err != nil {
+		return nil, err
 	}
 	// An entry with no floor history receives task_similarity_floor (architecture §3.13.3).
 	var floor float64
@@ -174,7 +193,7 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 			return nil, fmt.Errorf("deploy: egress_registry: %w", err)
 		}
 	}
-	grants, err := associate(slots, ifaces, registry, req.Topic)
+	grants, provisioned, err := associate(slots, ifaces, registry, req)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +248,11 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	if err != nil {
 		return nil, err
 	}
-	token, err := bus.IssueUser(iss.SigningKey, iss.Account, id, req.Topic, time.Now().Add(NodeIdentityLifetime))
+	lifetime := req.IdentityLifetime
+	if lifetime <= 0 {
+		lifetime = NodeIdentityLifetime
+	}
+	token, err := bus.IssueUser(iss.SigningKey, iss.Account, id, req.Topic, time.Now().Add(lifetime))
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +266,7 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 		SimilarityFloor:     floor,
 		AttemptWindow:       b.AttemptWindow,
 		EgressGrants:        grants,
+		OperatorProof:       proofIf(provisioned, req.Proof),
 	}, iss.Certificate)
 	if err != nil {
 		return nil, err
@@ -264,7 +288,7 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	node = &Node{
 		ID: id, Logic: base + "-logic", Sidecar: base + "-sidecar",
 		Shared: base + "-shared", Private: base + "-private",
-		ModelID: space.ModelID, SimilarityFloor: floor, MemoryRequiredMB: memoryMB,
+		ModelID: space.ModelID, Embedding: embedding.Encode(vector), SimilarityFloor: floor, MemoryRequiredMB: memoryMB,
 		EgressGrants: grants,
 	}
 	defer func() {
@@ -382,6 +406,36 @@ func requires(r map[string]json.RawMessage) (int64, []slot, []*egress.Interface,
 		}
 	}
 	return memoryMB, slots, ifaces, nil
+}
+
+// proofIf is the proof the credential embeds: only a node with a provision
+// grant carries it (implementation §9.2).
+func proofIf(provisioned bool, proof string) string {
+	if provisioned {
+		return proof
+	}
+	return ""
+}
+
+// admit admits the node against fleet_capacity: the sum of the reservations
+// the fleet's labels carry, Integration Sidecars included, plus the node's two
+// halves (implementation §1.2.4).
+func admit(ctx context.Context, e *Engine, req ProvisionRequest, memoryMB int64) error {
+	if req.FleetCapacityMB <= 0 {
+		return nil
+	}
+	need := memoryMB + sidecarMemory>>20
+	if need > req.FleetCapacityMB {
+		return refuse(codeCapacityExhausted, "the node reserves %d MB, more than the fleet's %d MB", need, req.FleetCapacityMB)
+	}
+	used, err := e.fleetMemory(ctx, req.Network)
+	if err != nil {
+		return err
+	}
+	if used+need > req.FleetCapacityMB {
+		return refuse(codeCapacityExhausted, "the fleet reserves %d of %d MB, and the node needs %d", used, req.FleetCapacityMB, need)
+	}
+	return nil
 }
 
 func intValue(v globalconfig.Values, key string) (int64, error) {

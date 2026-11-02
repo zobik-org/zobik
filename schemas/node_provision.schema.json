@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_provision.schema.json",
+  "description": "The data of a task.announced on node_provision: the operator's request that instantiates a Catalog entry (architecture §3.13.8, implementation §10.1). The entry is named by its artifact_ref, its key in the Catalog (implementation §1.2.11). The common fields are in data.schema.json.",
+  "type": "object",
+  "required": ["target_topic", "artifact_ref", "operator_proof"],
+  "properties": {
+    "target_topic": {
+      "description": "The topic of the entry, which routes the request to the Spawner that owns it (architecture §3.13.1).",
+      "type": "string",
+      "minLength": 1
+    },
+    "artifact_ref": {
+      "description": "The digest of the entry's image, which names the entry (architecture §3.13.8, implementation §1.2.11).",
+      "type": "string",
+      "minLength": 1
+    },
+    "egress_associations": {
+      "description": "The egress slots the person associates, each with an egress_registry entry; a slot the request does not name is associated by the Spawner's rule (architecture §3.16.3).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["slot", "entry"],
+        "properties": {
+          "slot": {"description": "The slot's name in the entry's egress_required.", "type": "string", "minLength": 1},
+          "entry": {"description": "The egress_registry entry.", "type": "string", "minLength": 1}
+        }
+      }
+    },
+    "operator_proof": {
+      "description": "The operator's proof of the act, with act node_provision, which carries the artifact_ref in the clear (architecture §3.14.2, implementation §9.2).",
+      "type": "string"
+    },
+    "entry_topic": {
+      "description": "The entry topic a channel's request grants (architecture §3.13.8).",
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

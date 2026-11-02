@@ -95,6 +95,68 @@ type File struct {
 	UID int
 }
 
+// Container is a container as the engine lists it.
+type Container struct {
+	Name   string
+	Image  string
+	Labels map[string]string
+}
+
+// Containers lists the containers, running or not, that carry every label of
+// labels; an empty value only asks for the label.
+func (e *Engine) Containers(ctx context.Context, labels map[string]string) ([]Container, error) {
+	f := client.Filters{}
+	for k, v := range labels {
+		if v == "" {
+			f = f.Add("label", k)
+		} else {
+			f = f.Add("label", k+"="+v)
+		}
+	}
+	cs, err := e.c.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: f})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Container, 0, len(cs.Items))
+	for _, c := range cs.Items {
+		name := ""
+		if len(c.Names) > 0 {
+			name = strings.TrimPrefix(c.Names[0], "/")
+		}
+		out = append(out, Container{Name: name, Image: c.Image, Labels: c.Labels})
+	}
+	return out, nil
+}
+
+// ReadFile reads the regular file at path in a container, running or not.
+func (e *Engine) ReadFile(ctx context.Context, name, path string) ([]byte, error) {
+	res, err := e.c.CopyFromContainer(ctx, name, client.CopyFromContainerOptions{SourcePath: path})
+	if err != nil {
+		return nil, err
+	}
+	defer res.Content.Close()
+	tr := tar.NewReader(res.Content)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			return nil, fmt.Errorf("deploy: %s in %s: %w", path, name, err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			return io.ReadAll(io.LimitReader(tr, 1<<20))
+		}
+	}
+}
+
+// WriteFiles copies files into a container, running or not.
+func (e *Engine) WriteFiles(ctx context.Context, name string, files []File) error {
+	archive, err := tarFiles(files)
+	if err != nil {
+		return err
+	}
+	_, err = e.c.CopyToContainer(ctx, name, client.CopyToContainerOptions{DestinationPath: "/", Content: archive})
+	return err
+}
+
 // EnsureNetwork creates the network's Docker bridge network if it does not exist.
 func (e *Engine) EnsureNetwork(ctx context.Context, name string, labels map[string]string) error {
 	if _, err := e.c.NetworkInspect(ctx, name, client.NetworkInspectOptions{}); err == nil {
@@ -329,9 +391,9 @@ func (e *Engine) EnsureRunning(ctx context.Context, s Spec) error {
 	return err
 }
 
-// EnsureCurrent is EnsureRunning for a container whose image can change between
-// runs of zobik init: one created from another image than the one s.Image names
-// now is replaced.
+// EnsureCurrent is EnsureRunning for a container whose image or invocation can
+// change between runs of zobik init: one created from another image than the
+// one s.Image names now, or with another command, is replaced.
 func (e *Engine) EnsureCurrent(ctx context.Context, s Spec) error {
 	info, err := e.c.ContainerInspect(ctx, s.Name, client.ContainerInspectOptions{})
 	if err == nil {
@@ -343,7 +405,8 @@ func (e *Engine) EnsureCurrent(ctx context.Context, s Spec) error {
 		if err != nil {
 			return err
 		}
-		if info.Container.Image != img.ID || !samePorts(info.Container.HostConfig, want) {
+		cmd := info.Container.Config != nil && slices.Equal(info.Container.Config.Cmd, s.Cmd)
+		if info.Container.Image != img.ID || !cmd || !samePorts(info.Container.HostConfig, want) {
 			if _, err := e.c.ContainerRemove(ctx, s.Name, client.ContainerRemoveOptions{Force: true}); err != nil {
 				return err
 			}
