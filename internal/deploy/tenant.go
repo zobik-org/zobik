@@ -171,7 +171,7 @@ func checkLegacyAuthority(dir string) error {
 // checkTenant fails if the engine holds a resource under t's names that does
 // not carry t's label.
 func (e *Engine) checkTenant(ctx context.Context, t tenant) error {
-	for _, name := range []string{t.tracing(), t.registry(), t.link()} {
+	for _, name := range []string{t.tracing(), t.registry(), t.link(), t.catalog(), t.scanner(), t.scannerSocket()} {
 		if labels, ok, err := e.containerLabels(ctx, name); err != nil {
 			return err
 		} else if ok && labels[labelTenant] != string(t) {

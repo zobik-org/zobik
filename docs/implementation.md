@@ -403,7 +403,7 @@ The process is one more role of the `zobik` binary and **SQLite stays inside**, 
 | Operation | Credential | What it does |
 | :--- | :--- | :--- |
 | `POST /v1/entries` | `register`, `spawner` | The act of registration of a blueprint (below). |
-| `POST /v1/bundles` | `register`, `spawner` | That of a bundle, with the body `{ purpose_text, members }`: `members` is the list of the digests of its members, already registered. The `bundle_id` is the hash of the content, so registering the same bundle twice returns the same one. |
+| `POST /v1/bundles` | `register`, `spawner` | That of a bundle, with the body `{ purpose_text, members }`: `members` is the list of the digests of its members, already registered. The `bundle_id` is the hash of the content, so registering the same bundle twice returns the same one. A member that is not registered returns `422` with `reason` = `unregistered_member`. |
 | `GET /v1/entries`, `GET /v1/entries/{digest}`, `GET /v1/bundles`, `GET /v1/bundles/{bundle_id}` | any | The half without a qualifier, with what the Catalog adds: the `scan_result`, the Node Runtime Interface version, the `artifact_size` and the deletion mark. |
 | `PUT` and `DELETE /v1/entries/{digest}/deletion_mark` | `spawner` | Stamps and removes the deletion mark (§3.13.8). |
 | `GET /v1/status` | any | The current `ruleset_version`, which is that of the role image that `catalog` and `scanner` share (§1.2.19), and the occupied space and the storage capacity (§3.13.3, §1.2.16). |
@@ -418,6 +418,7 @@ The process is one more role of the `zobik` binary and **SQLite stays inside**, 
 
 | Key | Type | What it carries |
 | :--- | :--- | :--- |
+| `topic` | string | the topic it claims (§3.13.3) |
 | `artifact_ref` | string | the digest of the image in the Registry (row 16) |
 | `capability_text` | string | what the blueprint knows how to do (§3.13.3) |
 | `author_id` | string | who built the artifact (§3.13.3) |
@@ -448,9 +449,12 @@ The process is one more role of the `zobik` binary and **SQLite stays inside**, 
 
 * `scan_failed`, with the `ruleset_version` and the `findings`, which the Spawner reports to the Shared Catalog when an import fails (§3.13.6);
 * `unresolvable`, if the digest does not resolve in the Registry;
+* `nri_version_missing`, if the image does not carry the `io.zobik.nri.version` label (§3, *The interface version*);
 * `storage_full`, if the `artifact_size` does not fit in the capacity (§3.13.3).
 
-**Each qualified record is a JSON document with its revision**, which the Catalog increments on each write and returns as `ETag`. The conditional write is HTTP's: `If-None-Match: *` writes only if the key does not exist—the write-if-absent the Spawners arbitrate with (§3.13.3)—, `If-Match` only if the revision is the one read, and an unmet condition returns `412`. A `PUT` with `expires_in` ceases to exist for every read when it expires, which is how the presence mark expires. What is rewritten the same way is written without a condition, like the snapshot on archiving (§3.13.3).
+**An entry is read as the half it was registered with**, without `acquisition`, plus what the Catalog adds: `scan_result`, as `{ verdict, ruleset_version, findings, as_of }` with `findings` only on a `fail`; `nri_version`; `artifact_size`, in bytes; and `deletion_mark`, a boolean.
+
+**Each qualified record is a JSON document with its revision**, which the Catalog increments on each write and returns as `ETag`. The conditional write is HTTP's: `If-None-Match: *` writes only if the key does not exist—the write-if-absent the Spawners arbitrate with (§3.13.3)—, `If-Match` only if the revision is the one read, and an unmet condition returns `412`. A record written with the query parameter `expires_in`, in seconds, ceases to exist for every read and for `If-None-Match: *` when it expires, which is how the presence mark expires. What is rewritten the same way is written without a condition, like the snapshot on archiving (§3.13.3).
 
 **A network writes only the records of the network its credential names, and reads those of all networks**, because the qualifier is attribution and not isolation (§3.13.3). The listing without `network` is how deletion reads the presence marks and the `provenance` of the other networks (§3.13.8). The keys are these:
 
@@ -1606,6 +1610,8 @@ The entries are registered before provisioning because a `node_provision` with a
 
 **That port only reads: the link lets through `GET` and `HEAD` and answers 403 to every other method.** It authenticates no one, so any process of the machine reaches it, and pulling is all the engine does. That is why the console pushes the base image from inside the network (*The Docker network*, above).
 
+**The console reaches the Catalog on a `127.0.0.1` port that the Catalog's container publishes** (`ports`, below), as it reaches the tracing backend's query port (row 17). The connection is TLS, verified against the tenant CA, and the Catalog authenticates it by its credential, like any caller (row 11).
+
 **A network on another host joins the tenant with a join code.** The operator generates it in the panel of the tenant's host for a named network, and the console registers the hash of its secret in the Catalog (§1.2.11). **A network's name is unique in the tenant**, because the tracing backend separates the networks by it (§1.2.6): the Catalog refuses a code for a name another network of the tenant has, and `zobik init` refuses to create a network with such a name on the tenant's host. The code carries:
 
 * the name of the tenant host's link in the Tailscale account;
@@ -1622,7 +1628,7 @@ They are the keys the network cannot change from inside. Everything else is Glob
 | :--- | :--- | :--- |
 | `tenant` | a new one | Create the tenant-wide pieces, point at those of a tenant on the same host, or join one on another host with a join code (thesis 6, *The tenant CA, the link and the join code*). |
 | `forge` | `own` | `own`: the network is its own Forge. `dedicated`: the Forge is another network of the same tenant, dedicated to building nodes. `none`: the network derives no new nodes (§6.1). |
-| `ports` | free, chosen by `zobik init` | The ports of the panel, of each channel's service toward the console (*The service between the console and the channels*), of the ingress proxy (§2.3), of the registry on the link (*The tenant CA, the link and the join code*), of the tracing backend's query and of its UI that the console serves (row 17); they stay fixed in the effective file. |
+| `ports` | free, chosen by `zobik init` | The ports of the panel, of each channel's service toward the console (*The service between the console and the channels*), of the ingress proxy (§2.3), of the registry on the link (*The tenant CA, the link and the join code*), of the Catalog toward the console (*The tenant CA, the link and the join code*), of the tracing backend's query and of its UI that the console serves (row 17); they stay fixed in the effective file. |
 | `ingress_tunnel` | off | Receive from the internet through Tailscale Funnel (§2.3). |
 | `work_area_size` | `10G` per node | The ceiling of each node's shared volume, which hosts the work areas; it applies only on XFS with `pquota` (§2.1). |
 | `context_store_size` | `4G` | The ceiling of the Context Store's volume, against the host's disk (§1.2.9). |

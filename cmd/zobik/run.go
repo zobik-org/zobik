@@ -11,6 +11,7 @@ import (
 
 	"zobik.org/zobik/internal/deploy"
 	"zobik.org/zobik/internal/role"
+	"zobik.org/zobik/internal/role/catalog"
 	"zobik.org/zobik/internal/role/channel"
 	"zobik.org/zobik/internal/role/config"
 	"zobik.org/zobik/internal/role/contextstore"
@@ -25,7 +26,8 @@ import (
 // the role's identifier (implementation §6, The roles of the binary).
 func runCmd(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	name := fs.String("role", "", "the role: config, task_broker, context, channel, tracing_collector, secrets, tenant_link or scanner")
+	name := fs.String("role", "", "the role: config, task_broker, context, channel, tracing_collector, secrets, tenant_link, scanner or catalog")
+	capacity := fs.Int64("storage-capacity", 0, "catalog: the artifact storage capacity, in bytes")
 	audience := fs.String("audience", "", "the audience a channel serves: operator or user")
 	storeSize := fs.Int64("store-size", 0, "context: the ceiling of the content volume, in bytes (context_store_size)")
 	traceSize := fs.Int64("trace-size", 0, "context: the ceiling of one trace, in bytes (context_trace_size)")
@@ -52,6 +54,20 @@ func runCmd(ctx context.Context, args []string) error {
 			Trivy:      scanner.TrivyPath,
 			WorkDir:    os.TempDir(),
 		}, scanner.Socket)
+	case "catalog":
+		// It runs without the Bus, and reaches its scanner over the socket only
+		// the two mount (implementation §1.2.11, §1.2.19).
+		return catalog.Run(ctx, catalog.Options{
+			Listen:     ":" + catalog.Port,
+			CertFile:   catalog.CertPath,
+			KeyFile:    catalog.KeyPath,
+			CAFile:     deploy.TenantCAPath,
+			AdminFile:  catalog.AdminPath,
+			DataDir:    catalog.DataDir,
+			Repository: deploy.RegistryAlias + ":" + deploy.RegistryPort + "/" + deploy.Repository,
+			Scanner:    scanner.Socket,
+			Capacity:   *capacity,
+		})
 	case "config":
 		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
 			return config.Run(ctx, rt, nc, config.Options{ContextAddr: role.AddrContext})

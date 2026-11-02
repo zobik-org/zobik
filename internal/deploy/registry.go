@@ -34,8 +34,9 @@ const (
 
 // The tags that mark what the registry retains (implementation §1.2.16).
 const (
-	TagBase  = "base"
-	TagEntry = "entry"
+	TagBase    = "base"
+	TagEntry   = "entry"
+	TagPending = "pending"
 )
 
 // registry and link name the image registry's container and volume, and the
@@ -149,7 +150,7 @@ func registryConfigJSON() []byte {
         "repositories": ["**"],
         "keepTags": [
           {"patterns": ["^%[2]s-", "^%[3]s-"]},
-          {"patterns": ["^pending-"], "pushedWithin": "72h"}
+          {"patterns": ["^%[7]s-"], "pushedWithin": "72h"}
         ]
       }]
     }
@@ -161,7 +162,7 @@ func registryConfigJSON() []byte {
   },
   "log": {"level": "warn"}
 }
-`, registryDataDir, TagBase, TagEntry, RegistryPort, registryCert, registryKey)
+`, registryDataDir, TagBase, TagEntry, RegistryPort, registryCert, registryKey, TagPending)
 }
 
 // ErrNoRegistry is a tenant whose link has no port on this host.
