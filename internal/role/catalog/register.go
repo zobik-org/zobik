@@ -178,7 +178,7 @@ func (c *Catalog) register(ctx context.Context, network string, body []byte) (re
 		return result{}, err
 	}
 	if existing != nil && existing.HalfDigest != halfDigest {
-		return respond(http.StatusConflict, errorBody("another half is registered under " + reg.ArtifactRef)), nil
+		return respond(http.StatusConflict, errorBody("another half is registered under "+reg.ArtifactRef)), nil
 	}
 	desc, err := c.registry.resolve(ctx, reg.ArtifactRef)
 	if errors.Is(err, errNotFound) {
