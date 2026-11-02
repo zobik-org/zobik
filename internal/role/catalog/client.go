@@ -139,6 +139,16 @@ func (c *Client) Entry(ctx context.Context, digest string) (e *Entry, ok bool, e
 	return e, err == nil, err
 }
 
+// SetDeletionMark stamps or removes the deletion mark of the entry digest
+// (architecture §3.13.8).
+func (c *Client) SetDeletionMark(ctx context.Context, digest string, on bool) error {
+	method := http.MethodDelete
+	if on {
+		method = http.MethodPut
+	}
+	return c.do(ctx, method, "/v1/entries/"+url.PathEscape(digest)+"/deletion_mark", nil, nil, http.StatusNoContent)
+}
+
 // Record reads the qualified record of network and key into out, and returns
 // its revision; ok is false if it does not exist.
 func (c *Client) Record(ctx context.Context, network, key string, out any) (revision int64, ok bool, err error) {

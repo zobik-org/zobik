@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_retire.schema.json",
+  "description": "The common part of a task.announced on node_retire: the operator's request that removes a node, vetoes an artifact, lifts its veto or deletes its image (architecture §3.13.8, implementation §10.1). Each kind adds what it names in a schema of its own. The common fields are in data.schema.json.",
+  "type": "object",
+  "required": ["kind", "target_topic", "operator_proof"],
+  "properties": {
+    "kind": {
+      "description": "What the request does (architecture §3.13.8).",
+      "type": "string",
+      "enum": ["remove", "veto", "unveto", "purge"]
+    },
+    "target_topic": {
+      "description": "The topic of the node or the entry, which routes the request to the Spawner that owns it (architecture §3.13.1).",
+      "type": "string",
+      "minLength": 1
+    },
+    "operator_proof": {
+      "description": "The operator's proof of the act, with act node_retire (architecture §3.14.2, implementation §9.2).",
+      "type": "string"
+    }
+  }
+}

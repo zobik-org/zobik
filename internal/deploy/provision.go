@@ -79,6 +79,9 @@ type ProvisionRequest struct {
 	// MemoryMB is the entry's effective reservation, or zero to take the one it
 	// declares (architecture §3.13.10).
 	MemoryMB int64
+	// Floor is the similarity_floor the node competes with, or nil for
+	// task_similarity_floor (architecture §3.13.3).
+	Floor *float64
 	// FleetCapacityMB is fleet_capacity, what the network's fleet reserves at
 	// most (implementation §1.2.4).
 	FleetCapacityMB int64
@@ -182,9 +185,11 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	if err := admit(ctx, e, req, memoryMB); err != nil {
 		return nil, err
 	}
-	// An entry with no floor history receives task_similarity_floor (architecture §3.13.3).
+	// An entry with no eligible floor receives task_similarity_floor (architecture §3.13.3).
 	var floor float64
-	if err := json.Unmarshal(head.Values["task_similarity_floor"], &floor); err != nil {
+	if req.Floor != nil {
+		floor = *req.Floor
+	} else if err := json.Unmarshal(head.Values["task_similarity_floor"], &floor); err != nil {
 		return nil, fmt.Errorf("deploy: task_similarity_floor: %w", err)
 	}
 	registry := map[string]*egress.Entry{}
@@ -284,7 +289,7 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	}
 
 	n := names{req.Network, iss.Root}
-	base := n.container("node-" + strings.ToLower(id[:12]))
+	base := nodeBase(req.Network, id)
 	node = &Node{
 		ID: id, Logic: base + "-logic", Sidecar: base + "-sidecar",
 		Shared: base + "-shared", Private: base + "-private",

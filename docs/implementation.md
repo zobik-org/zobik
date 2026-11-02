@@ -193,6 +193,8 @@ The key decision is the orchestrator, and it is that of thesis 3: the Docker Eng
 
 On Windows and macOS there is also a hard cut, that of the engine's VM (§6), which sits above `fleet_capacity` and only acts if something outside the fleet goes past its figure.
 
+**Archiving a node removes it with its volumes** (§3.13.3). The Spawner stops the Integration Sidecar, which cuts the session, closes the tasks the node holds with `logic_container_lost` (§3.6.1) and publishes what its outbox holds before exiting (§3.6.4); then it removes both containers and both volumes. It does not wait for the node to be free. A channel's decommissioning is a draining instead (§3.13.8).
+
 **The engine keeps only the images of what runs.** To create a node, the Spawner pulls its image from the Registry (row 16) through the host's link (§6, *The tenant CA, the link and the join code*), and the engine keeps it in its local storage. On archiving, after confirming the decommissioning (§3.13.3), the Spawner deletes that image by digest. Docker refuses to delete an image that any container on the host uses, even a stopped one, and the Spawner ignores that refusal: another instance still uses the image, of this network or of another that shares the host, and the Spawner that archives the last one deletes it. What goes is the artifact's own layer; the base image stays, because the deployment brings it.
 
 * **What stays on the host is bounded by the fleet**, which `fleet_capacity` bounds, so it has no figure of its own in thesis 8. Deleting an image in the Registry (§3.13.8) needs no separate step: it is executed only on what does not run, and what was running with an expired presence mark frees its image when it is archived.

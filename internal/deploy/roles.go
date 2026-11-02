@@ -131,7 +131,7 @@ var Roles = []Role{
 	// The Spawner claims the operator's requests on the fleet, and provisions on
 	// the container engine; zobik init adds its deployment parameters to Args
 	// (implementation §1.2.4).
-	{Unit: unitSpawner, Scope: bus.SpawnerScope, Topic: spawner.TopicProvision, Consumers: claimant(spawner.TopicProvision),
+	{Unit: unitSpawner, Scope: bus.SpawnerScope, Topic: spawner.TopicProvision, Consumers: claimant(spawner.TopicProvision, spawner.TopicRetire),
 		Certificate: signing.RoleSpawner, Issues: &bus.NodeScope, Engine: true, TenantCA: true,
 		Args: []string{"--role=spawner"}, NamesNetwork: true, WaitsFor: []string{"config", unitSecrets}},
 	// The panel's channels go first and last in their audience (implementation §6,
@@ -158,15 +158,16 @@ func panelChannel(audience string, waitsFor ...string) Role {
 		}}
 }
 
-// claimant listens to a topic's announcements and to the award and rejection
-// addressed to its identity.
-func claimant(topic string) func(id string) []bus.Consumer {
+// claimant listens to the announcements of its topics and to the award and
+// rejection addressed to its identity.
+func claimant(topics ...string) func(id string) []bus.Consumer {
 	return func(id string) []bus.Consumer {
-		return []bus.Consumer{{Stream: "task", Name: id, Filters: []string{
-			bus.SubjectAnnounced(topic),
-			bus.SubjectAddressed(bus.TypeAssigned, id),
-			bus.SubjectAddressed(bus.TypeRejected, id),
-		}}}
+		var filters []string
+		for _, t := range topics {
+			filters = append(filters, bus.SubjectAnnounced(t))
+		}
+		filters = append(filters, bus.SubjectAddressed(bus.TypeAssigned, id), bus.SubjectAddressed(bus.TypeRejected, id))
+		return []bus.Consumer{{Stream: "task", Name: id, Filters: filters}}
 	}
 }
 

@@ -87,10 +87,10 @@ func (z *network) build(t *testing.T, ctx context.Context, dockerfile, tag strin
 
 // blueprint builds a blueprint's image on the base image zobik init seeded in
 // the tenant's registry, which the engine pulls through the link by digest.
-func (z *network) blueprint(t *testing.T, ctx context.Context, dockerfile, tag string) {
+func (z *network) blueprint(t *testing.T, ctx context.Context, dockerfile, tag string, args ...string) {
 	t.Helper()
 	base := strings.TrimSpace(z.run(t, ctx, "", "base-image"))
-	z.build(t, ctx, dockerfile, tag, "--build-arg", "BASE="+base)
+	z.build(t, ctx, dockerfile, tag, append([]string{"--build-arg", "BASE=" + base}, args...)...)
 }
 
 // cmd runs a subcommand on the test's network. The network's flags go right
