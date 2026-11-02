@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_retire.remove.schema.json",
+  "description": "A node_retire that removes a node: the Spawner archives it with trigger_reason operator_removal (architecture §3.13.8). The common fields are in data.schema.json.",
+  "type": "object",
+  "required": ["kind", "node_id", "target_topic", "operator_proof"],
+  "properties": {
+    "kind": {"description": "remove.", "type": "string", "enum": ["remove"]},
+    "node_id": {
+      "description": "The node, by its platform identity: the identifier node_review and node_query name it with (architecture §3.12.3).",
+      "type": "string",
+      "minLength": 1
+    },
+    "target_topic": {"description": "The node's topic.", "type": "string", "minLength": 1},
+    "operator_proof": {"description": "The operator's proof of the act, with act node_retire (implementation §9.2).", "type": "string"}
+  }
+}

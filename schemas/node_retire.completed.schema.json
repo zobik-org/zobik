@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_retire.completed.schema.json",
+  "description": "The data of the task.completed with which the Spawner closes a node_retire (architecture §3.13.8, implementation §10.1). The common fields are in data.schema.json.",
+  "type": "object",
+  "properties": {
+    "node_ids": {
+      "description": "The nodes a remove or a veto archived, by their platform identity (architecture §3.12.3).",
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

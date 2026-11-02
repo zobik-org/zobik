@@ -483,7 +483,8 @@ func TestDriver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []spawner.Running{{NodeID: node.ID, Topic: "echo", ArtifactRef: f.logic}}; !slices.Equal(fleet, want) {
+	want := []spawner.Running{{NodeID: node.ID, Topic: "echo", ArtifactRef: f.logic, ModelID: node.ModelID, SimilarityFloor: 0.6}}
+	if !slices.Equal(fleet, want) {
 		t.Errorf("the fleet %+v, want %+v", fleet, want)
 	}
 
@@ -507,6 +508,20 @@ func TestDriver(t *testing.T) {
 	}
 	if after.Identity != before.Identity || after.Credential != before.Credential {
 		t.Error("the renewal changed more than the JWT")
+	}
+
+	// Decommissioning removes both halves and both volumes (implementation §1.2.4).
+	if err := d.Decommission(ctx, fleet[0]); err != nil {
+		t.Fatal(err)
+	}
+	if fleet, err := d.Fleet(ctx); err != nil || len(fleet) != 0 {
+		t.Errorf("the fleet after decommissioning: %v %v", fleet, err)
+	}
+	base := strings.TrimSuffix(sidecarName, "-sidecar")
+	for _, v := range []string{base + "-shared", base + "-private"} {
+		if _, ok, err := f.e.volumeLabels(ctx, v); err != nil || ok {
+			t.Errorf("the volume %s outlived the node: %v", v, err)
+		}
 	}
 }
 

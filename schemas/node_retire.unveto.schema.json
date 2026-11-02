@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_retire.unveto.schema.json",
+  "description": "A node_retire that lifts the veto on an artifact in the network: the Spawner deletes the veto mark and brings up nothing (architecture §3.13.8). The common fields are in data.schema.json.",
+  "type": "object",
+  "required": ["kind", "artifact_ref", "target_topic", "operator_proof"],
+  "properties": {
+    "kind": {"description": "unveto.", "type": "string", "enum": ["unveto"]},
+    "artifact_ref": {"description": "The digest of the entry's image, which names the entry (implementation §1.2.11).", "type": "string", "minLength": 1},
+    "target_topic": {"description": "The entry's topic.", "type": "string", "minLength": 1},
+    "operator_proof": {"description": "The operator's proof of the act, with act node_retire (implementation §9.2).", "type": "string"}
+  }
+}

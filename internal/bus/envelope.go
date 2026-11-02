@@ -96,16 +96,16 @@ func Schema(name string) (*schema.Schema, error) {
 }
 
 // topicSchemas names the schemas of the data a fixed-convention topic fixes for
-// typ, chosen by the topic and, in the hitl_contact_* family, by kind
-// (implementation §10.1): <topic>.schema.json for the announcement and
-// <topic>.completed.schema.json for its answer. A query whose kind has no schema
-// of its own validates against the family's common part.
+// typ, chosen by the topic and, in node_retire and the hitl_contact_* family,
+// by kind (implementation §10.1): <topic>.schema.json for the announcement and
+// <topic>.completed.schema.json for its answer. An announcement whose kind has
+// no schema of its own validates against the topic's common part.
 func topicSchemas(typ, topic, kind string) []string {
 	if strings.HasPrefix(topic, hitlPrefix) {
 		topic = "hitl_contact"
-		if typ == TypeAnnounced {
-			return []string{topic + "." + kind + ".schema.json", topic + ".schema.json"}
-		}
+	}
+	if typ == TypeAnnounced && (topic == "hitl_contact" || topic == "node_retire") {
+		return []string{topic + "." + kind + ".schema.json", topic + ".schema.json"}
 	}
 	switch typ {
 	case TypeAnnounced:

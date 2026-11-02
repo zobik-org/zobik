@@ -39,6 +39,7 @@ type Options struct {
 	// IdentityLifetime is how long a node's platform identity is valid; the
 	// Spawner renews it at a third of it (implementation §1.2.4).
 	IdentityLifetime time.Duration
+	Registry         Registry
 }
 
 // Run is the spawner role, the Spawner (implementation §1.2.4). It is ready
@@ -60,10 +61,13 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	}
 	s := &spawner{
 		rt: rt, js: js, o: o,
-		claimant: claim.New(rt.ID, rt.Credential, js, nc, TopicProvision),
-		acts:     make(chan *claim.Assignment, 64),
-		coming:   map[string]int{},
-		renewed:  map[string]time.Time{},
+		claimants: map[string]*claim.Claimant{},
+		acts:      make(chan act, 64),
+		coming:    map[string]int{},
+		renewed:   map[string]time.Time{},
+	}
+	for _, topic := range []string{TopicProvision, TopicRetire} {
+		s.claimants[topic] = claim.New(rt.ID, rt.Credential, js, nc, topic)
 	}
 	s.head.Store(head)
 	go s.serveActs(ctx, rt.Loop("acts", actTimeout+time.Minute))
@@ -74,14 +78,18 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 }
 
 type spawner struct {
-	rt       *role.Runtime
-	js       jetstream.JetStream
-	o        Options
-	claimant *claim.Claimant
-	head     atomic.Pointer[globalconfig.Record]
+	rt *role.Runtime
+	js jetstream.JetStream
+	o  Options
+	// claimants are its cycles on the operator's requests, by topic.
+	claimants map[string]*claim.Claimant
+	head      atomic.Pointer[globalconfig.Record]
 	// acts are the requests it won, which it executes one at a time: admission
 	// counts the fleet serially (implementation §1.2.4).
-	acts chan *claim.Assignment
+	acts chan act
+	// fleet is held by whatever changes the fleet: an act, or the renewal when
+	// it archives what is being deleted.
+	fleet sync.Mutex
 	// coming are the entries whose node an act is bringing up, by digest: the
 	// renewal keeps their presence marks although the fleet does not list them yet.
 	mu     sync.Mutex
@@ -89,6 +97,13 @@ type spawner struct {
 	// renewed is when each node's identity was last renewed; only the renewal
 	// reads and writes it.
 	renewed map[string]time.Time
+}
+
+// act is a request it won, with the claimant of its topic.
+type act struct {
+	topic string
+	c     *claim.Claimant
+	a     *claim.Assignment
 }
 
 // handle proposes on each announcement and takes what it is awarded. The
@@ -104,17 +119,27 @@ func (s *spawner) handle(ctx context.Context, m jetstream.Msg) {
 	defer cancel()
 	switch e.Type {
 	case bus.TypeAnnounced:
-		if err := s.claimant.Propose(opCtx, &e, nil); err != nil {
+		c := s.claimants[strings.TrimPrefix(m.Subject(), bus.SubjectAnnounced(""))]
+		if c == nil {
+			break
+		}
+		if err := c.Propose(opCtx, &e, nil); err != nil {
 			log.Printf("spawner: proposing on %s: %v", e.Subject, err)
 			m.NakWithDelay(time.Second)
 			return
 		}
 	case bus.TypeRejected:
-		s.claimant.Rejected(&e)
+		for _, c := range s.claimants {
+			c.Rejected(&e)
+		}
 	case bus.TypeAssigned:
-		if a, ok := s.claimant.Assigned(&e); ok {
+		for topic, c := range s.claimants {
+			a, ok := c.Assigned(&e)
+			if !ok {
+				continue
+			}
 			select {
-			case s.acts <- a:
+			case s.acts <- act{topic, c, a}:
 			default:
 				// Without room the lease expires and the request comes back.
 				log.Printf("spawner: %s left to its re-announcement: too many acts waiting", a.TaskID)
@@ -163,8 +188,9 @@ func failed(err error) outcome {
 // execute runs a request while it keeps its lease, and closes it. A failure of
 // the Bus, of the Catalog or of the engine leaves it without closing: the lease
 // expires and the request comes back with its re-announcement.
-func (s *spawner) execute(ctx context.Context, a *claim.Assignment) {
-	stop := s.claimant.KeepLease(a, func() time.Duration { return s.head.Load().Duration("task_lease_ttl") })
+func (s *spawner) execute(ctx context.Context, x act) {
+	a := x.a
+	stop := x.c.KeepLease(a, func() time.Duration { return s.head.Load().Duration("task_lease_ttl") })
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, actTimeout)
 	defer cancel()
@@ -172,7 +198,9 @@ func (s *spawner) execute(ctx context.Context, a *claim.Assignment) {
 		s.head.Store(head)
 	}
 
-	out, err := s.provision(ctx, a)
+	s.fleet.Lock()
+	out, err := s.request(ctx, x.topic, a)
+	s.fleet.Unlock()
 	if err != nil {
 		log.Printf("spawner: %s left to its re-announcement: %v", a.TaskID, err)
 		return
@@ -182,17 +210,17 @@ func (s *spawner) execute(ctx context.Context, a *claim.Assignment) {
 	if out.Type == bus.TypeFailed {
 		log.Printf("spawner: %s rejected, %v: %v", a.TaskID, out.Data["failure_code"], out.Data["failure_reason"])
 	} else {
-		log.Printf("spawner: %s provisioned node %v", a.TaskID, out.Data["node_id"])
+		log.Printf("spawner: %s closed: %v", a.TaskID, out.Data)
 	}
-	if err := s.claimant.Close(opCtx, a, out.Type, out.Data); err != nil {
+	if err := x.c.Close(opCtx, a, out.Type, out.Data); err != nil {
 		log.Printf("spawner: closing %s: %v", a.TaskID, err)
 	}
 }
 
-// provision returns the outcome stamped under the request's key, or executes
+// request returns the outcome stamped under the request's key, or executes
 // the request and stamps it: the first stamp wins, and a duplicated delivery
 // returns it (architecture §3.13.8).
-func (s *spawner) provision(ctx context.Context, a *claim.Assignment) (outcome, error) {
+func (s *spawner) request(ctx context.Context, topic string, a *claim.Assignment) (outcome, error) {
 	cat, err := s.o.Catalog(ctx)
 	if errors.Is(err, ErrNoCatalog) {
 		return failed(Refuse(CodeRequestInvalid, "%v", err)), nil
@@ -205,16 +233,19 @@ func (s *spawner) provision(ctx context.Context, a *claim.Assignment) (outcome, 
 	if _, ok, err := cat.Record(ctx, s.o.Network, key, &stamped); err != nil || ok {
 		return stamped, err
 	}
-	node, err := s.instantiate(ctx, cat, a)
+	var data map[string]any
+	if topic == TopicRetire {
+		data, err = s.retire(ctx, cat, a)
+	} else {
+		data, err = s.provision(ctx, cat, a)
+	}
 	var r *Refusal
-	out := outcome{Type: bus.TypeCompleted, Data: map[string]any{}}
+	out := outcome{Type: bus.TypeCompleted, Data: data}
 	switch {
 	case errors.As(err, &r):
 		out = failed(r)
 	case err != nil:
 		return outcome{}, err
-	default:
-		out.Data["node_id"] = node.ID
 	}
 	err = cat.PutRecord(ctx, s.o.Network, key, out, catalog.Write{IfAbsent: true})
 	if errors.Is(err, catalog.ErrPrecondition) {
@@ -233,9 +264,17 @@ type request struct {
 	OperatorProof      string                `json:"operator_proof"`
 }
 
-// instantiate validates the request in layers—its shape, the proof, the entry
-// it names and the network's state—and provisions the node (architecture
-// §3.13.8). Every layer is a predicate over identifiers.
+// provision validates a node_provision in layers—its shape, the proof, the
+// entry it names and the network's state—and provisions the node; the close
+// names it (architecture §3.13.8). Every layer is a predicate over identifiers.
+func (s *spawner) provision(ctx context.Context, cat Catalog, a *claim.Assignment) (map[string]any, error) {
+	node, err := s.instantiate(ctx, cat, a)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"node_id": node.ID}, nil
+}
+
 func (s *spawner) instantiate(ctx context.Context, cat Catalog, a *claim.Assignment) (*Node, error) {
 	ann := a.Announcement
 	if err := ann.ValidateTopic(); err != nil {
@@ -245,7 +284,7 @@ func (s *spawner) instantiate(ctx context.Context, cat Catalog, a *claim.Assignm
 	if err := json.Unmarshal(ann.Data, &req); err != nil {
 		return nil, Refuse(CodeRequestInvalid, "data: %v", err)
 	}
-	proof, err := verifyProof(s.rt.Root, a.TaskID, ann.Data, req.OperatorProof)
+	proof, err := verifyProof(s.rt.Root, TopicProvision, a.TaskID, ann.Data, req.OperatorProof)
 	if err != nil {
 		return nil, err
 	}
@@ -300,6 +339,10 @@ func (s *spawner) instantiate(ctx context.Context, cat Catalog, a *claim.Assignm
 	if _, _, err := cat.Record(ctx, s.o.Network, "memory:"+entry.ArtifactRef, &memory); err != nil {
 		return nil, err
 	}
+	floor, err := s.floor(ctx, cat, entry.ArtifactRef)
+	if err != nil {
+		return nil, err
+	}
 
 	// The presence mark goes before the deletion mark is read, and before the
 	// node comes up (architecture §3.13.3, §3.13.8).
@@ -317,6 +360,7 @@ func (s *spawner) instantiate(ctx context.Context, cat Catalog, a *claim.Assignm
 	p := Provisioning{
 		Topic: entry.Topic, Entry: entry, Associations: associations,
 		Proof: req.OperatorProof, ProvisionGrants: proof.ProvisionGrants, MemoryMB: memory.MemoryRequired,
+		Floor: floor,
 	}
 	node, err := s.provisionRetrying(ctx, p)
 	if err != nil {

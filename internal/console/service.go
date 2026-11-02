@@ -47,6 +47,9 @@ type Options struct {
 	// EntryTopic reads the topic of the Catalog entry artifactRef, or fails with
 	// ErrNoEntry (implementation §1.2.11).
 	EntryTopic func(ctx context.Context, artifactRef string) (string, error)
+	// NodeTopic reads the topic of the node nodeID from the Active Node
+	// Registry, or fails with ErrNoNode (architecture §3.11).
+	NodeTopic func(ctx context.Context, nodeID string) (string, error)
 }
 
 // Service is the console's local API: the session, and the acts the panel and

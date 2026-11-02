@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,8 @@ import (
 // console, and the Spawner brings up echo from its Catalog entry with the
 // Active Node Registry's labels. A node that does not fit in fleet_capacity
 // closes with capacity_exhausted, and a node keeps winning tasks after its
-// identity's life, because the Spawner renews it.
+// identity's life, because the Spawner renews it. Then node_retire removes,
+// vetoes and purges.
 func TestSpawner(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
@@ -84,6 +86,79 @@ func TestSpawner(t *testing.T) {
 	task := uuid.NewString()
 	z.run(t, ctx, "", "publish", "--topic", "echo", "--task", task, "--text", text)
 	lifecycle(t, events, task)
+
+	z.retire(t, ctx, node, logic, ref, blueprint)
+}
+
+// Retirar y vetar: node remove archives a node with its containers and
+// volumes; node veto archives the other instance and keeps the artifact from
+// coming up until node unveto; node purge rejects a seeded artifact and one a
+// network runs, and deletes the image of one nobody runs.
+func (z *network) retire(t *testing.T, ctx context.Context, node, logic, ref, blueprint string) {
+	t.Helper()
+	if out := z.run(t, ctx, credentials, "node", "remove", node); !strings.Contains(out, "archived nodes "+node) {
+		t.Errorf("node remove said: %s", out)
+	}
+	for _, kind := range []string{"container", "volume"} {
+		name := logic
+		if kind == "volume" {
+			name = strings.TrimSuffix(logic, "-logic") + "-private"
+		}
+		if exec.CommandContext(ctx, "docker", kind, "inspect", name).Run() == nil {
+			t.Errorf("the %s %s outlived the node", kind, name)
+		}
+	}
+
+	if out := z.run(t, ctx, credentials, "node", "veto", ref); !regexp.MustCompile(`archived nodes U[A-Z0-9]+`).MatchString(out) {
+		t.Errorf("node veto said: %s", out)
+	}
+	if out := z.fail(t, ctx, credentials, "node", "provision", ref); !strings.Contains(out, "artifact_vetoed") {
+		t.Errorf("provisioning a vetoed artifact: %s", out)
+	}
+	z.run(t, ctx, credentials, "node", "unveto", ref)
+	if out := z.fail(t, ctx, credentials, "node", "purge", ref); !strings.Contains(out, "seeded") {
+		t.Errorf("purging a seeded artifact: %s", out)
+	}
+
+	// Another artifact, imported, is purged once nothing runs it.
+	z.blueprint(t, ctx, "examples/blueprints/echo/Dockerfile", "zobik-echo:purge", "--label", "org.zobik.test=purge")
+	raw, err := os.ReadFile(blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(t.TempDir(), "blueprint.json")
+	if err := os.WriteFile(other, []byte(strings.Replace(string(raw), "zobik-echo:dev", "zobik-echo:purge", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var e struct {
+		ArtifactRef string `json:"artifact_ref"`
+	}
+	out := z.run(t, ctx, "", "register", "--topic", "echo", "--provenance", "imported", other)
+	if err := json.Unmarshal([]byte(lastLine(out)), &e); err != nil || e.ArtifactRef == "" || e.ArtifactRef == ref {
+		t.Fatalf("register said: %s", out)
+	}
+	m := regexp.MustCompile(`provisioned node (U[A-Z0-9]+)`).FindStringSubmatch(z.run(t, ctx, credentials, "node", "provision", e.ArtifactRef))
+	if m == nil {
+		t.Fatal("the imported artifact was not provisioned")
+	}
+	if out := z.fail(t, ctx, credentials, "node", "purge", e.ArtifactRef); !strings.Contains(out, "runs in "+z.name) {
+		t.Errorf("purging a running artifact: %s", out)
+	}
+	z.run(t, ctx, credentials, "node", "remove", m[1])
+	z.run(t, ctx, credentials, "node", "purge", e.ArtifactRef)
+	if out := z.fail(t, ctx, credentials, "node", "provision", e.ArtifactRef); !strings.Contains(out, "being deleted") {
+		t.Errorf("provisioning a purged artifact: %s", out)
+	}
+	base := strings.TrimSpace(z.run(t, ctx, "", "base-image"))
+	addr, _, _ := strings.Cut(base, "/")
+	resp, err := http.Get("http://" + addr + "/v2/artifacts/manifests/" + e.ArtifactRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("the purged manifest in the registry: %s", resp.Status)
+	}
 }
 
 // containerLabels reads a container's labels.

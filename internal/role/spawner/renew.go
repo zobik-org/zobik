@@ -109,4 +109,42 @@ func (s *spawner) renew(ctx context.Context) {
 			}
 		}
 	}
+	s.archiveDeleted(ctx, cat, fleet)
 }
+
+// archiveDeleted archives with operator_removal every node whose entry has a
+// deletion mark: its image was deleted while its presence mark had expired
+// (architecture §3.13.8). An act in progress leaves it for the next cycle.
+func (s *spawner) archiveDeleted(ctx context.Context, cat Catalog, fleet []Running) {
+	var deleted []Running
+	marked := map[string]bool{}
+	for _, n := range fleet {
+		mark, seen := marked[n.ArtifactRef]
+		if !seen {
+			entry, ok, err := cat.Entry(ctx, n.ArtifactRef)
+			if err != nil {
+				log.Printf("spawner: renewal: reading the entry %s: %v", n.ArtifactRef, err)
+				return
+			}
+			mark = ok && entry.DeletionMark
+			marked[n.ArtifactRef] = mark
+		}
+		if mark {
+			deleted = append(deleted, n)
+		}
+	}
+	if len(deleted) == 0 || !s.fleet.TryLock() {
+		return
+	}
+	defer s.fleet.Unlock()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), archiveTimeout)
+	defer cancel()
+	if ids, err := s.archive(ctx, cat, deleted); err != nil {
+		log.Printf("spawner: renewal: archiving what is being deleted: %v", err)
+	} else {
+		log.Printf("spawner: renewal: archived %v, whose image was deleted", ids)
+	}
+}
+
+// archiveTimeout bounds the archiving of the nodes the renewal finds deleted.
+const archiveTimeout = 2 * time.Minute

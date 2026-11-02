@@ -76,6 +76,25 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// A node_retire validates against the schema of its kind, and an unknown kind
+// against the topic's common part, which rejects it (implementation §10.1).
+func TestValidateTopicByKind(t *testing.T) {
+	for _, c := range []struct {
+		data map[string]any
+		ok   bool
+	}{
+		{map[string]any{"kind": "remove", "node_id": "UNODE", "target_topic": "echo", "operator_proof": "x"}, true},
+		{map[string]any{"kind": "remove", "artifact_ref": "sha256:x", "target_topic": "echo", "operator_proof": "x"}, false},
+		{map[string]any{"kind": "purge", "artifact_ref": "sha256:x", "target_topic": "echo", "operator_proof": "x"}, true},
+		{map[string]any{"kind": "evict", "artifact_ref": "sha256:x", "target_topic": "echo", "operator_proof": "x"}, false},
+	} {
+		c.data["topic"] = "node_retire"
+		if err := announced(t, c.data).ValidateTopic(); (err == nil) != c.ok {
+			t.Errorf("%v: %v", c.data, err)
+		}
+	}
+}
+
 // A task's span derives from its task.assigned, and what is emitted from the
 // task keeps the trace and the flags.
 func TestSpan(t *testing.T) {

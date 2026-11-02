@@ -134,6 +134,10 @@ func runCmd(ctx context.Context, args []string) error {
 				return err
 			}
 			defer e.Close()
+			reg, err := deploy.SpawnerRegistry(iss)
+			if err != nil {
+				return err
+			}
 			return spawner.Run(ctx, rt, nc, spawner.Options{
 				Network: *network,
 				Driver: &deploy.Driver{
@@ -142,6 +146,7 @@ func runCmd(ctx context.Context, args []string) error {
 					FleetCapacityMB: *fleetCapacity, IdentityLifetime: *lifetime,
 				},
 				Catalog:          deploy.SpawnerCatalog(iss),
+				Registry:         reg,
 				IdentityLifetime: *lifetime,
 			})
 		}

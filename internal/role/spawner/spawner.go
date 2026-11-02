@@ -13,6 +13,14 @@ import (
 // (architecture §3.13.8).
 const TopicProvision = "node_provision"
 
+// TopicRetire is the operator's request that removes a node, vetoes an
+// artifact, lifts its veto or deletes its image (architecture §3.13.8).
+const TopicRetire = "node_retire"
+
+// TriggerOperatorRemoval is the trigger_reason of what the operator's request
+// archives, a value the Network Monitor does not emit (architecture §3.13.8).
+const TriggerOperatorRemoval = "operator_removal"
+
 // The failure codes the Spawner closes its requests with (implementation §10.1).
 const (
 	CodeRequestInvalid       = "request_invalid"
@@ -54,6 +62,9 @@ type Provisioning struct {
 	// MemoryMB is the entry's effective reservation in this network, or zero if
 	// it has none yet (architecture §3.13.10).
 	MemoryMB int64
+	// Floor is the similarity_floor the node competes with, or nil for
+	// task_similarity_floor (architecture §3.13.3).
+	Floor *float64
 }
 
 // Node is a provisioned node: its platform identity, the vector it competes
@@ -69,6 +80,8 @@ type Node struct {
 // (architecture §3.11).
 type Running struct {
 	NodeID, Topic, ArtifactRef string
+	ModelID                    string
+	SimilarityFloor            float64
 }
 
 // Driver is the deployment platform the Spawner provisions on (architecture
@@ -81,6 +94,19 @@ type Driver interface {
 	Fleet(ctx context.Context) ([]Running, error)
 	// Renew renews the node's platform identity (implementation §1.2.4).
 	Renew(ctx context.Context, n Running) error
+	// Decommission stops the node and removes it with its volumes; one already
+	// gone is no error (implementation §1.2.4).
+	Decommission(ctx context.Context, n Running) error
+	// DeleteImage deletes the artifact's image from the engine; an image another
+	// node still uses stays, and that is no error (implementation §1.2.4).
+	DeleteImage(ctx context.Context, digest string) error
+}
+
+// Registry is the tenant's image registry, where purge deletes an artifact's
+// image (implementation §1.2.16).
+type Registry interface {
+	// Delete deletes the manifest digest with its tags; one already gone is no error.
+	Delete(ctx context.Context, digest string) error
 }
 
 // Catalog is what the Spawner reads and writes of the Specialty Catalog with
@@ -92,6 +118,7 @@ type Catalog interface {
 	Records(ctx context.Context, prefix, network string) ([]catalog.Record, error)
 	PutRecord(ctx context.Context, network, key string, value any, w catalog.Write) error
 	DeleteRecord(ctx context.Context, network, key string, revision int64) error
+	SetDeletionMark(ctx context.Context, digest string, on bool) error
 }
 
 // ErrNoCatalog is a network without Catalog credentials: it provisions nothing.

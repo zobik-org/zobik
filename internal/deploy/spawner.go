@@ -91,20 +91,59 @@ func SpawnerCatalog(iss *Issuer) func(ctx context.Context) (spawner.Catalog, err
 		if err != nil {
 			return nil, err
 		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM([]byte(iss.TenantCA)) {
-			return nil, errors.New("deploy: tenant CA: no certificate")
+		h, err := tenantHTTP(iss.TenantCA)
+		if err != nil {
+			return nil, err
 		}
-		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.Proxy = nil
-		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}
-		c = &catalog.Client{
-			URL:        "https://" + CatalogAlias,
-			Credential: string(cred),
-			HTTP:       &http.Client{Transport: tr, Timeout: time.Minute},
-		}
+		c = &catalog.Client{URL: "https://" + CatalogAlias, Credential: string(cred), HTTP: h}
 		return c, nil
 	}
+}
+
+// tenantHTTP is a client of the tenant's pieces, which trusts only the tenant CA.
+func tenantHTTP(tenantCA string) (*http.Client, error) {
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(tenantCA)) {
+		return nil, errors.New("deploy: tenant CA: no certificate")
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}
+	return &http.Client{Transport: tr, Timeout: time.Minute}, nil
+}
+
+// SpawnerRegistry is the Spawner's client of the tenant's image registry, where
+// purge deletes an artifact's image (implementation §1.2.16).
+func SpawnerRegistry(iss *Issuer) (spawner.Registry, error) {
+	h, err := tenantHTTP(iss.TenantCA)
+	if err != nil {
+		return nil, err
+	}
+	return &registryClient{base: "https://" + RegistryAlias + ":" + RegistryPort, http: h}, nil
+}
+
+type registryClient struct {
+	base string
+	http *http.Client
+}
+
+// Delete deletes the manifest by digest with the protocol's DELETE, which
+// takes all its tags with it (implementation §1.2.16).
+func (r *registryClient) Delete(ctx context.Context, digest string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, r.base+"/v2/"+Repository+"/manifests/"+digest, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := r.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusAccepted, http.StatusOK, http.StatusNotFound:
+		return nil
+	}
+	return fmt.Errorf("deploy: deleting %s from the registry: %s", digest, resp.Status)
 }
 
 // Driver is the Spawner's deployment platform on the container engine: the act
@@ -133,7 +172,7 @@ func (d *Driver) Provision(ctx context.Context, p spawner.Provisioning) (*spawne
 		},
 		SidecarImage: d.SidecarImage, Registry: d.Registry,
 		Associations: p.Associations, Proof: p.Proof, ProvisionGrants: p.ProvisionGrants,
-		MemoryMB: p.MemoryMB, FleetCapacityMB: d.FleetCapacityMB, IdentityLifetime: d.IdentityLifetime,
+		MemoryMB: p.MemoryMB, Floor: p.Floor, FleetCapacityMB: d.FleetCapacityMB, IdentityLifetime: d.IdentityLifetime,
 	})
 	if err != nil {
 		return nil, err
@@ -155,9 +194,49 @@ func (d *Driver) Fleet(ctx context.Context) ([]spawner.Running, error) {
 		if !ok {
 			continue
 		}
-		out = append(out, spawner.Running{NodeID: c.Labels[labelNode], Topic: c.Labels[labelTopic], ArtifactRef: digest})
+		floor, err := strconv.ParseFloat(c.Labels[labelSimilarityFloor], 64)
+		if err != nil {
+			return nil, fmt.Errorf("deploy: %s carries no %s: %w", c.Name, labelSimilarityFloor, err)
+		}
+		out = append(out, spawner.Running{
+			NodeID: c.Labels[labelNode], Topic: c.Labels[labelTopic], ArtifactRef: digest,
+			ModelID: c.Labels[labelModelID], SimilarityFloor: floor,
+		})
 	}
 	return out, nil
+}
+
+// NodeTopic reads the topic of the network's node id from the Active Node
+// Registry; ok is false if the network runs no such node (architecture §3.11).
+func NodeTopic(ctx context.Context, e *Engine, network, id string) (topic string, ok bool, err error) {
+	cs, err := e.Containers(ctx, map[string]string{labelNetwork: network, labelNode: id, labelTopic: ""})
+	if err != nil || len(cs) == 0 {
+		return "", false, err
+	}
+	return cs[0].Labels[labelTopic], true, nil
+}
+
+// sidecarStopTimeout is how long the Integration Sidecar has to close the
+// node's tasks and publish its outbox when it stops (implementation §1.2.4).
+const sidecarStopTimeout = 15 * time.Second
+
+// Decommission stops the node's Integration Sidecar, which closes the tasks
+// the node holds and publishes its outbox, and removes both halves, both
+// volumes and the node's consumer (implementation §1.2.4).
+func (d *Driver) Decommission(ctx context.Context, n spawner.Running) error {
+	base := nodeBase(d.Network, n.NodeID)
+	if err := d.Engine.Stop(ctx, base+"-sidecar", sidecarStopTimeout); err != nil {
+		return err
+	}
+	return errors.Join(
+		d.Engine.Remove(ctx, []string{base + "-logic", base + "-sidecar"}, []string{base + "-shared", base + "-private"}),
+		bus.DeleteNodeConsumer(ctx, d.JS, n.NodeID))
+}
+
+// DeleteImage deletes the artifact's image the engine pulled; the engine keeps
+// it while another container uses it (implementation §1.2.4).
+func (d *Driver) DeleteImage(ctx context.Context, digest string) error {
+	return d.Engine.RemoveImage(ctx, PullRef(d.Registry, digest))
 }
 
 // Renew writes the node's startup configuration again with a new user JWT;
@@ -187,7 +266,12 @@ func (d *Driver) Renew(ctx context.Context, n spawner.Running) error {
 
 // nodeSidecar names the Integration Sidecar of a node of network.
 func (e *Engine) nodeSidecar(_ context.Context, network, id string) string {
-	return names{network: network}.container("node-"+strings.ToLower(id[:12])) + "-sidecar"
+	return nodeBase(network, id) + "-sidecar"
+}
+
+// nodeBase is the prefix of the names of a node's containers and volumes.
+func nodeBase(network, id string) string {
+	return names{network: network}.container("node-" + strings.ToLower(id[:12]))
 }
 
 // fleetMemory adds up the reservations the network's fleet carries in its

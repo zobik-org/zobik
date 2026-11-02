@@ -159,6 +159,18 @@ func newConsole(n networkFlags, idle time.Duration) (*console.Service, error) {
 			}
 			return entry.Topic, nil
 		},
+		NodeTopic: func(ctx context.Context, nodeID string) (string, error) {
+			e, err := deploy.NewEngine(ctx)
+			if err != nil {
+				return "", err
+			}
+			defer e.Close()
+			topic, ok, err := deploy.NodeTopic(ctx, e, n.network, nodeID)
+			if err == nil && !ok {
+				err = fmt.Errorf("%w: %s", console.ErrNoNode, nodeID)
+			}
+			return topic, err
+		},
 	}), nil
 }
 

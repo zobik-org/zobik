@@ -318,6 +318,27 @@ func (e *Engine) Remove(ctx context.Context, containers, volumes []string) error
 	return errors.Join(errs...)
 }
 
+// Stop stops a container, with SIGTERM and then SIGKILL after timeout; one that
+// does not exist is no error.
+func (e *Engine) Stop(ctx context.Context, name string, timeout time.Duration) error {
+	secs := int(timeout / time.Second)
+	_, err := e.c.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &secs})
+	if cerrdefs.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// RemoveImage removes ref from the engine. One that does not exist, or that a
+// container uses, is no error: the engine keeps it.
+func (e *Engine) RemoveImage(ctx context.Context, ref string) error {
+	_, err := e.c.ImageRemove(ctx, ref, client.ImageRemoveOptions{})
+	if cerrdefs.IsNotFound(err) || cerrdefs.IsConflict(err) {
+		return nil
+	}
+	return err
+}
+
 // Spec is a container of the network.
 type Spec struct {
 	Name    string

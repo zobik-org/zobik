@@ -18,22 +18,24 @@ import (
 // zobik register executes the act of registration of a blueprint, as the
 // deployment's seeding does, while the console has no form for it: it pushes
 // the image the engine has and registers it with the network's register
-// credential, with provenance seeded.
+// credential, with provenance seeded or, with --provenance imported, as an
+// entry that purge can delete (architecture §3.13.8).
 func init() {
 	devCommands["register"] = registerCmd
 }
 
 func registerCmd(ctx context.Context, args []string) error {
-	const usage = "usage: zobik register --topic <topic> <blueprint.json>"
+	const usage = "usage: zobik register --topic <topic> [--provenance seeded|imported] <blueprint.json>"
 	fs := flag.NewFlagSet("register", flag.ContinueOnError)
 	var n networkFlags
 	n.register(fs)
 	topic := fs.String("topic", "", "the topic the blueprint claims")
 	author := fs.String("author", "seeding", "the author_id, when the blueprint does not carry one")
+	provenance := fs.String("provenance", catalog.ProvenanceSeeded, "the entry's provenance in the network: seeded, or imported")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 1 || *topic == "" {
+	if fs.NArg() != 1 || *topic == "" || (*provenance != catalog.ProvenanceSeeded && *provenance != catalog.ProvenanceImported) {
 		return errors.New(usage)
 	}
 	if err := n.resolve(); err != nil {
@@ -51,7 +53,7 @@ func registerCmd(ctx context.Context, args []string) error {
 	if reg.AuthorID == "" {
 		reg.AuthorID = *author
 	}
-	reg.Acquisition = &catalog.Acquisition{Provenance: catalog.ProvenanceSeeded, AsOf: time.Now().UTC()}
+	reg.Acquisition = &catalog.Acquisition{Provenance: *provenance, AsOf: time.Now().UTC()}
 
 	if !deploy.IsDigest(reg.ArtifactRef) {
 		e, err := deploy.NewEngine(ctx)

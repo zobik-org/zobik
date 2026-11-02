@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -101,7 +102,7 @@ func (c *fakeCatalog) Records(_ context.Context, prefix, network string) ([]cata
 	var out []catalog.Record
 	for k := range c.records {
 		n, key, _ := strings.Cut(k, "/")
-		if r := c.live(k); r != nil && n == network && strings.HasPrefix(key, prefix) {
+		if r := c.live(k); r != nil && (network == "" || n == network) && strings.HasPrefix(key, prefix) {
 			out = append(out, catalog.Record{Network: n, Key: key, Value: r.value, Revision: r.revision})
 		}
 	}
@@ -142,6 +143,17 @@ func (c *fakeCatalog) DeleteRecord(_ context.Context, network, key string, revis
 	return nil
 }
 
+func (c *fakeCatalog) SetDeletionMark(_ context.Context, digest string, on bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[digest]
+	if !ok {
+		return fmt.Errorf("no entry %s", digest)
+	}
+	e.DeletionMark = on
+	return nil
+}
+
 func (c *fakeCatalog) has(key string) bool {
 	_, ok, _ := c.Record(context.Background(), network, key, nil)
 	return ok
@@ -154,7 +166,13 @@ type fakeDriver struct {
 	acts     []spawner.Provisioning
 	renewals map[string]int
 	refusal  error
+	// decommissioned and images are the nodes and the images it removed.
+	decommissioned []string
+	images         []string
 }
+
+// defaultFloor is the floor the fake brings a node up with when the act names none.
+const defaultFloor = 0.5
 
 func (d *fakeDriver) Provision(_ context.Context, p spawner.Provisioning) (*spawner.Node, error) {
 	d.mu.Lock()
@@ -164,8 +182,40 @@ func (d *fakeDriver) Provision(_ context.Context, p spawner.Provisioning) (*spaw
 		return nil, d.refusal
 	}
 	id := fmt.Sprintf("UNODE%d", len(d.acts))
-	d.fleet = append(d.fleet, spawner.Running{NodeID: id, Topic: p.Topic, ArtifactRef: p.Entry.ArtifactRef})
+	floor := defaultFloor
+	if p.Floor != nil {
+		floor = *p.Floor
+	}
+	d.fleet = append(d.fleet, spawner.Running{NodeID: id, Topic: p.Topic, ArtifactRef: p.Entry.ArtifactRef, ModelID: "fake", SimilarityFloor: floor})
 	return &spawner.Node{ID: id, ModelID: "fake", Embedding: "AAAA", MemoryMB: 256}, nil
+}
+
+func (d *fakeDriver) Decommission(_ context.Context, n spawner.Running) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.fleet = slices.DeleteFunc(d.fleet, func(r spawner.Running) bool { return r.NodeID == n.NodeID })
+	d.decommissioned = append(d.decommissioned, n.NodeID)
+	return nil
+}
+
+func (d *fakeDriver) DeleteImage(_ context.Context, digest string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.images = append(d.images, digest)
+	return nil
+}
+
+// fakeRegistry records what purge deletes.
+type fakeRegistry struct {
+	mu      sync.Mutex
+	deleted []string
+}
+
+func (r *fakeRegistry) Delete(_ context.Context, digest string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deleted = append(r.deleted, digest)
+	return nil
 }
 
 func (d *fakeDriver) Fleet(context.Context) ([]spawner.Running, error) {
@@ -189,10 +239,11 @@ func (d *fakeDriver) actCount() int {
 
 type fixture struct {
 	*testnet.Net
-	cat     *fakeCatalog
-	driver  *fakeDriver
-	channel string
-	closes  chan *nats.Msg
+	cat      *fakeCatalog
+	driver   *fakeDriver
+	registry *fakeRegistry
+	channel  string
+	closes   chan *nats.Msg
 }
 
 func newFixture(t *testing.T, lifetime time.Duration, noCatalog bool) *fixture {
@@ -200,9 +251,9 @@ func newFixture(t *testing.T, lifetime time.Duration, noCatalog bool) *fixture {
 		testnet.Set(v, map[string]any{"auction_timeout": 200})
 	})
 	f := &fixture{
-		Net: n, cat: newCatalog(), driver: &fakeDriver{renewals: map[string]int{}},
+		Net: n, cat: newCatalog(), driver: &fakeDriver{renewals: map[string]int{}}, registry: &fakeRegistry{},
 		channel: n.ID("channel_operator"),
-		closes:  n.Tap("task.*." + n.ID("channel_operator") + "." + spawner.TopicProvision),
+		closes:  n.Tap("task.*." + n.ID("channel_operator") + ".*"),
 	}
 	f.cat.add(catalog.Entry{
 		Registration: catalog.Registration{Topic: "echo", ArtifactRef: echo, CapabilityText: "repeats", AuthorID: "seeding", Requires: map[string]json.RawMessage{}},
@@ -210,7 +261,7 @@ func newFixture(t *testing.T, lifetime time.Duration, noCatalog bool) *fixture {
 	})
 	n.Start("spawner", func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
 		return spawner.Run(ctx, rt, nc, spawner.Options{
-			Network: network, Driver: f.driver, IdentityLifetime: lifetime,
+			Network: network, Driver: f.driver, Registry: f.registry, IdentityLifetime: lifetime,
 			Catalog: func(context.Context) (spawner.Catalog, error) {
 				if noCatalog {
 					return nil, spawner.ErrNoCatalog
