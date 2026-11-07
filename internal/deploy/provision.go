@@ -174,13 +174,8 @@ func Provision(ctx context.Context, e *Engine, js jetstream.JetStream, iss *Issu
 	if err != nil {
 		return nil, fmt.Errorf("deploy: reading the configuration: %w", err)
 	}
-	if req.MemoryMB > 0 {
-		memoryMB = req.MemoryMB
-	}
-	if memoryMB == 0 {
-		if memoryMB, err = intValue(head.Values, "default_memory_required"); err != nil {
-			return nil, err
-		}
+	if memoryMB, err = reservation(head.Values, memoryMB, req.MemoryMB); err != nil {
+		return nil, err
 	}
 	if err := admit(ctx, e, req, memoryMB); err != nil {
 		return nil, err
@@ -422,23 +417,47 @@ func proofIf(provisioned bool, proof string) string {
 	return ""
 }
 
+// reservation is the reservation a node is brought up with: the entry's
+// effective one, else the one it declares, else default_memory_required
+// (architecture §3.13.10).
+func reservation(v globalconfig.Values, declared, effective int64) (int64, error) {
+	switch {
+	case effective > 0:
+		return effective, nil
+	case declared > 0:
+		return declared, nil
+	}
+	return intValue(v, "default_memory_required")
+}
+
+// shortfall is how many MB the fleet lacks for a node of memoryMB: zero if it
+// fits, and a refusal if it does not fit even with the fleet empty
+// (architecture §3.13.10).
+func shortfall(ctx context.Context, e *Engine, network string, capacityMB, memoryMB int64) (int64, error) {
+	if capacityMB <= 0 {
+		return 0, nil
+	}
+	need := memoryMB + sidecarMemory>>20
+	if need > capacityMB {
+		return 0, refuse(codeCapacityExhausted, "the node reserves %d MB, more than the fleet's %d MB", need, capacityMB)
+	}
+	used, err := e.fleetMemory(ctx, network)
+	if err != nil {
+		return 0, err
+	}
+	return max(0, used+need-capacityMB), nil
+}
+
 // admit admits the node against fleet_capacity: the sum of the reservations
 // the fleet's labels carry, Integration Sidecars included, plus the node's two
 // halves (implementation §1.2.4).
 func admit(ctx context.Context, e *Engine, req ProvisionRequest, memoryMB int64) error {
-	if req.FleetCapacityMB <= 0 {
-		return nil
-	}
-	need := memoryMB + sidecarMemory>>20
-	if need > req.FleetCapacityMB {
-		return refuse(codeCapacityExhausted, "the node reserves %d MB, more than the fleet's %d MB", need, req.FleetCapacityMB)
-	}
-	used, err := e.fleetMemory(ctx, req.Network)
+	short, err := shortfall(ctx, e, req.Network, req.FleetCapacityMB, memoryMB)
 	if err != nil {
 		return err
 	}
-	if used+need > req.FleetCapacityMB {
-		return refuse(codeCapacityExhausted, "the fleet reserves %d of %d MB, and the node needs %d", used, req.FleetCapacityMB, need)
+	if short > 0 {
+		return refuse(codeCapacityExhausted, "the fleet lacks %d MB for the node's %d MB", short, memoryMB+sidecarMemory>>20)
 	}
 	return nil
 }

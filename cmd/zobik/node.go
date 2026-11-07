@@ -20,7 +20,9 @@ import (
 func nodeCmd(ctx context.Context, args []string) error {
 	const usage = "usage: zobik node provision [--slot <slot>=<entry> ...] <artifact_ref>\n" +
 		"       zobik node remove <node_id>\n" +
-		"       zobik node veto|unveto|purge <artifact_ref>"
+		"       zobik node veto|unveto|purge <artifact_ref>\n" +
+		"remove archives the node, and the network can bring its entry up again\n" +
+		"on a vacancy; veto keeps the artifact from coming up until unveto"
 	if len(args) == 0 {
 		return errors.New(usage)
 	}

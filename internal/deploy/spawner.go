@@ -22,6 +22,8 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/egress"
+	"zobik.org/zobik/internal/embedding"
+	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role"
 	"zobik.org/zobik/internal/role/catalog"
 	"zobik.org/zobik/internal/role/secrets"
@@ -180,6 +182,42 @@ func (d *Driver) Provision(ctx context.Context, p spawner.Provisioning) (*spawne
 	return &spawner.Node{ID: node.ID, ModelID: node.ModelID, Embedding: node.Embedding, MemoryMB: node.MemoryRequiredMB}, nil
 }
 
+// Shortfall is how many MB the fleet lacks for the node p would bring up
+// (architecture §3.13.10).
+func (d *Driver) Shortfall(ctx context.Context, p spawner.Provisioning) (int64, error) {
+	head, _, err := globalconfig.Head(ctx, d.JS)
+	if err != nil {
+		return 0, fmt.Errorf("deploy: reading the configuration: %w", err)
+	}
+	declared, _, _, err := requires(p.Entry.Requires)
+	if err != nil {
+		return 0, err
+	}
+	memoryMB, err := reservation(head.Values, declared, p.MemoryMB)
+	if err != nil {
+		return 0, err
+	}
+	return shortfall(ctx, d.Engine, d.Network, d.FleetCapacityMB, memoryMB)
+}
+
+// Document generates the embedding of a stored text under the network's
+// embedding_model, encoded as the records carry it (architecture §3.7.3).
+func (d *Driver) Document(ctx context.Context, text string) (modelID, vector string, err error) {
+	head, _, err := globalconfig.Head(ctx, d.JS)
+	if err != nil {
+		return "", "", fmt.Errorf("deploy: reading the configuration: %w", err)
+	}
+	space, err := embedding.Resolve(head.Values)
+	if err != nil {
+		return "", "", err
+	}
+	v, err := space.Document(ctx, d.Issuer.Egress, text)
+	if err != nil {
+		return "", "", err
+	}
+	return space.ModelID, embedding.Encode(v), nil
+}
+
 // Fleet lists the network's nodes by their Logic Containers, the ones that
 // carry the topic label (architecture §3.11).
 func (d *Driver) Fleet(ctx context.Context) ([]spawner.Running, error) {
@@ -198,9 +236,14 @@ func (d *Driver) Fleet(ctx context.Context) ([]spawner.Running, error) {
 		if err != nil {
 			return nil, fmt.Errorf("deploy: %s carries no %s: %w", c.Name, labelSimilarityFloor, err)
 		}
+		memory, err := strconv.ParseInt(c.Labels[labelMemory], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("deploy: %s carries no %s: %w", c.Name, labelMemory, err)
+		}
 		out = append(out, spawner.Running{
 			NodeID: c.Labels[labelNode], Topic: c.Labels[labelTopic], ArtifactRef: digest,
 			ModelID: c.Labels[labelModelID], SimilarityFloor: floor,
+			MemoryMB: memory + sidecarMemory>>20, Provisioned: c.Created,
 		})
 	}
 	return out, nil

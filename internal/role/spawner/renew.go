@@ -90,6 +90,7 @@ func (s *spawner) renew(ctx context.Context) {
 	for id := range s.renewed {
 		if !alive[id] {
 			delete(s.renewed, id)
+			s.obs.forgetNode(id)
 		}
 	}
 
@@ -110,6 +111,7 @@ func (s *spawner) renew(ctx context.Context) {
 		}
 	}
 	s.archiveDeleted(ctx, cat, fleet)
+	s.pressure(ctx, cat)
 }
 
 // archiveDeleted archives with operator_removal every node whose entry has a
@@ -139,7 +141,7 @@ func (s *spawner) archiveDeleted(ctx context.Context, cat Catalog, fleet []Runni
 	defer s.fleet.Unlock()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), archiveTimeout)
 	defer cancel()
-	if ids, err := s.archive(ctx, cat, deleted); err != nil {
+	if ids, err := s.archive(ctx, cat, deleted, TriggerOperatorRemoval); err != nil {
 		log.Printf("spawner: renewal: archiving what is being deleted: %v", err)
 	} else {
 		log.Printf("spawner: renewal: archived %v, whose image was deleted", ids)

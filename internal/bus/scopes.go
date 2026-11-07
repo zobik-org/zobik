@@ -152,16 +152,18 @@ var ChannelScope = Scope{
 }
 
 // SpawnerScope is the Spawner's: it claims the operator's requests on the
-// fleet, reads the configuration a node is provisioned under and the rates its
-// embeddings are valued with, and creates and deletes the nodes' durable
-// consumers (architecture §3.13.1, implementation §1.2.1, §8.5).
+// fleet and the vacant tasks, reads the configuration a node is provisioned
+// under and the rates its embeddings are valued with, creates and deletes the
+// nodes' durable consumers, and observes the lease renewals, which tell it
+// which node is busy (architecture §3.13.1, §3.13.10, implementation §1.2.1,
+// §1.2.4, §8.5).
 var SpawnerScope = Scope{
 	Role: "spawner",
 	Publish: join(consumerPub, configRead, ratesRead, participant, []string{
 		"$JS.API.CONSUMER.CREATE.task.>",
 		"$JS.API.CONSUMER.DELETE.task.>",
 	}),
-	Subscribe: inboxSub,
+	Subscribe: join(inboxSub, []string{"lease.>"}),
 }
 
 // TracingCollectorScope is the Tracing Collector's: it observes every event that

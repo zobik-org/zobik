@@ -60,16 +60,33 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 		return err
 	}
 	s := &spawner{
-		rt: rt, js: js, o: o,
+		rt: rt, js: js, nc: nc, o: o,
 		claimants: map[string]*claim.Claimant{},
 		acts:      make(chan act, 64),
 		coming:    map[string]int{},
 		renewed:   map[string]time.Time{},
+		pinned:    map[string]int{},
+		obs:       newObserver(),
+		vacants:   map[string]*claim.Claimant{},
+		pending:   map[string]time.Time{},
+		niches:    map[string]niche{},
+		sweep:     make(chan struct{}, 1),
 	}
 	for _, topic := range []string{TopicProvision, TopicRetire} {
 		s.claimants[topic] = claim.New(rt.ID, rt.Credential, js, nc, topic)
 	}
 	s.head.Store(head)
+	// What it did not observe while down it cannot read elsewhere: every node
+	// counts as busy until it has had a lease's time to renew (implementation
+	// §1.2.4).
+	s.obs.hold(time.Now().Add(s.leaseTTL()))
+	leases, err := nc.Subscribe("lease.>", func(m *nats.Msg) { s.obs.renewed(m.Subject, time.Now(), s.leaseTTL()) })
+	if err != nil {
+		return err
+	}
+	defer func() { _ = leases.Unsubscribe() }()
+	s.loadNiches(ctx)
+	go s.serveSweep(ctx)
 	go s.serveActs(ctx, rt.Loop("acts", actTimeout+time.Minute))
 	go s.serveRenewal(ctx, rt.Loop("renewal", 5*time.Minute))
 	rt.SetReady(true)
@@ -80,6 +97,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 type spawner struct {
 	rt *role.Runtime
 	js jetstream.JetStream
+	nc *nats.Conn
 	o  Options
 	// claimants are its cycles on the operator's requests, by topic.
 	claimants map[string]*claim.Claimant
@@ -97,17 +115,40 @@ type spawner struct {
 	// renewed is when each node's identity was last renewed; only the renewal
 	// reads and writes it.
 	renewed map[string]time.Time
+	// pinned caches similarity_precision_decimals by config_version, and
+	// evictions are the moments of the evictions within eviction_pressure_window.
+	pinned    map[string]int
+	evictions []time.Time
+
+	// obs is what it derives by observing the stream (architecture §3.13.1).
+	obs *observer
+	// vacants are its cycles on the vacant tasks, by topic; pending, the
+	// vacant tasks it proposed on or is resolving; and niches, the niche
+	// records it knows, which the observation resets (architecture §3.13.2).
+	vmu     sync.Mutex
+	vacants map[string]*claim.Claimant
+	pending map[string]time.Time
+	niches  map[string]niche
+	// sweep asks for the regeneration of every stale vector (architecture §3.13.7).
+	sweep chan struct{}
 }
 
-// act is a request it won, with the claimant of its topic.
+// leaseTTL is task_lease_ttl.
+func (s *spawner) leaseTTL() time.Duration {
+	return s.head.Load().Duration("task_lease_ttl")
+}
+
+// act is a request or a vacant task it won, with the claimant of its topic.
 type act struct {
-	topic string
-	c     *claim.Claimant
-	a     *claim.Assignment
+	topic  string
+	c      *claim.Claimant
+	a      *claim.Assignment
+	vacant bool
 }
 
-// handle proposes on each announcement and takes what it is awarded. The
-// routing by target_topic is trivial: the single instance owns every topic
+// handle observes each event of the task family, proposes on the operator's
+// requests and on the vacant tasks, and takes what it is awarded. The routing
+// by target_topic is trivial: the single instance owns every topic
 // (architecture §3.13.1).
 func (s *spawner) handle(ctx context.Context, m jetstream.Msg) {
 	var e bus.Event
@@ -117,34 +158,51 @@ func (s *spawner) handle(ctx context.Context, m jetstream.Msg) {
 	}
 	opCtx, cancel := context.WithTimeout(ctx, opTimeout)
 	defer cancel()
+	now := time.Now()
 	switch e.Type {
 	case bus.TypeAnnounced:
-		c := s.claimants[strings.TrimPrefix(m.Subject(), bus.SubjectAnnounced(""))]
-		if c == nil {
+		topic := strings.TrimPrefix(m.Subject(), bus.SubjectAnnounced(""))
+		if c := s.claimants[topic]; c != nil {
+			if err := c.Propose(opCtx, &e, nil); err != nil {
+				log.Printf("spawner: proposing on %s: %v", e.Subject, err)
+				m.NakWithDelay(time.Second)
+				return
+			}
 			break
 		}
-		if err := c.Propose(opCtx, &e, nil); err != nil {
-			log.Printf("spawner: proposing on %s: %v", e.Subject, err)
-			m.NakWithDelay(time.Second)
-			return
+		rounds := s.obs.announced(&e, topic, now)
+		if err := s.observeVacancy(opCtx, &e, topic, rounds); err != nil {
+			log.Printf("spawner: proposing on the vacant %s: %v", e.Subject, err)
 		}
 	case bus.TypeRejected:
 		for _, c := range s.claimants {
 			c.Rejected(&e)
 		}
+		s.vacancyRejected(&e)
 	case bus.TypeAssigned:
+		assignee := strings.TrimPrefix(m.Subject(), bus.TypeAssigned+".")
+		topic := s.obs.assigned(e.Subject, assignee, now, s.leaseTTL())
+		if assignee != s.rt.ID {
+			if topic != "" {
+				s.covered(ctx, topic)
+			}
+			break
+		}
 		for topic, c := range s.claimants {
 			a, ok := c.Assigned(&e)
 			if !ok {
 				continue
 			}
 			select {
-			case s.acts <- act{topic, c, a}:
+			case s.acts <- act{topic: topic, c: c, a: a}:
 			default:
 				// Without room the lease expires and the request comes back.
 				log.Printf("spawner: %s left to its re-announcement: too many acts waiting", a.TaskID)
 			}
 		}
+		s.vacancyAssigned(&e)
+	case bus.TypeCompleted, bus.TypeFailed, bus.TypeAborted:
+		s.obs.closed(&e)
 	}
 	m.Ack()
 }
@@ -189,6 +247,12 @@ func failed(err error) outcome {
 // the Bus, of the Catalog or of the engine leaves it without closing: the lease
 // expires and the request comes back with its re-announcement.
 func (s *spawner) execute(ctx context.Context, x act) {
+	if x.vacant {
+		s.fleet.Lock()
+		defer s.fleet.Unlock()
+		s.vacancy(ctx, x)
+		return
+	}
 	a := x.a
 	stop := x.c.KeepLease(a, func() time.Duration { return s.head.Load().Duration("task_lease_ttl") })
 	defer stop()
@@ -318,7 +382,7 @@ func (s *spawner) instantiate(ctx context.Context, cat Catalog, a *claim.Assignm
 	if entry.Topic != req.TargetTopic {
 		return nil, Refuse(CodeRequestInvalid, "the entry's topic is %s, not %s", entry.Topic, req.TargetTopic)
 	}
-	if _, vetoed, err := cat.Record(ctx, s.o.Network, "veto:"+entry.ArtifactRef, nil); err != nil {
+	if _, vetoed, err := cat.Record(ctx, s.o.Network, vetoPrefix+entry.ArtifactRef, nil); err != nil {
 		return nil, err
 	} else if vetoed {
 		return nil, Refuse(CodeArtifactVetoed, "the artifact %s is vetoed in this network", entry.ArtifactRef)
@@ -333,6 +397,27 @@ func (s *spawner) instantiate(ctx context.Context, cat Catalog, a *claim.Assignm
 	case scan.RulesetVersion != status.RulesetVersion:
 		return nil, Refuse(CodeRequestInvalid, "the entry's analysis is of an earlier ruleset and is being redone")
 	}
+	return s.bringUp(ctx, cat, upRequest{
+		entry: *entry, associations: associations, proof: req.OperatorProof, grants: proof.ProvisionGrants,
+	})
+}
+
+// upRequest is what brings up a node of an entry: the egress slots and the
+// proof of an operator's request, which a vacancy does not carry.
+type upRequest struct {
+	entry        catalog.Entry
+	associations map[string]string
+	proof        string
+	grants       []signing.Association
+}
+
+// bringUp provisions a node of the entry, after the validation of whoever
+// requests it: the act of architecture §3.13.1, shared by node_provision and
+// the vacancy. It writes the presence mark before reading the deletion mark,
+// makes room by evicting, and writes the network's row of the entry and, for
+// the first node of an emergent topic, the Topic Registry's.
+func (s *spawner) bringUp(ctx context.Context, cat Catalog, r upRequest) (*Node, error) {
+	entry := &r.entry
 	var memory struct {
 		MemoryRequired int64 `json:"memory_required"`
 	}
@@ -350,25 +435,29 @@ func (s *spawner) instantiate(ctx context.Context, cat Catalog, a *claim.Assignm
 	if err := s.markPresence(ctx, cat, entry.ArtifactRef); err != nil {
 		return nil, err
 	}
-	if entry, ok, err = cat.Entry(ctx, req.ArtifactRef); err != nil {
+	entry, ok, err := cat.Entry(ctx, entry.ArtifactRef)
+	if err != nil {
 		return nil, err
 	}
 	if !ok || entry.DeletionMark {
-		return nil, Refuse(CodeRequestInvalid, "the artifact %s is being deleted", req.ArtifactRef)
+		return nil, Refuse(CodeRequestInvalid, "the artifact %s is being deleted", r.entry.ArtifactRef)
 	}
 
 	p := Provisioning{
-		Topic: entry.Topic, Entry: entry, Associations: associations,
-		Proof: req.OperatorProof, ProvisionGrants: proof.ProvisionGrants, MemoryMB: memory.MemoryRequired,
+		Topic: entry.Topic, Entry: entry, Associations: r.associations,
+		Proof: r.proof, ProvisionGrants: r.grants, MemoryMB: memory.MemoryRequired,
 		Floor: floor,
+	}
+	if err := s.makeRoom(ctx, cat, p); err != nil {
+		return nil, err
 	}
 	node, err := s.provisionRetrying(ctx, p)
 	if err != nil {
 		return nil, err
 	}
 	// The network's row of the entry (architecture §3.13.1, §3.13.3).
-	if err := cat.PutRecord(ctx, s.o.Network, "embedding:"+entry.ArtifactRef,
-		map[string]string{"embedding": node.Embedding, "model_id": node.ModelID}, catalog.Write{}); err != nil {
+	if err := cat.PutRecord(ctx, s.o.Network, embeddingPrefix+entry.ArtifactRef,
+		vectorRecord{Embedding: node.Embedding, ModelID: node.ModelID}, catalog.Write{}); err != nil {
 		return nil, err
 	}
 	if memory.MemoryRequired == 0 {
@@ -377,6 +466,9 @@ func (s *spawner) instantiate(ctx context.Context, cat Catalog, a *claim.Assignm
 		if err != nil && !errors.Is(err, catalog.ErrPrecondition) {
 			return nil, err
 		}
+	}
+	if err := s.registerTopic(ctx, cat, entry.Topic, node, entry.CapabilityText); err != nil {
+		log.Printf("spawner: registering the topic %s: %v", entry.Topic, err)
 	}
 	return node, nil
 }

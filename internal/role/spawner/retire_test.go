@@ -74,7 +74,7 @@ func TestRemove(t *testing.T) {
 		TriggerReason string `json:"trigger_reason"`
 		ModelID       string `json:"model_id"`
 	}
-	if _, ok, _ := f.cat.Record(f.Ctx, network, "floor:"+echo+":0.5", &row); !ok || row.TriggerReason != "operator_removal" || row.ModelID != "fake" {
+	if _, ok, _ := f.cat.Record(f.Ctx, network, "floor:"+echo+":0.5", &row); !ok || row.TriggerReason != "operator_removal" || row.ModelID != f.driver.modelID {
 		t.Errorf("floor row %v %+v", ok, row)
 	}
 	if !f.cat.has("presence:" + echo) {

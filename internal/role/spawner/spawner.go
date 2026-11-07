@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"zobik.org/zobik/internal/role/catalog"
 	"zobik.org/zobik/internal/signing"
@@ -21,6 +22,10 @@ const TopicRetire = "node_retire"
 // archives, a value the Network Monitor does not emit (architecture §3.13.8).
 const TriggerOperatorRemoval = "operator_removal"
 
+// TriggerCapacityEviction is the trigger_reason of what eviction archives to
+// make room, a value the Network Monitor does not emit (architecture §3.13.10).
+const TriggerCapacityEviction = "capacity_eviction"
+
 // The failure codes the Spawner closes its requests with (implementation §10.1).
 const (
 	CodeRequestInvalid       = "request_invalid"
@@ -32,6 +37,8 @@ const (
 	CodeIngressSlotUnbound   = "ingress_slot_unbound"
 	CodeCapacityExhausted    = "capacity_exhausted"
 	CodeEmbeddingUnavailable = "embedding_unavailable"
+	CodeStaleVectorSpace     = "stale_vector_space"
+	CodeRedundantTopic       = "redundant_topic"
 )
 
 // Refusal is a precondition the act does not meet: the request closes with
@@ -82,6 +89,10 @@ type Running struct {
 	NodeID, Topic, ArtifactRef string
 	ModelID                    string
 	SimilarityFloor            float64
+	// MemoryMB is what the node reserves, both halves, and Provisioned when
+	// it was brought up (architecture §3.13.10).
+	MemoryMB    int64
+	Provisioned time.Time
 }
 
 // Driver is the deployment platform the Spawner provisions on (architecture
@@ -100,6 +111,13 @@ type Driver interface {
 	// DeleteImage deletes the artifact's image from the engine; an image another
 	// node still uses stays, and that is no error (implementation §1.2.4).
 	DeleteImage(ctx context.Context, digest string) error
+	// Shortfall is how many MB the fleet lacks for the node p would bring up:
+	// zero if it fits, and a *Refusal if it does not fit even with the fleet
+	// empty (architecture §3.13.10).
+	Shortfall(ctx context.Context, p Provisioning) (int64, error)
+	// Document generates the embedding of a stored text under the network's
+	// embedding_model, encoded as the credentials carry it (architecture §3.7.3).
+	Document(ctx context.Context, text string) (modelID, vector string, err error)
 }
 
 // Registry is the tenant's image registry, where purge deletes an artifact's
@@ -113,6 +131,7 @@ type Registry interface {
 // its network's spawner credential (implementation §1.2.11).
 type Catalog interface {
 	Entry(ctx context.Context, digest string) (*catalog.Entry, bool, error)
+	Entries(ctx context.Context) ([]catalog.Entry, error)
 	Status(ctx context.Context) (*catalog.Status, error)
 	Record(ctx context.Context, network, key string, out any) (int64, bool, error)
 	Records(ctx context.Context, prefix, network string) ([]catalog.Record, error)

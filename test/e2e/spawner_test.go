@@ -20,7 +20,7 @@ import (
 // El acto del Spawner: zobik node provision emits node_provision from the
 // console, and the Spawner brings up echo from its Catalog entry with the
 // Active Node Registry's labels. A node that does not fit in fleet_capacity
-// closes with capacity_exhausted, and a node keeps winning tasks after its
+// evicts the oldest free one, and a node keeps winning tasks after its
 // identity's life, because the Spawner renews it. Then node_retire removes,
 // vetoes and purges.
 func TestSpawner(t *testing.T) {
@@ -30,10 +30,11 @@ func TestSpawner(t *testing.T) {
 	z.build(t, ctx, "images/zobik-sidecar.Dockerfile", "zobik-sidecar:dev")
 	z.build(t, ctx, "test/e2e/embeddings/Dockerfile", embeddingsImage)
 	// Two nodes of echo fit, 160 MB each with the Integration Sidecar, and a
-	// third does not.
+	// third evicts one.
 	const lifetime = 30 * time.Second
 	lines, _ := z.startWith(t, ctx, credentials, "init", "--fleet-capacity", "330", "--node-identity-lifetime", lifetime.String())
 	waitWithin(t, lines, regexp.MustCompile(`the panel is at (\S+)`), 8*time.Minute)
+	up := time.Now()
 	z.blueprint(t, ctx, "examples/blueprints/echo/Dockerfile", "zobik-echo:dev")
 
 	blueprint := filepath.Join(z.root, "examples/blueprints/echo/blueprint.json")
@@ -67,12 +68,26 @@ func TestSpawner(t *testing.T) {
 		}
 	}
 
-	// A second instance of the entry fits; a third does not.
+	// A second instance of the entry fits; a third evicts the free node with
+	// the oldest assignment, the first, which never had one (architecture
+	// §3.13.10, implementation §1.2.4).
 	ref := z.register(t, ctx, "echo", blueprint)
-	z.run(t, ctx, credentials, "node", "provision", ref)
-	if out := z.fail(t, ctx, credentials, "node", "provision", ref); !strings.Contains(out, "capacity_exhausted") {
-		t.Errorf("a third node: %s", out)
+	provisioned := regexp.MustCompile(`provisioned node (U[A-Z0-9]+)`)
+	m := provisioned.FindStringSubmatch(z.run(t, ctx, credentials, "node", "provision", ref))
+	if m == nil {
+		t.Fatal("the second node was not provisioned")
 	}
+	second := m[1]
+	// After starting, the Spawner holds every node busy for a task_lease_ttl
+	// (implementation §1.2.4): only past it is a node free to evict.
+	time.Sleep(time.Until(up.Add(35 * time.Second)))
+	if provisioned.FindStringSubmatch(z.run(t, ctx, credentials, "node", "provision", ref)) == nil {
+		t.Fatal("the third node was not provisioned")
+	}
+	if exec.CommandContext(ctx, "docker", "container", "inspect", logic).Run() == nil {
+		t.Errorf("the first node was not evicted")
+	}
+	node, logic = second, z.logic(second)
 	// A request names an entry of the Catalog.
 	if out := z.fail(t, ctx, credentials, "node", "provision", "sha256:"+strings.Repeat("0", 64)); !strings.Contains(out, "no such entry") {
 		t.Errorf("an entry the Catalog lacks: %s", out)
