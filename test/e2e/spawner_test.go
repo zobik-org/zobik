@@ -34,6 +34,7 @@ func TestSpawner(t *testing.T) {
 	const lifetime = 30 * time.Second
 	lines, _ := z.startWith(t, ctx, credentials, "init", "--fleet-capacity", "330", "--node-identity-lifetime", lifetime.String())
 	waitWithin(t, lines, regexp.MustCompile(`the panel is at (\S+)`), 8*time.Minute)
+	up := time.Now()
 	z.blueprint(t, ctx, "examples/blueprints/echo/Dockerfile", "zobik-echo:dev")
 
 	blueprint := filepath.Join(z.root, "examples/blueprints/echo/blueprint.json")
@@ -77,6 +78,9 @@ func TestSpawner(t *testing.T) {
 		t.Fatal("the second node was not provisioned")
 	}
 	second := m[1]
+	// After starting, the Spawner holds every node busy for a task_lease_ttl
+	// (implementation §1.2.4): only past it is a node free to evict.
+	time.Sleep(time.Until(up.Add(35 * time.Second)))
 	if provisioned.FindStringSubmatch(z.run(t, ctx, credentials, "node", "provision", ref)) == nil {
 		t.Fatal("the third node was not provisioned")
 	}
