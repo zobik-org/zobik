@@ -100,6 +100,8 @@ type Container struct {
 	Name   string
 	Image  string
 	Labels map[string]string
+	// Created is when the engine created it.
+	Created time.Time
 }
 
 // Containers lists the containers, running or not, that carry every label of
@@ -123,7 +125,7 @@ func (e *Engine) Containers(ctx context.Context, labels map[string]string) ([]Co
 		if len(c.Names) > 0 {
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
-		out = append(out, Container{Name: name, Image: c.Image, Labels: c.Labels})
+		out = append(out, Container{Name: name, Image: c.Image, Labels: c.Labels, Created: time.Unix(c.Created, 0)})
 	}
 	return out, nil
 }

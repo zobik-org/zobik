@@ -475,6 +475,9 @@ func TestDriver(t *testing.T) {
 	if _, err := d.Provision(ctx, spawner.Provisioning{Topic: "echo", Entry: entry}); !isRefusal(err, codeCapacityExhausted) {
 		t.Errorf("a second node: %v, want %s", err, codeCapacityExhausted)
 	}
+	if short, err := d.Shortfall(ctx, spawner.Provisioning{Topic: "echo", Entry: entry}); err != nil || short <= 0 {
+		t.Errorf("the shortfall of a second node: %d %v", short, err)
+	}
 	if _, err := d.Provision(ctx, spawner.Provisioning{Topic: "echo", Entry: entry, MemoryMB: 200}); !isRefusal(err, codeCapacityExhausted) {
 		t.Errorf("a reservation above the capacity: %v, want %s", err, codeCapacityExhausted)
 	}
@@ -483,7 +486,15 @@ func TestDriver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []spawner.Running{{NodeID: node.ID, Topic: "echo", ArtifactRef: f.logic, ModelID: node.ModelID, SimilarityFloor: 0.6}}
+	if len(fleet) == 1 && time.Since(fleet[0].Provisioned) > time.Minute {
+		t.Errorf("provisioned at %v", fleet[0].Provisioned)
+	}
+	if len(fleet) == 1 {
+		fleet[0].Provisioned = time.Time{}
+	}
+	// Both halves: the Integration Sidecar reserves 32 MB.
+	want := []spawner.Running{{NodeID: node.ID, Topic: "echo", ArtifactRef: f.logic, ModelID: node.ModelID, SimilarityFloor: 0.6,
+		MemoryMB: node.MemoryMB + 32}}
 	if !slices.Equal(fleet, want) {
 		t.Errorf("the fleet %+v, want %+v", fleet, want)
 	}

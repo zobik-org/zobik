@@ -15,6 +15,8 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/digest"
+	"zobik.org/zobik/internal/egress"
+	"zobik.org/zobik/internal/embedding"
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role"
 	"zobik.org/zobik/internal/role/catalog"
@@ -42,8 +44,10 @@ type record struct {
 type fakeCatalog struct {
 	mu      sync.Mutex
 	entries map[string]*catalog.Entry
-	records map[string]*record // network/key
-	rev     int64
+	// occupied and capacity are what the status reports of the storage.
+	occupied, capacity int64
+	records            map[string]*record // network/key
+	rev                int64
 	// onPresence runs when a presence mark is written.
 	onPresence func()
 }
@@ -69,8 +73,20 @@ func (c *fakeCatalog) Entry(_ context.Context, digest string) (*catalog.Entry, b
 	return &cp, true, nil
 }
 
+func (c *fakeCatalog) Entries(context.Context) ([]catalog.Entry, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []catalog.Entry
+	for _, e := range c.entries {
+		out = append(out, *e)
+	}
+	return out, nil
+}
+
 func (c *fakeCatalog) Status(context.Context) (*catalog.Status, error) {
-	return &catalog.Status{RulesetVersion: ruleset}, nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return &catalog.Status{RulesetVersion: ruleset, Occupied: c.occupied, Capacity: c.capacity}, nil
 }
 
 func (c *fakeCatalog) live(k string) *record {
@@ -169,6 +185,46 @@ type fakeDriver struct {
 	// decommissioned and images are the nodes and the images it removed.
 	decommissioned []string
 	images         []string
+	// capacityMB is the fleet's capacity, zero for none; each node reserves
+	// nodeMB.
+	capacityMB int64
+	// modelID is the network's space, vectors the embedding of each text, and
+	// down takes the model down.
+	modelID string
+	vectors map[string][]float32
+	down    bool
+}
+
+// nodeMB is what each node of the fake reserves, both halves.
+const nodeMB = 288
+
+func (d *fakeDriver) Shortfall(_ context.Context, p spawner.Provisioning) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.capacityMB == 0 {
+		return 0, nil
+	}
+	if nodeMB > d.capacityMB {
+		return 0, spawner.Refuse(spawner.CodeCapacityExhausted, "does not fit")
+	}
+	var used int64
+	for _, n := range d.fleet {
+		used += n.MemoryMB
+	}
+	return max(0, used+nodeMB-d.capacityMB), nil
+}
+
+func (d *fakeDriver) Document(_ context.Context, text string) (string, string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.down {
+		return "", "", fmt.Errorf("the model is down")
+	}
+	v, ok := d.vectors[text]
+	if !ok {
+		return "", "", fmt.Errorf("no vector for %q", text)
+	}
+	return d.modelID, embedding.Encode(v), nil
 }
 
 // defaultFloor is the floor the fake brings a node up with when the act names none.
@@ -186,8 +242,13 @@ func (d *fakeDriver) Provision(_ context.Context, p spawner.Provisioning) (*spaw
 	if p.Floor != nil {
 		floor = *p.Floor
 	}
-	d.fleet = append(d.fleet, spawner.Running{NodeID: id, Topic: p.Topic, ArtifactRef: p.Entry.ArtifactRef, ModelID: "fake", SimilarityFloor: floor})
-	return &spawner.Node{ID: id, ModelID: "fake", Embedding: "AAAA", MemoryMB: 256}, nil
+	d.fleet = append(d.fleet, spawner.Running{NodeID: id, Topic: p.Topic, ArtifactRef: p.Entry.ArtifactRef, ModelID: d.modelID,
+		SimilarityFloor: floor, MemoryMB: nodeMB, Provisioned: time.Now()})
+	vector := "AAAA"
+	if v, ok := d.vectors[p.Entry.CapabilityText]; ok {
+		vector = embedding.Encode(v)
+	}
+	return &spawner.Node{ID: id, ModelID: d.modelID, Embedding: vector, MemoryMB: 256}, nil
 }
 
 func (d *fakeDriver) Decommission(_ context.Context, n spawner.Running) error {
@@ -244,14 +305,33 @@ type fixture struct {
 	registry *fakeRegistry
 	channel  string
 	closes   chan *nats.Msg
+	// failures are the task.failed toward the requester of the vacant tasks.
+	failures chan *nats.Msg
 }
 
-func newFixture(t *testing.T, lifetime time.Duration, noCatalog bool) *fixture {
+// embeddingModel is the network's embedding_model: the act resolves the space
+// from it, and the fake driver generates the vectors.
+var embeddingModel = map[string]any{"entry": "embeddings", "model": "test", "document_prefix": "", "query_prefix": "", "max_text_size": 256}
+
+func newFixture(t *testing.T, lifetime time.Duration, noCatalog bool, edits ...func(globalconfig.Values)) *fixture {
+	var modelID string
 	n := testnet.New(t, func(v globalconfig.Values) {
-		testnet.Set(v, map[string]any{"auction_timeout": 200})
+		testnet.Set(v, map[string]any{
+			"auction_timeout": 200, "embedding_model": embeddingModel,
+			"egress_registry": map[string]any{"embeddings": egress.EmbeddingsEntry("http://embeddings.test")},
+		})
+		for _, edit := range edits {
+			edit(v)
+		}
+		space, err := embedding.Resolve(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		modelID = space.ModelID
 	})
 	f := &fixture{
-		Net: n, cat: newCatalog(), driver: &fakeDriver{renewals: map[string]int{}}, registry: &fakeRegistry{},
+		Net: n, cat: newCatalog(), registry: &fakeRegistry{},
+		driver:  &fakeDriver{renewals: map[string]int{}, modelID: modelID, vectors: map[string][]float32{}},
 		channel: n.ID("channel_operator"),
 		closes:  n.Tap("task.*." + n.ID("channel_operator") + ".*"),
 	}
@@ -367,7 +447,7 @@ func TestProvision(t *testing.T) {
 	if act.Topic != "echo" || act.Entry.ArtifactRef != echo || act.Associations["api"] != "a" || act.MemoryMB != 0 {
 		t.Errorf("the act: %+v", act)
 	}
-	for _, key := range []string{"presence:" + echo, "embedding:" + echo, "memory:" + echo, "operator_request:" + taskID} {
+	for _, key := range []string{"presence:" + echo, "embedding:" + echo, "memory:" + echo, "operator_request:" + taskID, "topic:echo"} {
 		if !f.cat.has(key) {
 			t.Errorf("%s was not written", key)
 		}

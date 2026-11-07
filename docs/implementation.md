@@ -189,6 +189,7 @@ The key decision is the orchestrator, and it is that of thesis 3: the Docker Eng
 
 * **The limit.** The Logic Container runs with `--memory` equal to the effective reservation of its entry and `--memory-swap` equal to the same value, so it has no swap to stretch it beyond what is reserved; the Integration Sidecar, with a fixed reservation of 32 MB. The reservation also goes as a label of the container, which is what the Active Node Registry carries (row 14).
 * **Admission.** Docker does not reject a container for memory, so the Spawner fulfills the clause before creating it: it adds up the reservations from the fleet's labels, Integration Sidecar included, and does not create the node if the sum exceeds `fleet_capacity` (§6). With a single Spawner instance (thesis 3) the count is serial and exact, and the Spawner is the only one that creates nodes.
+* **Eviction.** The Spawner derives which node is free and when it received its last assignment from its consumer on `task.>` and its subscription to `lease.>` (§1.2.1). A node that has received no assignment counts its provisioning as the last one, so the node brought up for a vacancy is the last to be evicted before it takes its task. On starting, the Spawner holds every node busy for a `task_lease_ttl`: a node with a task renews its lease within that time.
 * **Observable death.** When the kernel kills a container for its limit, Docker emits the `oom` event with the container's labels. The Network Monitor already reads `/events` through `docker_reader` (§6), so it receives it without any new access (§5.8).
 
 On Windows and macOS there is also a hard cut, that of the engine's VM (§6), which sits above `fleet_capacity` and only acts if something outside the fleet goes past its figure.
@@ -1091,6 +1092,7 @@ A deterministic node that calls a paid API is compared in `cost_unit` like any o
 * **Two evaluable entries are ordered with the rule of §4.2.**
 * **Among entries no comparison separates, the one that runs is preferred**, because its evidence is from today; and between two that run or two archived ones, the one with more observations. Here the tie-break by observations does decide, because it chooses what to provision and archives no one.
 * **A non-evaluable entry is chosen only if there is no evaluable one**, and among several such, the one with more observations in its snapshot.
+* **Between entries the rules above leave equal, the one closest to the task wins**, which is the one the auction would award if both ran (§3.7.5). It is what decides between entries that never ran, which have neither live signals nor a snapshot.
 
 **In the face of a node under review**, the candidates are the archived entries within `agent_similarity_floor` of N, without N's entry (§3.13.4):
 

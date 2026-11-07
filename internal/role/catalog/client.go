@@ -139,6 +139,13 @@ func (c *Client) Entry(ctx context.Context, digest string) (e *Entry, ok bool, e
 	return e, err == nil, err
 }
 
+// Entries lists every entry (implementation §1.2.11).
+func (c *Client) Entries(ctx context.Context) ([]Entry, error) {
+	var out struct{ Entries []Entry }
+	err := c.do(ctx, http.MethodGet, "/v1/entries", nil, &out, http.StatusOK)
+	return out.Entries, err
+}
+
 // SetDeletionMark stamps or removes the deletion mark of the entry digest
 // (architecture §3.13.8).
 func (c *Client) SetDeletionMark(ctx context.Context, digest string, on bool) error {

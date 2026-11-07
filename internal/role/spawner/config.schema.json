@@ -37,6 +37,56 @@
       "default": {"initial": 5000, "attempts": 6},
       "query_class": "current",
       "storage": "versioned"
+    },
+    "vacancy_rounds_threshold": {
+      "description": "How many successive rounds a task goes without a valid proposal before the Spawner intervenes (architecture §2.3, §3.13.2).",
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "topic_similarity_floor": {
+      "description": "The similarity between topic embeddings at or above which the Spawner treats a vacant topic as redundant with a covered one (architecture §2.3, §3.13.2).",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.85,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "max_successive_candidates": {
+      "description": "How many interventions on a niche that leave it vacant, or replacement candidates, the Spawner makes before it marks the niche capped (architecture §2.3, §3.13.2, §3.13.5).",
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "eviction_pressure_threshold": {
+      "description": "How many evictions within eviction_pressure_window stamp the capacity-pressure key (architecture §2.3, §3.13.10).",
+      "type": "integer",
+      "minimum": 1,
+      "default": 6,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "eviction_pressure_window": {
+      "description": "The window over which evictions are counted against eviction_pressure_threshold, in milliseconds (architecture §2.3, §3.13.10).",
+      "type": "integer",
+      "minimum": 60000,
+      "default": 3600000,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "artifact_storage_pressure_share": {
+      "description": "The fraction of the artifact storage capacity above which the Spawner stamps the storage-pressure key (architecture §2.3, §3.13.3).",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "default": 0.8,
+      "query_class": "current",
+      "storage": "versioned"
     }
   }
 }

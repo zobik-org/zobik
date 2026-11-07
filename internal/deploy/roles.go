@@ -130,8 +130,10 @@ var Roles = []Role{
 	{Unit: unitSecrets, Scope: bus.SecretsScope, Args: []string{"--role=secrets"}},
 	// The Spawner claims the operator's requests on the fleet, and provisions on
 	// the container engine; zobik init adds its deployment parameters to Args
-	// (implementation §1.2.4).
-	{Unit: unitSpawner, Scope: bus.SpawnerScope, Topic: spawner.TopicProvision, Consumers: claimant(spawner.TopicProvision, spawner.TopicRetire),
+	// (implementation §1.2.4). It observes every announcement, award and close
+	// of the network, which is how it counts vacancy rounds and knows which node
+	// is free (architecture §3.13.2, §3.13.10).
+	{Unit: unitSpawner, Scope: bus.SpawnerScope, Topic: spawner.TopicProvision, Consumers: spawnerConsumers,
 		Certificate: signing.RoleSpawner, Issues: &bus.NodeScope, Engine: true, TenantCA: true,
 		Args: []string{"--role=spawner"}, NamesNetwork: true, WaitsFor: []string{"config", unitSecrets}},
 	// The panel's channels go first and last in their audience (implementation §6,
@@ -169,6 +171,15 @@ func claimant(topics ...string) func(id string) []bus.Consumer {
 		filters = append(filters, bus.SubjectAddressed(bus.TypeAssigned, id), bus.SubjectAddressed(bus.TypeRejected, id))
 		return []bus.Consumer{{Stream: "task", Name: id, Filters: filters}}
 	}
+}
+
+// spawnerConsumers observes the whole task family, and receives the rejections
+// addressed to the Spawner's identity.
+func spawnerConsumers(id string) []bus.Consumer {
+	return []bus.Consumer{{Stream: "task", Name: id, Filters: []string{
+		"task.announced.>", bus.TypeAssigned + ".>", bus.SubjectAddressed(bus.TypeRejected, id),
+		bus.TypeCompleted + ".>", bus.TypeFailed + ".>", bus.TypeAborted + ".>",
+	}}}
 }
 
 func ptr[T any](v T) *T { return &v }

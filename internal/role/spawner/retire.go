@@ -71,7 +71,7 @@ func (s *spawner) retire(ctx context.Context, cat Catalog, a *claim.Assignment) 
 		if fleet[i].Topic != req.TargetTopic {
 			return nil, Refuse(CodeRequestInvalid, "the node's topic is %s, not %s", fleet[i].Topic, req.TargetTopic)
 		}
-		ids, err := s.archive(ctx, cat, fleet[i:i+1])
+		ids, err := s.archive(ctx, cat, fleet[i:i+1], TriggerOperatorRemoval)
 		return map[string]any{"node_ids": ids}, err
 	}
 
@@ -96,7 +96,7 @@ func (s *spawner) retire(ctx context.Context, cat Catalog, a *claim.Assignment) 
 		if err != nil {
 			return nil, err
 		}
-		ids, err := s.archive(ctx, cat, running(fleet, digest))
+		ids, err := s.archive(ctx, cat, running(fleet, digest), TriggerOperatorRemoval)
 		return map[string]any{"node_ids": ids}, err
 	case KindUnveto:
 		rev, ok, err := cat.Record(ctx, s.o.Network, vetoPrefix+digest, nil)
@@ -165,12 +165,12 @@ func floorKey(digest string, floor float64) string {
 	return floorPrefix + digest + ":" + strconv.FormatFloat(floor, 'f', -1, 64)
 }
 
-// archive archives nodes with operator_removal in the order of architecture
+// archive archives nodes with reason as their trigger_reason, in the order of architecture
 // §3.13.3: it decommissions them and confirms it in the Active Node Registry,
 // and only then writes the floor history. It removes the presence mark and the
 // engine's image of each entry no instance of which remains, and returns the
 // archived node_ids.
-func (s *spawner) archive(ctx context.Context, cat Catalog, nodes []Running) ([]string, error) {
+func (s *spawner) archive(ctx context.Context, cat Catalog, nodes []Running, reason string) ([]string, error) {
 	ids := []string{}
 	for _, n := range nodes {
 		if err := s.o.Driver.Decommission(ctx, n); err != nil {
@@ -191,7 +191,7 @@ func (s *spawner) archive(ctx context.Context, cat Catalog, nodes []Running) ([]
 	now := time.Now().UTC()
 	digests := map[string]bool{}
 	for _, n := range nodes {
-		row := floorRow{TriggerReason: TriggerOperatorRemoval, ModelID: n.ModelID, ArchivedAt: now}
+		row := floorRow{TriggerReason: reason, ModelID: n.ModelID, ArchivedAt: now}
 		if err := cat.PutRecord(ctx, s.o.Network, floorKey(n.ArtifactRef, n.SimilarityFloor), row, catalog.Write{}); err != nil {
 			return nil, err
 		}
