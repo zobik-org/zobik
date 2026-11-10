@@ -75,7 +75,13 @@ func (n *node) gate(ctx context.Context, a *claim.Assignment, req *nriv1.EgressR
 		n.mu.Unlock()
 		return nil, nil, status.FromContextError(ctx.Err()).Err()
 	}
-	if answer.Type != bus.TypeCompleted {
+	switch answer.Type {
+	case bus.TypeCompleted:
+	case bus.TypeFailed:
+		// Only the final round's failure reaches the call: its silence is the
+		// outcome_if_silent, deny (architecture §3.5.2).
+		return nil, nil, status.Errorf(codes.PermissionDenied, "%s did not answer, the final round included: silence is deny", audience)
+	default:
 		return nil, nil, status.Errorf(codes.Aborted, "the query to %s ended with %s: the call does not run", audience, answer.Type)
 	}
 	var d struct {

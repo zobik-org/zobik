@@ -40,7 +40,7 @@ const pendingFor = time.Minute
 // task already went vacancy_rounds_threshold rounds without a valid proposal
 // (architecture §3.13.2). The Spawner does not intervene on a fixed-convention
 // topic with a structural claimant (architecture §3.7.7), nor on a niche it
-// capped. The hitl_contact_* family enters with Las rondas de las consultas.
+// capped. The hitl_contact_* family has its own close (closeVacantQuery).
 func (s *spawner) observeVacancy(ctx context.Context, e *bus.Event, topic string, rounds int) error {
 	var threshold int
 	if err := json.Unmarshal(s.head.Load().Values["vacancy_rounds_threshold"], &threshold); err != nil {

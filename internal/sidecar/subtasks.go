@@ -40,6 +40,10 @@ type lineage struct {
 	embed bool
 	// terminal is the type of the last attempt's terminal event, once received.
 	terminal string
+	// final marks a query whose last attempt is its final round, and toFinal
+	// one whose ordinary rounds ended: a round after round 1 went vacant, so
+	// its next attempt is the final round (architecture §3.5.2).
+	final, toFinal bool
 	// gate receives the answer of an egress gate, which the node opened itself
 	// and the Logic Container does not know; stop ends its wait.
 	gate chan *bus.Event
@@ -112,6 +116,9 @@ func (n *node) open(o opening) (string, error) {
 		}
 		data["current_attempts"] = l.attempts + 1
 		data["previous_attempt"] = l.last
+		if l.toFinal {
+			data["final_round"] = true
+		}
 	}
 	for k, v := range inherited {
 		data[k] = v
@@ -129,6 +136,7 @@ func (n *node) open(o opening) (string, error) {
 		l = &lineage{parent: o.taskID, topic: o.topic, ask: o.ask, embed: embed}
 	}
 	l.known, l.last, l.attempts, l.data, l.terminal = taskID, taskID, l.attempts+1, data, ""
+	l.final, l.toFinal = l.toFinal, false
 	n.subtasks[taskID] = l
 	return taskID, nil
 }
@@ -151,6 +159,8 @@ func (n *node) reopenable(o opening) (*lineage, error) {
 		return reject("a reopen keeps the topic " + l.topic)
 	case l.ask && l.terminal == bus.TypeCompleted:
 		return reject("the query was answered")
+	case l.final:
+		return reject("its final round closed")
 	}
 	return l, nil
 }
@@ -198,11 +208,17 @@ func (n *node) onResult(e *bus.Event, m jetstream.Msg) bool {
 	}
 	var d struct {
 		FailureCode string `json:"failure_code"`
+		Vacant      bool   `json:"vacant"`
 	}
 	_ = json.Unmarshal(e.Data, &d) // a field of another type reads as absent
-	// A query of the gate without an answer is reopened while there is no
-	// final round (architecture §3.5.2, §3.16.4).
-	if e.Type == bus.TypeFailed && (d.FailureCode == codeStaleVectorSpace || l.gate != nil) {
+	// The Spawner's close of a vacant round after round 1 ends the ordinary
+	// rounds of a query (architecture §3.5.2, §3.13.2).
+	if e.Type == bus.TypeFailed && d.Vacant && strings.HasPrefix(l.topic, signing.HITLPrefix) && !l.final && l.attempts > 1 {
+		l.toFinal = true
+	}
+	// A query of the gate without an answer is reopened until its final round
+	// closes (architecture §3.5.2, §3.16.4).
+	if e.Type == bus.TypeFailed && (d.FailureCode == codeStaleVectorSpace || l.gate != nil && !l.final) {
 		err := n.restale(l)
 		n.mu.Unlock()
 		if err != nil {
@@ -230,8 +246,9 @@ func (n *node) onResult(e *bus.Event, m jetstream.Msg) bool {
 	return true
 }
 
-// restale reopens the last attempt of l with its topic and payload, under the
-// current vector space (architecture §3.3). Called with n.mu held.
+// restale reopens the last attempt of l with its topic and payload: under the
+// current vector space, or in the next round of a gate's query (architecture
+// §3.3, §3.5.2). Called with n.mu held.
 func (n *node) restale(l *lineage) error {
 	t := n.tasks[l.parent]
 	if t == nil {
@@ -243,12 +260,16 @@ func (n *node) restale(l *lineage) error {
 	}
 	data["current_attempts"] = l.attempts + 1
 	data["previous_attempt"] = l.last
+	if l.toFinal {
+		data["final_round"] = true
+	}
 	taskID := uuid.NewString()
 	if err := n.emit(t, taskID, data, l.embed, !l.ask); err != nil {
 		return err
 	}
 	n.subtasks[taskID] = l
 	l.last, l.attempts, l.data = taskID, l.attempts+1, data
+	l.final, l.toFinal = l.final || l.toFinal, false
 	return nil
 }
 

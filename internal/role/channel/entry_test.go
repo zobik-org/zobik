@@ -310,16 +310,32 @@ func TestPurgeAfterCloseAndExpired(t *testing.T) {
 	if e = f.announced(5*time.Second, subject(entry)); e == nil {
 		t.Fatal("the second entry subtask was not announced")
 	}
+	deliveries := f.Tap(bus.SubjectAnnounced("hitl_contact_user"))
 	f.complete(entry, e.TraceParent)
 	q = asConsultation(t, receive(t, session))
 	detach()
-	time.Sleep(200 * time.Millisecond)
+	// Round 2 is outside the panel's window: it goes vacant, and the
+	// Spawner's close, played by the test, ends the ordinary rounds.
+	var round2 *bus.Event
+	for round2 == nil {
+		select {
+		case m := <-deliveries:
+			var d bus.Event
+			json.Unmarshal(m.Data, &d)
+			if dataOf(t, &d)["current_attempts"] == 2.0 {
+				round2 = &d
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the delivery's round 2 was not announced")
+		}
+	}
+	f.vacant(round2)
 	session, err = c.Attach(f.Ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var expired, retaken bool
-	for !expired || !retaken {
+	var expired, final bool
+	for !expired || !final {
 		m := receive(t, session)
 		if ex := m.GetExpired(); ex != nil {
 			if ex.GetTaskId() != q.TaskID || ex.GetTraceId() != traceID || ex.GetFailureCode() != "undelivered" {
@@ -328,11 +344,32 @@ func TestPurgeAfterCloseAndExpired(t *testing.T) {
 			expired = true
 			continue
 		}
-		// Until the Spawner closes vacant rounds, the panel's channel takes the
-		// delivery's next round when the console is back.
+		// The final round, which the panel's channel retains.
 		if r := asConsultation(t, m); r.TaskID != q.TaskID && r.Data.Kind == "result_delivery" {
-			retaken = true
+			if !r.Data.FinalRound || r.Data.Attempts != 3 {
+				t.Errorf("after the vacant round 2: %+v", r.Data)
+			}
+			final = true
 		}
+	}
+}
+
+// vacant closes the query ann as the Spawner closes a vacant round:
+// undelivered and vacant, toward its requester (architecture §3.13.2).
+func (f *entryFixture) vacant(ann *bus.Event) {
+	f.T.Helper()
+	d := dataOf(f.T, ann)
+	topic, requester := d["topic"].(string), d["requester_identity"].(string)
+	e, err := bus.NewEvent(bus.TypeFailed, "spawner", ann.Subject, map[string]any{
+		"topic": topic, "failure_code": "undelivered", "failure_reason": "no channel claimed it", "vacant": true,
+		"metrics": map[string]any{"tokens_in": 0, "tokens_out": 0, "cost": 0, "duration_ms": 0},
+	})
+	if err != nil {
+		f.T.Fatal(err)
+	}
+	e.TraceParent, e.ConfigVersion = ann.TraceParent, ann.ConfigVersion
+	if err := bus.Publish(f.Ctx, f.JetStream(f.worker), bus.SubjectTerminal(bus.TypeFailed, requester, topic), e); err != nil {
+		f.T.Fatal(err)
 	}
 }
 

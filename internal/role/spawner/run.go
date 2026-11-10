@@ -70,6 +70,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 		vacants:   map[string]*claim.Claimant{},
 		pending:   map[string]time.Time{},
 		niches:    map[string]niche{},
+		audiences: map[string]bool{},
 		sweep:     make(chan struct{}, 1),
 	}
 	for _, topic := range []string{TopicProvision, TopicRetire} {
@@ -86,6 +87,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 	}
 	defer func() { _ = leases.Unsubscribe() }()
 	s.loadNiches(ctx)
+	s.loadAudiences(ctx)
 	go s.serveSweep(ctx)
 	go s.serveActs(ctx, rt.Loop("acts", actTimeout+time.Minute))
 	go s.serveRenewal(ctx, rt.Loop("renewal", 5*time.Minute))
@@ -129,6 +131,9 @@ type spawner struct {
 	vacants map[string]*claim.Claimant
 	pending map[string]time.Time
 	niches  map[string]niche
+	// audiences are those whose key of audience without a channel it stamped
+	// or read (architecture §3.13.2).
+	audiences map[string]bool
 	// sweep asks for the regeneration of every stale vector (architecture §3.13.7).
 	sweep chan struct{}
 }
@@ -171,6 +176,18 @@ func (s *spawner) handle(ctx context.Context, m jetstream.Msg) {
 			break
 		}
 		rounds := s.obs.announced(&e, topic, now)
+		// On the hitl_contact_* family it acts on the first vacancy, without
+		// the threshold and without taking the task (architecture §3.13.2).
+		if strings.HasPrefix(topic, signing.HITLPrefix) {
+			if rounds >= 1 {
+				if err := s.closeVacantQuery(opCtx, &e, topic); err != nil {
+					log.Printf("spawner: closing the vacant query %s: %v", e.Subject, err)
+					m.NakWithDelay(time.Second)
+					return
+				}
+			}
+			break
+		}
 		if err := s.observeVacancy(opCtx, &e, topic, rounds); err != nil {
 			log.Printf("spawner: proposing on the vacant %s: %v", e.Subject, err)
 		}
@@ -183,7 +200,10 @@ func (s *spawner) handle(ctx context.Context, m jetstream.Msg) {
 		assignee := strings.TrimPrefix(m.Subject(), bus.TypeAssigned+".")
 		topic := s.obs.assigned(e.Subject, assignee, now, s.leaseTTL())
 		if assignee != s.rt.ID {
-			if topic != "" {
+			switch {
+			case strings.HasPrefix(topic, signing.HITLPrefix):
+				s.reached(ctx, topic)
+			case topic != "":
 				s.covered(ctx, topic)
 			}
 			break

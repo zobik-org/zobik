@@ -376,13 +376,15 @@ func (c *channel) deliver(ctx context.Context, r *root) error {
 // delivered reads how the delivery closed: a reject reopens the entry
 // subtask; any other answer, or unanswered with its outcome_if_silent,
 // delivered the outcome and the root closes; undelivered opens the next round,
-// and once the final round closes without delivering, the root closes
-// undelivered (architecture §3.5.4).
+// the final one once a round after round 1 went vacant, and once the final
+// round closes without delivering, the root closes undelivered (architecture
+// §3.5.2, §3.5.4).
 func (c *channel) delivered(ctx context.Context, r *root, e *bus.Event) error {
 	var d struct {
 		Decision      string `json:"decision"`
 		FailureCode   string `json:"failure_code"`
 		FailureReason string `json:"failure_reason"`
+		Vacant        bool   `json:"vacant"`
 	}
 	_ = json.Unmarshal(e.Data, &d) // a field of another type reads as absent
 	if e.Type == bus.TypeCompleted {
@@ -402,6 +404,12 @@ func (c *channel) delivered(ctx context.Context, r *root, e *bus.Event) error {
 	case r.FinalRound:
 		return c.closeRoot(ctx, r, bus.TypeFailed, codeUndelivered,
 			"the outcome was not delivered in any round, the final one included")
+	case d.Vacant && r.Attempts > 1:
+		// The Spawner's close of a vacant round after round 1 ends the
+		// ordinary rounds (architecture §3.5.2, §3.13.2).
+		c.mu.Lock()
+		r.FinalRound = true
+		c.mu.Unlock()
 	}
 	return c.deliver(ctx, r)
 }

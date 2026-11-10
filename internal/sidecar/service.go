@@ -118,7 +118,7 @@ func (sv *service) Attach(stream nriv1.NodeRuntime_AttachServer) error {
 // the request carries as fields of its own (implementation §3, The publication requests).
 var reserved = []string{
 	"topic", "metrics", "workspace", "origin_audience",
-	"current_attempts", "previous_attempt", "final_round", "bodies",
+	"current_attempts", "previous_attempt", "final_round", "bodies", "vacant",
 }
 
 // The failure codes a channel closes a query with (architecture §3.5.2).

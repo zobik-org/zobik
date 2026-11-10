@@ -137,8 +137,8 @@ func TestMintIssuer(t *testing.T) {
 	t.Fatal("no role issues identities")
 }
 
-// The channel of the panel competes from round 1 on, the final one included:
-// until the Spawner closes the vacant rounds, no upper limit.
+// The channel of the panel goes first and last in its audience: round 1 and
+// the final one (implementation §6, The operator console).
 func TestOperatorChannelWindow(t *testing.T) {
 	m := testMaterial(t)
 	rootPub, _ := m.root.PublicKey()
@@ -155,7 +155,7 @@ func TestOperatorChannelWindow(t *testing.T) {
 			t.Fatal(err)
 		}
 		w := v.Claims.AttemptWindow
-		if w == nil || *w.From != 1 || w.To != nil || !*w.FinalRound {
+		if w == nil || *w.From != 1 || w.To == nil || *w.To != 1 || !*w.FinalRound {
 			t.Errorf("attempt_window %+v", w)
 		}
 		return

@@ -332,3 +332,68 @@ func TestStoragePressure(t *testing.T) {
 		t.Error("the storage pressure was not deleted")
 	}
 }
+
+// announceQuery publishes a query on topic in the round attempts, final or not.
+func (f *fixture) announceQuery(topic string, attempts int, final bool) string {
+	f.T.Helper()
+	taskID := uuid.NewString()
+	data := map[string]any{"topic": topic, "requester_identity": requester, "origin_audience": "user", "current_attempts": attempts}
+	if final {
+		data["final_round"] = true
+	}
+	e, err := bus.NewEvent(bus.TypeAnnounced, requester, taskID, data)
+	if err != nil {
+		f.T.Fatal(err)
+	}
+	e.TraceParent = "00-" + strings.ReplaceAll(uuid.NewString(), "-", "") + "-00f067aa0ba902b7-01"
+	e.ConfigVersion = globalconfig.V0Version
+	if err := bus.Publish(f.Ctx, f.JetStream(f.Conn(bus.PublishScope.Role, nil)), bus.SubjectAnnounced(topic), e); err != nil {
+		f.T.Fatal(err)
+	}
+	return taskID
+}
+
+// A vacant query closes on its first vacancy, without the threshold and
+// without the Spawner taking it: undelivered and vacant, toward its requester.
+// What lacked the channel stamps the audience's key—an audience no row of the
+// fleet carries, or user in its final round—and an award deletes it
+// (architecture §3.13.2).
+func TestVacantQuery(t *testing.T) {
+	f := newVacancy(t, func(v globalconfig.Values) { testnet.Set(v, map[string]any{"vacancy_rounds_threshold": 3}) })
+
+	// user outside its final round: closed, no key.
+	taskID := f.announceQuery("hitl_contact_user", 2, false)
+	data := f.failure(taskID, 10*time.Second)
+	if data == nil || data["failure_code"] != "undelivered" || data["vacant"] != true || data["origin_audience"] != "user" {
+		t.Fatalf("the close: %v", data)
+	}
+	if f.cat.has("audience:user") {
+		t.Error("user outside its final round is stamped without a channel")
+	}
+
+	// user in its final round: stamped.
+	f.failure(f.announceQuery("hitl_contact_user", 3, true), 10*time.Second)
+	if !eventually(t, 5*time.Second, func() bool { return f.cat.has("audience:user") }) {
+		t.Error("user's final round vacant does not stamp its key")
+	}
+
+	// An audience with a channel in the fleet is not stamped; without one it is.
+	f.runs("channel-finance", "hitl_contact_finance", "sha256:finance", time.Now())
+	f.failure(f.announceQuery("hitl_contact_finance", 1, false), 10*time.Second)
+	f.failure(f.announceQuery("hitl_contact_legal", 1, false), 10*time.Second)
+	if !eventually(t, 5*time.Second, func() bool { return f.cat.has("audience:legal") }) {
+		t.Error("an audience without a channel is not stamped")
+	}
+	if f.cat.has("audience:finance") {
+		t.Error("an audience with a channel is stamped")
+	}
+
+	// An award of a query of the audience deletes its key.
+	f.award(f.announceQuery("hitl_contact_legal", 1, false), "channel-legal", "hitl_contact_legal")
+	if !eventually(t, 5*time.Second, func() bool { return !f.cat.has("audience:legal") }) {
+		t.Error("an award does not delete the audience's key")
+	}
+	if f.driver.actCount() != 0 {
+		t.Error("it provisioned")
+	}
+}

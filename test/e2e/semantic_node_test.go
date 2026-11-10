@@ -32,43 +32,7 @@ const (
 func TestSemanticNode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
-	z := newNetwork(t, ctx)
-	z.build(t, ctx, "images/zobik-sidecar.Dockerfile", "zobik-sidecar:dev")
-	z.build(t, ctx, "test/e2e/embeddings/Dockerfile", embeddingsImage)
-	z.build(t, ctx, "test/e2e/openai/Dockerfile", openaiImage)
-	link, _ := z.init(t, ctx)
-	z.blueprint(t, ctx, "examples/blueprints/assistant/Dockerfile", "zobik-assistant:dev")
-	p := signIn(t, ctx, link)
-
-	blueprint := filepath.Join(z.root, "examples/blueprints/assistant/blueprint.json")
-	raw, err := os.ReadFile(blueprint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var b struct {
-		CapabilityText string `json:"capability_text"`
-	}
-	if err := json.Unmarshal(raw, &b); err != nil {
-		t.Fatal(err)
-	}
-	text := "what is the capital of France?"
-	same := []float32{1, 0}
-	z.embeddings(t, ctx, map[string][]float32{documentPrefix + b.CapabilityText: same, queryPrefix + text: same})
-	z.openai(t, ctx)
-
-	// The key and the table are acts of deployment; the entry asks requester
-	// before each call, as in the demo.
-	z.run(t, ctx, credentials+openaiKey+"\n", "secret", "set", "openai")
-	z.run(t, ctx, credentials, "rates", "set", openai.RateSource, filepath.Join(z.root, "bundles/forge/openai/rates.json"))
-	entry, err := exec.CommandContext(ctx, z.bin, "model-entry", "--target", "http://openai:8080", "--handle", "openai", "--then", "requester").Output()
-	if err != nil {
-		t.Fatalf("zobik model-entry: %v", err)
-	}
-	z.run(t, ctx, credentials, "config", "set",
-		`egress_registry={"embeddings":`+string(egress.EmbeddingsEntry("http://embeddings:8080"))+`,"openai":`+strings.TrimSpace(string(entry))+`}`,
-		`embedding_model={"entry":"embeddings","model":"fake","document_prefix":"`+documentPrefix+`","query_prefix":"`+queryPrefix+`","max_text_size":8192}`)
-	z.run(t, ctx, credentials, "config", "set", "network_admission=open")
-	z.provision(t, ctx, "intake", blueprint)
+	_, p, text := assistantNetwork(t, ctx)
 
 	changed := p.events(t, ctx)
 	var conv console.Conversation
@@ -133,6 +97,51 @@ func TestSemanticNode(t *testing.T) {
 	if !ok || math.Abs(cost-want) > 1e-12 {
 		t.Errorf("the intake span's cost is %v (present %v), want %v", cost, ok, want)
 	}
+}
+
+// assistantNetwork brings up a network with the assistant blueprint on intake,
+// whose calls to the fake OpenAI endpoint ask requester first, and signs in to
+// its panel. It returns the text whose embedding reaches the assistant.
+func assistantNetwork(t *testing.T, ctx context.Context) (*network, *panel, string) {
+	t.Helper()
+	z := newNetwork(t, ctx)
+	z.build(t, ctx, "images/zobik-sidecar.Dockerfile", "zobik-sidecar:dev")
+	z.build(t, ctx, "test/e2e/embeddings/Dockerfile", embeddingsImage)
+	z.build(t, ctx, "test/e2e/openai/Dockerfile", openaiImage)
+	link, _ := z.init(t, ctx)
+	z.blueprint(t, ctx, "examples/blueprints/assistant/Dockerfile", "zobik-assistant:dev")
+	p := signIn(t, ctx, link)
+
+	blueprint := filepath.Join(z.root, "examples/blueprints/assistant/blueprint.json")
+	raw, err := os.ReadFile(blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b struct {
+		CapabilityText string `json:"capability_text"`
+	}
+	if err := json.Unmarshal(raw, &b); err != nil {
+		t.Fatal(err)
+	}
+	text := "what is the capital of France?"
+	same := []float32{1, 0}
+	z.embeddings(t, ctx, map[string][]float32{documentPrefix + b.CapabilityText: same, queryPrefix + text: same})
+	z.openai(t, ctx)
+
+	// The key and the table are acts of deployment; the entry asks requester
+	// before each call, as in the demo.
+	z.run(t, ctx, credentials+openaiKey+"\n", "secret", "set", "openai")
+	z.run(t, ctx, credentials, "rates", "set", openai.RateSource, filepath.Join(z.root, "bundles/forge/openai/rates.json"))
+	entry, err := exec.CommandContext(ctx, z.bin, "model-entry", "--target", "http://openai:8080", "--handle", "openai", "--then", "requester").Output()
+	if err != nil {
+		t.Fatalf("zobik model-entry: %v", err)
+	}
+	z.run(t, ctx, credentials, "config", "set",
+		`egress_registry={"embeddings":`+string(egress.EmbeddingsEntry("http://embeddings:8080"))+`,"openai":`+strings.TrimSpace(string(entry))+`}`,
+		`embedding_model={"entry":"embeddings","model":"fake","document_prefix":"`+documentPrefix+`","query_prefix":"`+queryPrefix+`","max_text_size":8192}`)
+	z.run(t, ctx, credentials, "config", "set", "network_admission=open")
+	z.provision(t, ctx, "intake", blueprint)
+	return z, p, text
 }
 
 // openai runs the fake OpenAI endpoint on the network's Docker network,
