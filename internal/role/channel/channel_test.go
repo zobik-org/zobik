@@ -129,9 +129,11 @@ func (f *fixture) rootClose(traceID string, within time.Duration) *bus.Event {
 type consultation struct {
 	TaskID string
 	Data   struct {
-		Kind    string         `json:"kind"`
-		Options []string       `json:"options"`
-		Details map[string]any `json:"details"`
+		Kind       string         `json:"kind"`
+		Options    []string       `json:"options"`
+		Details    map[string]any `json:"details"`
+		Attempts   int            `json:"current_attempts"`
+		FinalRound bool           `json:"final_round"`
 	}
 }
 

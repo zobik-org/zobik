@@ -272,6 +272,41 @@ func TestAsk(t *testing.T) {
 	}
 }
 
+// A query's rounds end with a vacant round after round 1: the reopen that
+// follows is the final round, which is not reopened (architecture §3.5.2).
+func TestAskFinalRound(t *testing.T) {
+	f := newFixture(t, options{})
+	topic := "hitl_contact_user"
+	queries := f.Tap(bus.SubjectAnnounced(topic))
+	l, err := f.attach(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := f.take(l, map[string]any{"origin_audience": "user"})
+	vacant := map[string]any{"failure_reason": "no channel claimed it", "failure_code": "undelivered", "vacant": true}
+
+	if _, err := l.client.Publish(f.Ctx, askReq(parent, "", `{"vacant":true}`)); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("a query that brings vacant: %v", err)
+	}
+	prev := ""
+	for round, want := range []any{nil, nil, true} {
+		ack, err := l.client.Publish(f.Ctx, askReq(parent, prev, `{"question":"which one?"}`))
+		if err != nil {
+			t.Fatalf("round %d: %v", round+1, err)
+		}
+		if d := dataOf(t, await(t, queries, 5*time.Second)); d["final_round"] != want {
+			t.Errorf("round %d: final_round %v, want %v", round+1, d["final_round"], want)
+		}
+		f.terminal(bus.TypeFailed, ack.GetTaskId(), topic, vacant)
+		d, _ := result(t, l.next(t, 5*time.Second))
+		l.received(t, d.GetDeliveryId())
+		prev = ack.GetTaskId()
+	}
+	if _, err := l.client.Publish(f.Ctx, askReq(parent, prev, `{}`)); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("reopening the final round: %v", err)
+	}
+}
+
 // An announcement waits in the outbox while the embeddings endpoint is down,
 // across a restart, and goes out when it comes back.
 func TestOutboxRestart(t *testing.T) {

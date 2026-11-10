@@ -78,6 +78,10 @@
       "description": "Marks the attempt that opens the final round of a human query (architecture §3.5.2).",
       "type": "boolean"
     },
+    "vacant": {
+      "description": "In the task.failed with which the Spawner closes a hitl_contact_* query no channel claimed: the mark by which the requester tells a vacant round from a channel that did not deliver (architecture §3.5.2, §3.13.2).",
+      "type": "boolean"
+    },
     "declared_similarity": {
       "description": "In task.proposed, optional: a ceiling on the similarity the Task Broker recomputes (architecture §3.7.5).",
       "type": "number"

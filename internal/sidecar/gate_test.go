@@ -234,3 +234,45 @@ func TestGateEdited(t *testing.T) {
 		t.Errorf("the providers received %q", got)
 	}
 }
+
+// A gate's rounds end with a vacant round after round 1: the next attempt is
+// the final round, and its close without an answer is the outcome_if_silent,
+// deny (architecture §3.5.2, §3.13.2).
+func TestGateFinalRound(t *testing.T) {
+	f, p, l, taskID := gateFixture(t)
+	queries := f.Tap(bus.SubjectAnnounced(gateTopic))
+	vacant := map[string]any{"failure_reason": "no channel claimed it", "failure_code": "undelivered", "vacant": true}
+
+	done := calling(f.Ctx, l, taskID, "final")
+	q := await(t, queries, 5*time.Second)
+	// Round 1 vacant: the next round is ordinary.
+	f.terminal(bus.TypeFailed, q.Subject, gateTopic, vacant)
+	q = await(t, queries, 5*time.Second)
+	if d := dataOf(t, q); d["current_attempts"] != 2.0 || d["final_round"] != nil {
+		t.Fatalf("round 2: %s", q.Data)
+	}
+	// A channel that did not deliver: the next round is ordinary.
+	f.terminal(bus.TypeFailed, q.Subject, gateTopic, map[string]any{"failure_reason": "not sent", "failure_code": "undelivered"})
+	q = await(t, queries, 5*time.Second)
+	if d := dataOf(t, q); d["current_attempts"] != 3.0 || d["final_round"] != nil {
+		t.Fatalf("round 3: %s", q.Data)
+	}
+	// Round 3 vacant: the next is the final round.
+	f.terminal(bus.TypeFailed, q.Subject, gateTopic, vacant)
+	q = await(t, queries, 5*time.Second)
+	if d := dataOf(t, q); d["current_attempts"] != 4.0 || d["final_round"] != true {
+		t.Fatalf("the final round: %s", q.Data)
+	}
+	f.terminal(bus.TypeFailed, q.Subject, gateTopic, map[string]any{"failure_reason": "expired", "failure_code": "unanswered"})
+	if err := waitCall(t, done); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("silence in the final round: %v", err)
+	}
+	select {
+	case again := <-queries:
+		t.Errorf("the final round was reopened: %s", again.Data)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if got := p.received(); len(got) != 0 {
+		t.Errorf("the provider received %q", got)
+	}
+}

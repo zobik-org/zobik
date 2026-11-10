@@ -143,14 +143,14 @@ var Roles = []Role{
 	panelChannel("operator", "config"),
 }
 
-// panelChannel is the channel role of one of the panel's audiences. A channel
-// also receives the closes of the tasks it opens. Its window has no upper limit
-// until the Spawner closes the vacant rounds: without that close no query
-// reaches the final round, and one let go in round 1 would stay vacant.
+// panelChannel is the channel role of one of the panel's audiences, which goes
+// first and last in its audience: its window is round 1 and the final one
+// (implementation §6, The operator console). A channel also receives the closes
+// of the tasks it opens.
 func panelChannel(audience string, waitsFor ...string) Role {
 	topic := signing.HITLPrefix + audience
 	return Role{Unit: "channel_" + audience, Scope: bus.ChannelScope, Topic: topic,
-		AttemptWindow: &signing.AttemptWindow{From: ptr(1), FinalRound: ptr(true)},
+		AttemptWindow: &signing.AttemptWindow{From: ptr(1), To: ptr(1), FinalRound: ptr(true)},
 		Args:          []string{"--role=channel", "--audience=" + audience}, WaitsFor: waitsFor,
 		ServesConsole: true,
 		Consumers: func(id string) []bus.Consumer {
