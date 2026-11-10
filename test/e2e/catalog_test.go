@@ -38,7 +38,7 @@ func TestCatalog(t *testing.T) {
 		out, err := z.cmd(ctx, "", append([]string{"register"}, args...)...).CombinedOutput()
 		return string(out), err
 	}
-	out, err := register("--topic", "echo", blueprint)
+	out, err := register("--topic", "echo", "--topic-description", topicDescription("echo"), blueprint)
 	if err != nil {
 		t.Fatalf("registering echo: %v\n%s", err, out)
 	}
@@ -55,7 +55,7 @@ func TestCatalog(t *testing.T) {
 	if e.Topic != "echo" || e.ScanResult.Verdict != "pass" || e.NRIVersion != "1.0" || e.ArtifactSize <= 0 || e.ArtifactSize > 10<<20 {
 		t.Errorf("entry %+v: want pass with NRI 1.0 and the size of echo's own layer", e)
 	}
-	if again, err := register("--topic", "echo", blueprint); err != nil || lastLine(again) != lastLine(out) {
+	if again, err := register("--topic", "echo", "--topic-description", topicDescription("echo"), blueprint); err != nil || lastLine(again) != lastLine(out) {
 		t.Errorf("registering twice: %v\n%s", err, again)
 	}
 
@@ -81,7 +81,7 @@ func TestCatalog(t *testing.T) {
 		t.Cleanup(func() { exec.Command("docker", "rmi", "-f", tag).Run() })
 		bp := filepath.Join(dir, "blueprint.json")
 		os.WriteFile(bp, []byte(`{"artifact_ref":"`+tag+`","capability_text":"x","requires":{}}`), 0o644)
-		if out, err := register("--topic", "rejected", bp); err == nil || !strings.Contains(out, c.reason) {
+		if out, err := register("--topic", "rejected", "--topic-description", topicDescription("rejected"), bp); err == nil || !strings.Contains(out, c.reason) {
 			t.Errorf("%s: %v, want %s\n%s", c.name, err, c.reason, out)
 		}
 	}
@@ -94,6 +94,10 @@ func TestCatalog(t *testing.T) {
 	c, err := deploy.CatalogClient(z.dir, string(read))
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The registration of echo registered its topic (architecture §3.7.6).
+	if topic, ok, err := c.Topic(ctx, "echo"); err != nil || !ok || topic.Description != topicDescription("echo") {
+		t.Errorf("the topic echo: %+v %v %v", topic, ok, err)
 	}
 	st, err := c.Status(ctx)
 	if err != nil || st.Occupied != e.ArtifactSize || st.Capacity <= 0 {

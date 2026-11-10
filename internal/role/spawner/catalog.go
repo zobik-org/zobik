@@ -22,9 +22,9 @@ import (
 // The prefixes and keys of the qualified records the vacancy reads and writes
 // (implementation §1.2.11).
 const (
-	embeddingPrefix = "embedding:"
-	topicPrefix     = "topic:"
-	keyVectorSpace  = "vector_space"
+	embeddingPrefix      = "embedding:"
+	topicEmbeddingPrefix = "topic_embedding:"
+	keyVectorSpace       = "vector_space"
 )
 
 // The trigger_reason values that keep an entry out of what vacancy chooses
@@ -41,24 +41,17 @@ type vectorRecord struct {
 	ModelID   string `json:"model_id"`
 }
 
-// topicRow is a row of the Topic Registry (architecture §3.7.6).
+// topicRow is a topic of the Topic Registry with its vector in the network's
+// space (architecture §3.7.6).
 type topicRow struct {
-	Topic       string `json:"topic"`
-	Embedding   string `json:"embedding"`
-	ModelID     string `json:"model_id"`
-	Description string `json:"description"`
+	catalog.Topic
+	vectorRecord
 }
 
 // errGeneration is an embedding the model did not generate: the entry is
 // discarded from the search, and the discard may make the Spawner abstain
 // (architecture §3.13.3).
 var errGeneration = errors.New("the embedding could not be generated")
-
-// emergent reports whether topic is an emergent one, the population topic
-// governance covers (architecture §3.7.6, §3.7.7).
-func emergent(topic string) bool {
-	return topic != bus.TopicIntake && !bus.StructuralTopics[topic] && !strings.HasPrefix(topic, signing.HITLPrefix)
-}
 
 // document generates the embedding of text in the current space, which must be
 // modelID: a configuration that changed meanwhile fails the generation.
@@ -92,31 +85,40 @@ func (s *spawner) entryVector(ctx context.Context, cat Catalog, modelID string, 
 	return v, err
 }
 
-// topicRows are the Topic Registry's rows in the space modelID; those of
-// another space are regenerated from their description, and the names of
-// those that could not be are returned apart (architecture §3.13.3).
+// topicRows are the Topic Registry's topics with their vectors in the space
+// modelID; a vector missing or of another space is regenerated from the
+// topic's description, and the topics that could not be are returned apart
+// (architecture §3.7.6, §3.13.3).
 func (s *spawner) topicRows(ctx context.Context, cat Catalog, modelID string) (rows []topicRow, failed []string, err error) {
-	records, err := cat.Records(ctx, topicPrefix, s.o.Network)
+	topics, err := cat.Topics(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
+	records, err := cat.Records(ctx, topicEmbeddingPrefix, s.o.Network)
+	if err != nil {
+		return nil, nil, err
+	}
+	cached := map[string]vectorRecord{}
 	for _, rec := range records {
-		var row topicRow
-		if json.Unmarshal(rec.Value, &row) != nil {
-			continue
+		var v vectorRecord
+		if json.Unmarshal(rec.Value, &v) == nil {
+			cached[strings.TrimPrefix(rec.Key, topicEmbeddingPrefix)] = v
 		}
+	}
+	for _, t := range topics {
+		row := topicRow{Topic: t, vectorRecord: cached[t.Topic]}
 		if row.ModelID != modelID {
 			s.triggerSweep()
-			v, err := s.document(ctx, modelID, row.Description)
+			v, err := s.document(ctx, modelID, t.Description)
 			if errors.Is(err, errGeneration) {
-				failed = append(failed, topicPrefix+row.Topic)
+				failed = append(failed, topicEmbeddingPrefix+t.Topic)
 				continue
 			}
 			if err != nil {
 				return nil, nil, err
 			}
-			row.Embedding, row.ModelID = v, modelID
-			if err := cat.PutRecord(ctx, s.o.Network, rec.Key, row, catalog.Write{}); err != nil {
+			row.vectorRecord = vectorRecord{Embedding: v, ModelID: modelID}
+			if err := cat.PutRecord(ctx, s.o.Network, topicEmbeddingPrefix+t.Topic, row.vectorRecord, catalog.Write{}); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -125,26 +127,11 @@ func (s *spawner) topicRows(ctx context.Context, cat Catalog, modelID string) (r
 	return rows, failed, nil
 }
 
-// registerTopic registers an emergent topic the Topic Registry does not have,
-// with the vector and the capability_text of the entry whose node the act
-// brought up (architecture §3.7.6).
-func (s *spawner) registerTopic(ctx context.Context, cat Catalog, topic string, node *Node, text string) error {
-	if !emergent(topic) {
-		return nil
-	}
-	row := topicRow{Topic: topic, Embedding: node.Embedding, ModelID: node.ModelID, Description: text}
-	err := cat.PutRecord(ctx, s.o.Network, topicPrefix+topic, row, catalog.Write{IfAbsent: true})
-	if errors.Is(err, catalog.ErrPrecondition) {
-		return nil
-	}
-	return err
-}
-
-// redundant searches the Topic Registry for a topic with nodes running whose
-// purpose the task's embedding reaches at topic_similarity_floor (architecture
-// §3.13.2). failed names the stale rows that could not be regenerated, whose
-// discard may have hidden the neighbor.
-func (s *spawner) redundant(ctx context.Context, cat Catalog, modelID string, task []float32, topic string, fleet []Running) (suggested string, failed []string, err error) {
+// redundant searches the Topic Registry for a topic, active or available,
+// whose purpose the task's embedding reaches at topic_similarity_floor
+// (architecture §3.7.6, §3.13.2). failed names the stale rows that could not
+// be regenerated, whose discard may have hidden the neighbor.
+func (s *spawner) redundant(ctx context.Context, cat Catalog, modelID string, task []float32, topic string, entries []catalog.Entry, fleet []Running) (suggested string, failed []string, err error) {
 	var floor float64
 	if err := json.Unmarshal(s.head.Load().Values["topic_similarity_floor"], &floor); err != nil {
 		return "", nil, fmt.Errorf("topic_similarity_floor: %w", err)
@@ -153,13 +140,13 @@ func (s *spawner) redundant(ctx context.Context, cat Catalog, modelID string, ta
 	if err != nil {
 		return "", nil, err
 	}
-	covered := map[string]bool{}
-	for _, n := range fleet {
-		covered[n.Topic] = true
+	states, err := s.topicStates(ctx, cat, entries, fleet)
+	if err != nil {
+		return "", nil, err
 	}
 	best := -2.0
 	for _, row := range rows {
-		if row.Topic == topic || !covered[row.Topic] {
+		if row.Topic.Topic == topic || states[row.Topic.Topic] == "" {
 			continue
 		}
 		v, err := embedding.Decode(row.Embedding)
@@ -170,11 +157,26 @@ func (s *spawner) redundant(ctx context.Context, cat Catalog, modelID string, ta
 		if err != nil || sim < floor {
 			continue
 		}
-		if sim > best || (sim == best && row.Topic < suggested) {
-			best, suggested = sim, row.Topic
+		if sim > best || (sim == best && row.Topic.Topic < suggested) {
+			best, suggested = sim, row.Topic.Topic
 		}
 	}
 	return suggested, failed, nil
+}
+
+// eligible reports whether the network could bring up the entry for reasons
+// that do not depend on a task: its image is not being deleted, its analysis
+// passed under the current ruleset, the network did not veto it and its floor
+// history keeps it out of no choice (architecture §3.13.2).
+func (s *spawner) eligible(ctx context.Context, cat Catalog, e *catalog.Entry, status *catalog.Status) (bool, error) {
+	if e.DeletionMark || e.ScanResult.Verdict != "pass" || e.ScanResult.RulesetVersion != status.RulesetVersion {
+		return false, nil
+	}
+	if _, vetoed, err := cat.Record(ctx, s.o.Network, vetoPrefix+e.ArtifactRef, nil); err != nil || vetoed {
+		return false, err
+	}
+	excluded, err := s.excluded(ctx, cat, e.ArtifactRef)
+	return !excluded, err
 }
 
 // candidate is a Local Catalog entry that would have proposed for the vacant task.
@@ -205,18 +207,12 @@ func (s *spawner) candidates(ctx context.Context, cat Catalog, modelID string, a
 	}
 	round := claim.ReadRound(ann)
 	for _, e := range entries {
-		if e.DeletionMark || e.ScanResult.Verdict != "pass" || e.ScanResult.RulesetVersion != status.RulesetVersion ||
-			!claim.Admits(e.AttemptWindow, round) {
+		if !claim.Admits(e.AttemptWindow, round) {
 			continue
 		}
-		if _, vetoed, err := cat.Record(ctx, s.o.Network, vetoPrefix+e.ArtifactRef, nil); err != nil {
+		if ok, err := s.eligible(ctx, cat, &e, status); err != nil {
 			return nil, nil, err
-		} else if vetoed {
-			continue
-		}
-		if excluded, err := s.excluded(ctx, cat, e.ArtifactRef); err != nil {
-			return nil, nil, err
-		} else if excluded {
+		} else if !ok {
 			continue
 		}
 		v, err := s.entryVector(ctx, cat, modelID, &e)

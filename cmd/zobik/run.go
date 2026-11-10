@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/grpc"
 
 	"zobik.org/zobik/internal/deploy"
 	"zobik.org/zobik/internal/role"
@@ -16,24 +17,27 @@ import (
 	"zobik.org/zobik/internal/role/channel"
 	"zobik.org/zobik/internal/role/config"
 	"zobik.org/zobik/internal/role/contextstore"
+	"zobik.org/zobik/internal/role/dockerreader"
+	"zobik.org/zobik/internal/role/networkmonitor"
 	"zobik.org/zobik/internal/role/scanner"
 	"zobik.org/zobik/internal/role/secrets"
 	"zobik.org/zobik/internal/role/spawner"
 	"zobik.org/zobik/internal/role/taskbroker"
 	"zobik.org/zobik/internal/role/tenantlink"
 	"zobik.org/zobik/internal/role/tracingcollector"
+	contextv1 "zobik.org/zobik/proto/zobik/context/v1"
 )
 
 // zobik run --role=<role> is what each role container runs; the invocation uses
 // the role's identifier (implementation §6, The roles of the binary).
 func runCmd(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	name := fs.String("role", "", "the role: config, task_broker, context, channel, tracing_collector, secrets, spawner, tenant_link, scanner or catalog")
+	name := fs.String("role", "", "the role: config, task_broker, context, channel, tracing_collector, secrets, spawner, network_monitor, docker_reader, tenant_link, scanner or catalog")
 	capacity := fs.Int64("storage-capacity", 0, "catalog: the artifact storage capacity, in bytes")
 	audience := fs.String("audience", "", "the audience a channel serves: operator or user")
 	storeSize := fs.Int64("store-size", 0, "context: the ceiling of the content volume, in bytes (context_store_size)")
 	traceSize := fs.Int64("trace-size", 0, "context: the ceiling of one trace, in bytes (context_trace_size)")
-	network := fs.String("network", "", "tracing_collector and spawner: the network's name")
+	network := fs.String("network", "", "tracing_collector, spawner and docker_reader: the network's name")
 	fleetCapacity := fs.Int64("fleet-capacity", 0, "spawner: fleet_capacity, in MB")
 	sidecarImage := fs.String("sidecar-image", "", "spawner: the Integration Sidecar's image")
 	registry := fs.String("registry", "", "spawner: the address the engine pulls the artifacts from")
@@ -74,6 +78,21 @@ func runCmd(ctx context.Context, args []string) error {
 			Scanner:    scanner.Socket,
 			Capacity:   *capacity,
 		})
+	case "docker_reader":
+		// It runs without the Bus, and only the roles that read through it
+		// mount its socket (implementation §6, The roles of the binary).
+		return dockerreader.Run(ctx, dockerreader.Options{
+			Network: *network, Engine: deploy.EngineSocket, Socket: dockerreader.Socket,
+		})
+	case "network_monitor":
+		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
+			e, err := deploy.NewEngineAt(ctx, dockerreader.Socket)
+			if err != nil {
+				return err
+			}
+			defer e.Close()
+			return networkmonitor.Run(ctx, rt, nc, networkmonitor.Options{Fleet: e.Census, ContextAddr: role.AddrContext})
+		}
 	case "config":
 		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
 			return config.Run(ctx, rt, nc, config.Options{ContextAddr: role.AddrContext})
@@ -138,6 +157,11 @@ func runCmd(ctx context.Context, args []string) error {
 			if err != nil {
 				return err
 			}
+			conn, err := grpc.NewClient(role.AddrContext, grpc.WithTransportCredentials(rt.RPCCredentials()))
+			if err != nil {
+				return err
+			}
+			defer conn.Close()
 			return spawner.Run(ctx, rt, nc, spawner.Options{
 				Network: *network,
 				Driver: &deploy.Driver{
@@ -148,6 +172,7 @@ func runCmd(ctx context.Context, args []string) error {
 				Catalog:          deploy.SpawnerCatalog(iss),
 				Registry:         reg,
 				IdentityLifetime: *lifetime,
+				Context:          contextv1.NewContextStoreClient(conn),
 			})
 		}
 	default:

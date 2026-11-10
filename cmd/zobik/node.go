@@ -16,17 +16,22 @@ import (
 // zobik node acts on the fleet: a client of the console, which emits the
 // request with the operator's proof and waits for its close (architecture
 // §3.13.8, implementation §6, The operator console). provision instantiates a
-// Catalog entry; remove, veto, unveto and purge emit node_retire.
+// Catalog entry; remove, veto, unveto and purge emit node_retire. list opens
+// the census of node_query, which carries no proof.
 func nodeCmd(ctx context.Context, args []string) error {
 	const usage = "usage: zobik node provision [--slot <slot>=<entry> ...] <artifact_ref>\n" +
 		"       zobik node remove <node_id>\n" +
 		"       zobik node veto|unveto|purge <artifact_ref>\n" +
+		"       zobik node list\n" +
 		"remove archives the node, and the network can bring its entry up again\n" +
 		"on a vacancy; veto keeps the artifact from coming up until unveto"
 	if len(args) == 0 {
 		return errors.New(usage)
 	}
 	kind := args[0]
+	if kind == "list" {
+		return queryCmd(ctx, "node list", console.TopicNodeQuery, args[1:])
+	}
 	switch kind {
 	case "provision", "remove", "veto", "unveto", "purge":
 	default:

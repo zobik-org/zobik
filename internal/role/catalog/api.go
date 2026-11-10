@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
+	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/signing"
 )
 
@@ -28,6 +30,9 @@ const (
 	ReasonUnresolvable      = "unresolvable"
 	ReasonNRIVersionMissing = "nri_version_missing"
 	ReasonStorageFull       = "storage_full"
+	// ReasonTopicDescriptionMissing is an emergent topic the Topic Registry
+	// does not have, registered without its description.
+	ReasonTopicDescriptionMissing = "topic_description_missing"
 	// ReasonUnregisteredMember is a bundle that names a digest without an entry.
 	ReasonUnregisteredMember = "unregistered_member"
 )
@@ -40,18 +45,22 @@ const (
 	ProvenancePurchased = "purchased"
 )
 
-// Registration is the body of POST /v1/entries: the half without a qualifier
-// and, optionally, the acquisition row of the registering network
-// (implementation §1.2.11).
+// Registration is the body of POST /v1/entries: the half without a qualifier,
+// the description of its topic and, optionally, the acquisition row of the
+// registering network (implementation §1.2.11).
 type Registration struct {
-	Topic           string                     `json:"topic"`
-	ArtifactRef     string                     `json:"artifact_ref"`
-	CapabilityText  string                     `json:"capability_text"`
-	AuthorID        string                     `json:"author_id"`
-	AttemptWindow   *signing.AttemptWindow     `json:"attempt_window,omitempty"`
-	TopicsAnnounced []TopicAnnounced           `json:"topics_announced,omitempty"`
-	Requires        map[string]json.RawMessage `json:"requires"`
-	Acquisition     *Acquisition               `json:"acquisition,omitempty"`
+	Topic string `json:"topic"`
+	// TopicDescription registers the topic if the Topic Registry does not
+	// have it; with the topic registered, the Catalog ignores it (architecture
+	// §3.7.6).
+	TopicDescription string                     `json:"topic_description,omitempty"`
+	ArtifactRef      string                     `json:"artifact_ref"`
+	CapabilityText   string                     `json:"capability_text"`
+	AuthorID         string                     `json:"author_id"`
+	AttemptWindow    *signing.AttemptWindow     `json:"attempt_window,omitempty"`
+	TopicsAnnounced  []TopicAnnounced           `json:"topics_announced,omitempty"`
+	Requires         map[string]json.RawMessage `json:"requires"`
+	Acquisition      *Acquisition               `json:"acquisition,omitempty"`
 }
 
 // TopicAnnounced is a domain topic the blueprint announces, with the fixed
@@ -79,7 +88,8 @@ type ScanResult struct {
 }
 
 // Entry is an entry as the reads return it: the half it was registered with,
-// without acquisition, and what the Catalog adds (implementation §1.2.11).
+// without acquisition or topic_description, and what the Catalog adds
+// (implementation §1.2.11).
 type Entry struct {
 	Registration
 	ScanResult   ScanResult `json:"scan_result"`
@@ -108,6 +118,21 @@ type Bundle struct {
 	BundleID    string   `json:"bundle_id,omitempty"`
 	PurposeText string   `json:"purpose_text"`
 	Members     []string `json:"members"`
+}
+
+// Topic is a topic of the Topic Registry, as GET /v1/topics returns it
+// (architecture §3.7.6).
+type Topic struct {
+	Topic       string `json:"topic"`
+	Description string `json:"description"`
+}
+
+// Emergent reports whether topic is an emergent one, the population the Topic
+// Registry holds: neither intake, nor a fixed-convention topic with a
+// structural claimant, nor one of the hitl_contact_* family (architecture
+// §3.7.6, §3.7.7).
+func Emergent(topic string) bool {
+	return topic != bus.TopicIntake && !bus.StructuralTopics[topic] && !strings.HasPrefix(topic, signing.HITLPrefix)
 }
 
 // Record is a qualified record as the listing returns it.

@@ -92,12 +92,16 @@ func (z *network) register(t *testing.T, ctx context.Context, topic, blueprint s
 	var e struct {
 		ArtifactRef string `json:"artifact_ref"`
 	}
-	out := z.run(t, ctx, "", "register", "--topic", topic, blueprint)
+	out := z.run(t, ctx, "", "register", "--topic", topic, "--topic-description", topicDescription(topic), blueprint)
 	if err := json.Unmarshal([]byte(lastLine(out)), &e); err != nil || e.ArtifactRef == "" {
 		t.Fatalf("register said: %s", out)
 	}
 	return e.ArtifactRef
 }
+
+// topicDescription is the description a test registers an emergent topic
+// with (architecture §3.7.6).
+func topicDescription(topic string) string { return "The tasks of " + topic + "." }
 
 // logic names a node's Logic Container (implementation §6, The Docker network).
 func (z *network) logic(node string) string {

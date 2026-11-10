@@ -242,21 +242,21 @@ func (s *spawner) resolveVacancy(ctx context.Context, x act) error {
 		return err
 	}
 
-	// Is the topic redundant? Only for an emergent topic no entry claims and
-	// the Topic Registry does not have (architecture §3.13.2).
-	if emergent(topic) && len(entries) == 0 {
-		_, registered, err := cat.Record(ctx, s.o.Network, topicPrefix+topic, nil)
+	// Is the topic redundant? Only for an emergent topic the Topic Registry
+	// does not have (architecture §3.13.2).
+	if catalog.Emergent(topic) {
+		_, registered, err := cat.Topic(ctx, topic)
 		if err != nil {
 			return err
 		}
 		if !registered {
-			suggested, failed, err := s.redundant(ctx, cat, space.ModelID, task, topic, fleet)
+			suggested, failed, err := s.redundant(ctx, cat, space.ModelID, task, topic, all, fleet)
 			if err != nil {
 				return err
 			}
 			if suggested != "" {
 				return s.failVacant(ctx, x, CodeRedundantTopic,
-					fmt.Sprintf("the topic %s is redundant with %s, which has nodes running", topic, suggested),
+					fmt.Sprintf("the topic %s is redundant with %s, which the network serves", topic, suggested),
 					map[string]any{"suggested_topic": suggested})
 			}
 			if len(failed) > 0 {

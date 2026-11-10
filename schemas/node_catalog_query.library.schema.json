@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_catalog_query.library.schema.json",
+  "description": "The portion library the Spawner writes in answer to a node_catalog_query (architecture §3.13.3, implementation §10.1): every entry of the Specialty Catalog as the answering network sees it, the artifact storage, and the bundles.",
+  "type": "object",
+  "required": ["entries", "storage_occupied", "storage_capacity", "bundles"],
+  "properties": {
+    "entries": {
+      "description": "One per blueprint (architecture §3.13.3).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["artifact_ref", "topic", "state", "capability_text", "active_floors", "floor_history", "artifact_size", "deletion_mark", "veto_mark", "present_in"],
+        "properties": {
+          "artifact_ref": {"description": "The digest of the entry's image, which names it (implementation §1.2.11).", "type": "string"},
+          "topic": {"description": "The topic it claims (architecture §3.13.3).", "type": "string"},
+          "state": {
+            "description": "In the answering network: active if an instance of it runs, archived if none runs and its floor history records an archiving, registered if it never ran (architecture §3.13.3). Known values: active, archived, registered.",
+            "type": "string"
+          },
+          "capability_text": {"description": "What the blueprint knows how to do (architecture §3.13.3).", "type": "string"},
+          "acquisition": {
+            "description": "The acquisition cost of the answering network, absent if it has none (architecture §3.13.3).",
+            "type": "object",
+            "required": ["provenance", "cost", "as_of"],
+            "properties": {
+              "provenance": {"description": "Known values: derived, purchased, imported, seeded.", "type": "string"},
+              "cost": {"type": "number", "minimum": 0},
+              "as_of": {"type": "string", "format": "date-time"}
+            }
+          },
+          "active_floors": {
+            "description": "The similarity_floor of each instance that runs it today, read from the Active Node Registry (architecture §3.13.3).",
+            "type": "array",
+            "items": {"type": "number"}
+          },
+          "floor_history": {
+            "description": "One row per floor with which it ran on the answering network and was archived (architecture §3.13.3).",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["similarity_floor", "trigger_reason", "model_id", "archived_at"],
+              "properties": {
+                "similarity_floor": {"type": "number"},
+                "trigger_reason": {"description": "That of the archiving: a value of node_review's, or one the Spawner archives with on its own (architecture §3.12.3, §3.13.8, §3.13.10).", "type": "string"},
+                "model_id": {"description": "The vector space in which the floor makes sense.", "type": "string"},
+                "archived_at": {"type": "string", "format": "date-time"},
+                "snapshot": {"description": "The metrics snapshot of the archiving: the signal vector of architecture §3.12.2. Absent if the row has none.", "type": "object", "properties": {}}
+              }
+            }
+          },
+          "artifact_size": {"description": "Bytes the artifact takes in the image registry beyond the base image (architecture §3.13.3).", "type": "integer", "minimum": 0},
+          "deletion_mark": {"description": "Its image is deleted or being deleted (architecture §3.13.8).", "type": "boolean"},
+          "veto_mark": {"description": "The answering network vetoed the artifact (architecture §3.13.8).", "type": "boolean"},
+          "present_in": {
+            "description": "The networks of the tenant with a current presence mark on it (architecture §3.13.3).",
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    },
+    "storage_occupied": {"description": "Bytes of artifact storage occupied: the artifact_size of the entries without a deletion mark (architecture §3.13.3).", "type": "integer", "minimum": 0},
+    "storage_capacity": {"description": "Bytes of artifact storage the deployment declares (architecture §3.13.3).", "type": "integer", "minimum": 0},
+    "bundles": {
+      "description": "The bundles, which the Operator Channel expands to instantiate them (architecture §3.13.6, §3.17.1).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["bundle_id", "purpose_text", "members"],
+        "properties": {
+          "bundle_id": {"type": "string"},
+          "purpose_text": {"type": "string"},
+          "members": {"description": "The artifact_ref of each member.", "type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

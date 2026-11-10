@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/topic_catalog_query.completed.schema.json",
+  "description": "The data of the task.completed with which the Spawner closes a topic_catalog_query (architecture §3.7.6, implementation §10.1). The listing travels in the payload, without Claim-Check. The common fields are in data.schema.json.",
+  "type": "object",
+  "required": ["topics"],
+  "properties": {
+    "topics": {
+      "description": "Every topic of the Topic Registry (architecture §3.7.6).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["topic", "description", "state"],
+        "properties": {
+          "topic": {"type": "string"},
+          "description": {"description": "Which tasks fall in the topic: the source text of its embedding (architecture §3.7.6).", "type": "string"},
+          "state": {
+            "description": "In the answering network: active if a node runs on it, available if none runs but an entry that claims it meets the provisioning preconditions and is not excluded from the candidates for reasons other than the task, uncovered otherwise (architecture §3.7.6). Known values: active, available, uncovered.",
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

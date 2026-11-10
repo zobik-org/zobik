@@ -147,8 +147,10 @@ func failure(f Failure) result { return respond(http.StatusUnprocessableEntity, 
 
 // register is the act of registration (architecture §3.13.3, implementation
 // §1.2.11), on behalf of network: the image has to resolve, pass the analysis,
-// declare its NRI version and fit in the capacity. Registering the same half
-// again returns the entry and removes its deletion mark.
+// declare its NRI version and fit in the capacity, and an emergent topic the
+// Topic Registry does not have comes with its description, which registers it.
+// Registering the same half again returns the entry and removes its deletion
+// mark.
 func (c *Catalog) register(ctx context.Context, network string, body []byte) (result, error) {
 	var reg Registration
 	if err := json.Unmarshal(body, &reg); err != nil {
@@ -162,6 +164,7 @@ func (c *Catalog) register(ctx context.Context, network string, body []byte) (re
 		return respond(http.StatusBadRequest, errorBody(err.Error())), nil
 	}
 	delete(fields, "acquisition")
+	delete(fields, "topic_description")
 	half, err := json.Marshal(fields)
 	if err != nil {
 		return result{}, err
@@ -179,6 +182,13 @@ func (c *Catalog) register(ctx context.Context, network string, body []byte) (re
 	}
 	if existing != nil && existing.HalfDigest != halfDigest {
 		return respond(http.StatusConflict, errorBody("another half is registered under "+reg.ArtifactRef)), nil
+	}
+	newTopic, err := c.newTopic(ctx, reg)
+	if err != nil {
+		return result{}, err
+	}
+	if newTopic != nil && newTopic.Description == "" {
+		return failure(Failure{Reason: ReasonTopicDescriptionMissing}), nil
 	}
 	desc, err := c.registry.resolve(ctx, reg.ArtifactRef)
 	if errors.Is(err, errNotFound) {
@@ -203,6 +213,11 @@ func (c *Catalog) register(ctx context.Context, network string, body []byte) (re
 				return result{}, err
 			}
 			existing.DeletionMark = false
+		}
+		if newTopic != nil {
+			if err := c.store.putTopic(ctx, newTopic); err != nil {
+				return result{}, err
+			}
 		}
 		if err := c.acquire(ctx, network, reg); err != nil {
 			return result{}, err
@@ -242,7 +257,7 @@ func (c *Catalog) register(ctx context.Context, network string, body []byte) (re
 		ArtifactSize: size,
 		Scan:         ScanResult{Verdict: scan.Verdict, RulesetVersion: scan.RulesetVersion, AsOf: c.store.stamp()},
 	}
-	if err := c.store.insertEntry(ctx, e); err != nil {
+	if err := c.store.insertEntry(ctx, e, newTopic); err != nil {
 		return result{}, err
 	}
 	if err := c.acquire(ctx, network, reg); err != nil {
@@ -250,6 +265,20 @@ func (c *Catalog) register(ctx context.Context, network string, body []byte) (re
 	}
 	v, err := e.view()
 	return respond(http.StatusCreated, v), err
+}
+
+// newTopic is the topic the registration registers: its emergent topic, if the
+// Topic Registry does not have it, with the description it brings, which may
+// be missing. Otherwise nil (architecture §3.7.6).
+func (c *Catalog) newTopic(ctx context.Context, reg Registration) (*Topic, error) {
+	if !Emergent(reg.Topic) {
+		return nil, nil
+	}
+	t, err := c.store.topic(ctx, reg.Topic)
+	if err != nil || t != nil {
+		return nil, err
+	}
+	return &Topic{Topic: reg.Topic, Description: reg.TopicDescription}, nil
 }
 
 // verdictPass is the Admission Scanner's verdict that admits an artifact.

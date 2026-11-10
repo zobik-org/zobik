@@ -146,6 +146,30 @@ func (c *Client) Entries(ctx context.Context) ([]Entry, error) {
 	return out.Entries, err
 }
 
+// Bundles lists every bundle (implementation §1.2.11).
+func (c *Client) Bundles(ctx context.Context) ([]Bundle, error) {
+	var out struct{ Bundles []Bundle }
+	err := c.do(ctx, http.MethodGet, "/v1/bundles", nil, &out, http.StatusOK)
+	return out.Bundles, err
+}
+
+// Topics lists the topics of the Topic Registry (architecture §3.7.6).
+func (c *Client) Topics(ctx context.Context) ([]Topic, error) {
+	var out struct{ Topics []Topic }
+	err := c.do(ctx, http.MethodGet, "/v1/topics", nil, &out, http.StatusOK)
+	return out.Topics, err
+}
+
+// Topic reads a topic of the Topic Registry; ok is false if it is not
+// registered.
+func (c *Client) Topic(ctx context.Context, name string) (t *Topic, ok bool, err error) {
+	err = c.do(ctx, http.MethodGet, "/v1/topics/"+url.PathEscape(name), nil, &t, http.StatusOK)
+	if IsStatus(err, http.StatusNotFound) {
+		return nil, false, nil
+	}
+	return t, err == nil, err
+}
+
 // SetDeletionMark stamps or removes the deletion mark of the entry digest
 // (architecture §3.13.8).
 func (c *Client) SetDeletionMark(ctx context.Context, digest string, on bool) error {

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_query.schema.json",
+  "description": "The data of a task.announced on node_query (architecture §3.12.3, implementation §10.1). Without node_id it is the census of the active fleet, which any Network Monitor instance answers; with node_id and target_topic it is the point form, which the instance that owns target_topic answers. The common fields are in data.schema.json.",
+  "type": "object",
+  "properties": {
+    "node_id": {
+      "description": "The node the point form asks about, by its platform identity (architecture §3.12.3).",
+      "type": "string",
+      "minLength": 1
+    },
+    "target_topic": {
+      "description": "The topic of the node's specialty, which routes the point form to its partition (architecture §3.7.7).",
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

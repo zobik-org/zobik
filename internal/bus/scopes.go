@@ -175,6 +175,14 @@ var TracingCollectorScope = Scope{
 	Subscribe: inboxSub,
 }
 
+// NetworkMonitorScope is the Network Monitor's: it claims and closes node_query
+// (architecture §3.12.3).
+var NetworkMonitorScope = Scope{
+	Role:      "network_monitor",
+	Publish:   join(consumerPub, configRead, participant),
+	Subscribe: inboxSub,
+}
+
 // SecretsScope is the secrets role's: it uses the Bus only to read the
 // configuration (implementation §1.2.18).
 var SecretsScope = Scope{
@@ -184,7 +192,7 @@ var SecretsScope = Scope{
 }
 
 // RoleScopes are the scopes zobik init registers for the structural roles.
-var RoleScopes = []Scope{ConfigScope, TaskBrokerScope, ContextScope, ChannelScope, SpawnerScope, TracingCollectorScope, SecretsScope}
+var RoleScopes = []Scope{ConfigScope, TaskBrokerScope, ContextScope, ChannelScope, SpawnerScope, TracingCollectorScope, SecretsScope, NetworkMonitorScope}
 
 // NodeScope is every node's: it announces, proposes and renews under its own
 // identity, closes the tasks of any destination and pulls from its consumer

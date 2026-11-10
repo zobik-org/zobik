@@ -168,6 +168,9 @@ func Init(ctx context.Context, e *Engine, o Options) error {
 			return err
 		}
 	}
+	if err := ensureDockerReader(ctx, e, n, o.Image); err != nil {
+		return err
+	}
 	args, err := spawnerArgs(o)
 	if err != nil {
 		return err

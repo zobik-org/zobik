@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"zobik.org/zobik/internal/bus"
+	"zobik.org/zobik/internal/role/catalog"
 )
 
 // The observer counts the rounds a task goes without an award, and an award
@@ -62,7 +63,7 @@ func TestEmergent(t *testing.T) {
 	for topic, want := range map[string]bool{
 		"lookup": true, bus.TopicIntake: false, "node_review": false, "hitl_contact_operator": false,
 	} {
-		if got := emergent(topic); got != want {
+		if got := catalog.Emergent(topic); got != want {
 			t.Errorf("%s: %v", topic, got)
 		}
 	}

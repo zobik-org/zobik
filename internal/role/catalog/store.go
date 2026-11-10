@@ -12,9 +12,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// store is the Catalog's SQLite file (implementation §1.2.11): the entries and
-// the bundles, the qualified records with their revision, and the hashes of the
-// credentials.
+// store is the Catalog's SQLite file (implementation §1.2.11): the entries, the
+// topics of the Topic Registry and the bundles, the qualified records with
+// their revision, and the hashes of the credentials.
 type store struct {
 	db *sql.DB
 	// now is the clock records expire against.
@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS entries (
 	findings        TEXT NOT NULL,
 	scanned_at      INTEGER NOT NULL,
 	deletion_mark   INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS topics (
+	topic       TEXT PRIMARY KEY,
+	description TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS bundles (
 	bundle_id    TEXT PRIMARY KEY,
@@ -156,11 +160,67 @@ func (s *store) entries(ctx context.Context) ([]*entry, error) {
 	return out, rows.Err()
 }
 
-func (s *store) insertEntry(ctx context.Context, e *entry) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO entries (`+entryColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+// insertEntry stores a new entry and, in the same transaction, the topic it
+// registers when t is not nil.
+func (s *store) insertEntry(ctx context.Context, e *entry, t *Topic) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // after Commit it does nothing
+	if _, err := tx.ExecContext(ctx, `INSERT INTO entries (`+entryColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.Digest, e.Half, e.HalfDigest, e.NRIVersion, e.ArtifactSize,
-		e.Scan.Verdict, e.Scan.RulesetVersion, strings.Join(e.Scan.Findings, ","), e.Scan.AsOf.UnixMilli(), e.DeletionMark)
+		e.Scan.Verdict, e.Scan.RulesetVersion, strings.Join(e.Scan.Findings, ","), e.Scan.AsOf.UnixMilli(), e.DeletionMark); err != nil {
+		return err
+	}
+	if t != nil {
+		if err := insertTopic(ctx, tx, t); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// insertTopic registers a topic the Topic Registry does not have; a registered
+// one keeps its description (architecture §3.7.6).
+func insertTopic(ctx context.Context, x interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, t *Topic) error {
+	_, err := x.ExecContext(ctx, `INSERT OR IGNORE INTO topics (topic, description) VALUES (?, ?)`, t.Topic, t.Description)
 	return err
+}
+
+// putTopic registers a topic outside an entry's insertion.
+func (s *store) putTopic(ctx context.Context, t *Topic) error { return insertTopic(ctx, s.db, t) }
+
+// topic returns the Topic Registry's row of name, or nil.
+func (s *store) topic(ctx context.Context, name string) (*Topic, error) {
+	t := Topic{Topic: name}
+	err := s.db.QueryRowContext(ctx, `SELECT description FROM topics WHERE topic = ?`, name).Scan(&t.Description)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (s *store) topics(ctx context.Context) ([]Topic, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT topic, description FROM topics ORDER BY topic`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Topic{}
+	for rows.Next() {
+		var t Topic
+		if err := rows.Scan(&t.Topic, &t.Description); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 // setDeletionMark stamps or removes the deletion mark, and says whether the
