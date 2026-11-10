@@ -20,6 +20,7 @@ import (
 	"zobik.org/zobik/internal/role"
 	"zobik.org/zobik/internal/role/catalog"
 	"zobik.org/zobik/internal/signing"
+	contextv1 "zobik.org/zobik/proto/zobik/context/v1"
 )
 
 // opTimeout bounds each read and write on the Bus and on the Catalog.
@@ -40,6 +41,9 @@ type Options struct {
 	// Spawner renews it at a third of it (implementation §1.2.4).
 	IdentityLifetime time.Duration
 	Registry         Registry
+	// Context is the Context Store, where node_catalog_query's answer goes
+	// (architecture §3.13.3).
+	Context contextv1.ContextStoreClient
 }
 
 // Run is the spawner role, the Spawner (implementation §1.2.4). It is ready
@@ -73,7 +77,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 		audiences: map[string]bool{},
 		sweep:     make(chan struct{}, 1),
 	}
-	for _, topic := range []string{TopicProvision, TopicRetire} {
+	for _, topic := range []string{TopicProvision, TopicRetire, TopicCatalogQuery, TopicTopicQuery} {
 		s.claimants[topic] = claim.New(rt.ID, rt.Credential, js, nc, topic)
 	}
 	s.head.Store(head)
@@ -211,6 +215,10 @@ func (s *spawner) handle(ctx context.Context, m jetstream.Msg) {
 		for topic, c := range s.claimants {
 			a, ok := c.Assigned(&e)
 			if !ok {
+				continue
+			}
+			if isQuery(topic) {
+				go s.answer(ctx, topic, c, a)
 				continue
 			}
 			select {
@@ -434,8 +442,7 @@ type upRequest struct {
 // bringUp provisions a node of the entry, after the validation of whoever
 // requests it: the act of architecture §3.13.1, shared by node_provision and
 // the vacancy. It writes the presence mark before reading the deletion mark,
-// makes room by evicting, and writes the network's row of the entry and, for
-// the first node of an emergent topic, the Topic Registry's.
+// makes room by evicting, and writes the network's row of the entry.
 func (s *spawner) bringUp(ctx context.Context, cat Catalog, r upRequest) (*Node, error) {
 	entry := &r.entry
 	var memory struct {
@@ -486,9 +493,6 @@ func (s *spawner) bringUp(ctx context.Context, cat Catalog, r upRequest) (*Node,
 		if err != nil && !errors.Is(err, catalog.ErrPrecondition) {
 			return nil, err
 		}
-	}
-	if err := s.registerTopic(ctx, cat, entry.Topic, node, entry.CapabilityText); err != nil {
-		log.Printf("spawner: registering the topic %s: %v", entry.Topic, err)
 	}
 	return node, nil
 }

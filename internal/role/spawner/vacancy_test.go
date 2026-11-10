@@ -142,9 +142,6 @@ func TestVacancyProvisions(t *testing.T) {
 	if act := f.driver.acts[0]; act.Topic != "echo" || act.Entry.ArtifactRef != echo {
 		t.Errorf("the act: %+v", act)
 	}
-	if !f.cat.has("topic:echo") {
-		t.Error("the topic was not registered")
-	}
 
 	// Nobody proposes, so the niche stays vacant until it is capped.
 	var n struct {
@@ -183,15 +180,14 @@ func TestVacancyStaleSpace(t *testing.T) {
 	}
 }
 
-// An emergent topic no entry claims and the Topic Registry lacks is redundant
-// with a covered topic its task reaches; a topic an entry claims, even vetoed,
-// and intake are not checked (architecture §3.13.2, §3.7.7).
+// An emergent topic the Topic Registry lacks is redundant with an active
+// topic its task reaches; a registered topic, even with its entry vetoed, and
+// intake are not checked (architecture §3.13.2, §3.7.7).
 func TestVacancyRedundantTopic(t *testing.T) {
 	f := newVacancy(t)
 	f.runs("UECHO", "echo", echo, time.Now())
-	f.cat.PutRecord(f.Ctx, network, "topic:echo",
-		map[string]any{"topic": "echo", "embedding": embedding.Encode(nearVector), "model_id": f.driver.modelID, "description": "repeats"},
-		catalog.Write{})
+	f.cat.PutRecord(f.Ctx, network, "topic_embedding:echo",
+		map[string]any{"embedding": embedding.Encode(nearVector), "model_id": f.driver.modelID}, catalog.Write{})
 
 	data := f.failure(f.announce("lookup", f.driver.modelID), 10*time.Second)
 	if data == nil || data["failure_code"] != "redundant_topic" || data["suggested_topic"] != "echo" {
@@ -211,22 +207,36 @@ func TestVacancyRedundantTopic(t *testing.T) {
 	}
 }
 
-// When a stale row of the Topic Registry cannot be regenerated and nothing
+// A topic with no node running is suggested while an entry that claims it is
+// available, and not once the network vetoes it (architecture §3.7.6,
+// §3.13.2).
+func TestVacancyRedundantAvailable(t *testing.T) {
+	f := newVacancy(t)
+	data := f.failure(f.announce("lookup", f.driver.modelID), 10*time.Second)
+	if data == nil || data["failure_code"] != "redundant_topic" || data["suggested_topic"] != "echo" {
+		t.Fatalf("lookup with echo available: %v", data)
+	}
+	f.cat.PutRecord(f.Ctx, network, "veto:"+echo, map[string]any{}, catalog.Write{})
+	if data := f.failure(f.announce("lookup", f.driver.modelID), 4*time.Second); data != nil {
+		t.Errorf("lookup with echo uncovered: %v", data)
+	}
+}
+
+// When a stale vector of the Topic Registry cannot be regenerated and nothing
 // else answers, the Spawner abstains and stamps the vector space key
 // (architecture §3.13.3, §3.13.7).
 func TestVacancyAbstains(t *testing.T) {
 	f := newVacancy(t)
 	f.driver.down = true
-	f.cat.PutRecord(f.Ctx, network, "topic:echo",
-		map[string]any{"topic": "echo", "embedding": embedding.Encode(nearVector), "model_id": "sha256:old", "description": "repeats"},
-		catalog.Write{})
+	f.cat.PutRecord(f.Ctx, network, "topic_embedding:echo",
+		map[string]any{"embedding": embedding.Encode(nearVector), "model_id": "sha256:old"}, catalog.Write{})
 	if data := f.failure(f.announce("lookup", f.driver.modelID), 4*time.Second); data != nil {
 		t.Errorf("it failed the task: %v", data)
 	}
 	var key struct {
 		Pending []string `json:"pending"`
 	}
-	if _, ok, _ := f.cat.Record(f.Ctx, network, "vector_space", &key); !ok || len(key.Pending) != 1 || key.Pending[0] != "topic:echo" {
+	if _, ok, _ := f.cat.Record(f.Ctx, network, "vector_space", &key); !ok || len(key.Pending) != 1 || key.Pending[0] != "topic_embedding:echo" {
 		t.Errorf("vector space key %v %+v", ok, key)
 	}
 }

@@ -159,6 +159,9 @@ type floorRow struct {
 	TriggerReason string    `json:"trigger_reason"`
 	ModelID       string    `json:"model_id"`
 	ArchivedAt    time.Time `json:"archived_at"`
+	// Snapshot is the metrics snapshot, which no archiving writes until the
+	// point form of node_query.
+	Snapshot json.RawMessage `json:"snapshot,omitempty"`
 }
 
 func floorKey(digest string, floor float64) string {

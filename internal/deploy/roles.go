@@ -18,6 +18,7 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/role"
+	"zobik.org/zobik/internal/role/networkmonitor"
 	"zobik.org/zobik/internal/role/spawner"
 	"zobik.org/zobik/internal/signing"
 )
@@ -78,6 +79,9 @@ type Role struct {
 	// Engine mounts the container engine's socket in full: only the Spawner
 	// (implementation §6, The roles of the binary).
 	Engine bool
+	// ReadsEngine mounts docker_reader's socket: the bounded read of the
+	// container engine (implementation §6, The roles of the binary).
+	ReadsEngine bool
 	// TenantCA gives it the tenant CA's certificate, for a role that reaches the
 	// tenant-wide pieces by their names (implementation §6, The tenant CA, the
 	// link and the join code).
@@ -128,6 +132,13 @@ var Roles = []Role{
 	// The Secret Store's resolver, with the store and its key in its volume
 	// (implementation §1.2.18). It uses the Bus only to read the configuration.
 	{Unit: unitSecrets, Scope: bus.SecretsScope, Args: []string{"--role=secrets"}},
+	// The Network Monitor claims the census of node_query, which it answers by
+	// reading the Active Node Registry through docker_reader (architecture
+	// §3.12.3, implementation §6). It does not observe the stream until El
+	// ciclo de vida.
+	{Unit: "network_monitor", Scope: bus.NetworkMonitorScope, Topic: networkmonitor.Topic,
+		Consumers: claimant(networkmonitor.Topic), ReadsEngine: true,
+		Args: []string{"--role=network_monitor"}, WaitsFor: []string{"config", unitDockerReader}},
 	// The Spawner claims the operator's requests on the fleet, and provisions on
 	// the container engine; zobik init adds its deployment parameters to Args
 	// (implementation §1.2.4). It observes every announcement, award and close
@@ -381,7 +392,10 @@ var roleHealthcheck = &container.HealthConfig{
 func roleSpec(n names, r Role, image, port string, args []string) Spec {
 	mounts := []mount.Mount{{Type: mount.TypeVolume, Source: n.volume(r.Unit), Target: role.Dir}}
 	if r.Engine {
-		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: engineSocket, Target: engineSocket})
+		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: EngineSocket, Target: EngineSocket})
+	}
+	if r.ReadsEngine {
+		mounts = append(mounts, n.readerMount())
 	}
 	var publish map[string]string
 	if port != "" {

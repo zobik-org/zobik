@@ -132,6 +132,9 @@ type Registry interface {
 type Catalog interface {
 	Entry(ctx context.Context, digest string) (*catalog.Entry, bool, error)
 	Entries(ctx context.Context) ([]catalog.Entry, error)
+	Bundles(ctx context.Context) ([]catalog.Bundle, error)
+	Topics(ctx context.Context) ([]catalog.Topic, error)
+	Topic(ctx context.Context, name string) (*catalog.Topic, bool, error)
 	Status(ctx context.Context) (*catalog.Status, error)
 	Record(ctx context.Context, network, key string, out any) (int64, bool, error)
 	Records(ctx context.Context, prefix, network string) ([]catalog.Record, error)

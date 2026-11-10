@@ -11,7 +11,6 @@ import (
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/claim"
-	contextv1 "zobik.org/zobik/proto/zobik/context/v1"
 )
 
 // Topic is the fixed-convention topic the Tracing Collector claims (architecture §3.10).
@@ -20,9 +19,6 @@ const Topic = "trace_query"
 // portion is where the reconstruction goes, in the query task's section
 // (implementation §10.1).
 const portion = "reconstruction"
-
-// chunkSize bounds each message of a write, well under gRPC's default limit.
-const chunkSize = 64 << 10
 
 // codeRequestInvalid closes a query whose announcement does not validate
 // (implementation §10.1, §10.2).
@@ -65,7 +61,7 @@ func (c *collector) answer(ctx context.Context, a *claim.Assignment) {
 	traceID := bus.TraceID(a.Announcement.TraceParent)
 	raw, err := c.reconstruction(traceID, strings.Split(a.Announcement.TraceParent, "-")[2])
 	if err == nil {
-		err = c.write(opCtx, a.Token, raw)
+		err = claim.WritePortion(opCtx, c.context, a.Token, portion, raw)
 	}
 	if err == nil {
 		err = c.claimant.Complete(opCtx, a, map[string]any{
@@ -154,25 +150,4 @@ func (s *span) entry() entry {
 		e.Outcome = outcomeOpen
 	}
 	return e
-}
-
-// write leaves raw in the portion of the query task's section, with the scope
-// token of its award (architecture §3.14.3).
-func (c *collector) write(ctx context.Context, token string, raw []byte) error {
-	w, err := c.context.Write(ctx)
-	if err != nil {
-		return err
-	}
-	if err := w.Send(&contextv1.StoreWrite{Body: &contextv1.StoreWrite_Header{Header: &contextv1.StoreWriteHeader{Token: token, Name: portion}}}); err != nil {
-		return err
-	}
-	for len(raw) > 0 {
-		n := min(len(raw), chunkSize)
-		if err := w.Send(&contextv1.StoreWrite{Body: &contextv1.StoreWrite_Chunk{Chunk: raw[:n]}}); err != nil {
-			return err
-		}
-		raw = raw[n:]
-	}
-	_, err = w.CloseAndRecv()
-	return err
 }

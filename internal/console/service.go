@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/globalconfig"
 	channelv1 "zobik.org/zobik/proto/zobik/channel/v1"
+	nriv1 "zobik.org/zobik/proto/zobik/nri/v1"
 )
 
 // Options configure the console's service.
@@ -301,10 +303,58 @@ func (s *Service) receive(l *link, m *channelv1.ChannelMessage) {
 	}
 	s.seen[taskID] = true
 	s.mu.Unlock()
-	s.hub.outcome(Outcome{
+	o := Outcome{
 		Channel: l.ch.Audience, TraceID: bus.TraceID(assigned.TraceParent),
 		EntryTaskID: d.Evidence.TaskID, Details: d.Details,
-	}, func() { s.ack(l, taskID) })
+	}
+	// An outcome by Claim-Check is read before it is acked, while the trace
+	// still holds it (architecture §3.4).
+	var ref struct {
+		ContextRef *jsonRef `json:"context_ref"`
+	}
+	if json.Unmarshal(d.Details, &ref) == nil && ref.ContextRef != nil {
+		result, err := readPortion(l, taskID, ref.ContextRef)
+		if err != nil {
+			// The channel sends the delivery again with the next Attach.
+			log.Printf("console: reading the result of %s: %v", o.TraceID, err)
+			s.mu.Lock()
+			delete(s.seen, taskID)
+			s.mu.Unlock()
+			return
+		}
+		if json.Valid(result) {
+			o.Result = result
+		} else {
+			log.Printf("console: the result of %s is not JSON", o.TraceID)
+		}
+	}
+	s.hub.outcome(o, func() { s.ack(l, taskID) })
+}
+
+// readPortion reads a portion with the token of the delivery taskID, which
+// the channel retains.
+func readPortion(l *link, taskID string, ref *jsonRef) ([]byte, error) {
+	c, err := l.client()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
+	stream, err := c.ReadContext(ctx, &nriv1.ContextRead{TaskId: taskID, Ref: ref.proto()})
+	if err != nil {
+		return nil, err
+	}
+	var b []byte
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return b, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		b = append(b, chunk.GetData()...)
+	}
 }
 
 // ack answers a delivery with received. One that fails is passed on again when

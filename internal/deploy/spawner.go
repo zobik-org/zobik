@@ -31,9 +31,9 @@ import (
 	"zobik.org/zobik/internal/sidecar"
 )
 
-// engineSocket is where the container engine's socket is, on the host and in
+// EngineSocket is where the container engine's socket is, on the host and in
 // the container that mounts it.
-const engineSocket = "/var/run/docker.sock"
+const EngineSocket = "/var/run/docker.sock"
 
 // NewIssuer loads the Spawner's material from its role's runtime: its signing
 // key, its account, the tenant CA and its connection to the secrets role.

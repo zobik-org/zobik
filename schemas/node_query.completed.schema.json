@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_query.completed.schema.json",
+  "description": "The data of the task.completed with which the Network Monitor closes a node_query (architecture §3.12.3, implementation §10.1). The census travels by Claim-Check in context_ref, with the shape of node_query.census.schema.json. The common fields are in data.schema.json.",
+  "type": "object",
+  "properties": {
+    "context_ref": {
+      "description": "In the census, where the listing is in the Context Store: the portion census of the query task's section. Its fields are those of data.schema.json.",
+      "type": "object",
+      "properties": {}
+    }
+  }
+}

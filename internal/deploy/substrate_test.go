@@ -55,7 +55,7 @@ func applySubstrate(t *testing.T, ctx context.Context, js jetstream.JetStream, i
 	return &s
 }
 
-var testIDs = map[string]string{"config": "UCONFIG", "task_broker": "UBROKER", "context": "UCONTEXT", "channel_user": "UENTRY", "channel_operator": "UCHANNEL", "tracing_collector": "UTRACING", "spawner": "USPAWNER"}
+var testIDs = map[string]string{"config": "UCONFIG", "task_broker": "UBROKER", "context": "UCONTEXT", "channel_user": "UENTRY", "channel_operator": "UCHANNEL", "tracing_collector": "UTRACING", "spawner": "USPAWNER", "network_monitor": "UMONITOR"}
 
 func TestSubstrate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

@@ -36,6 +36,7 @@ func (s *Service) Handler(port string) http.Handler {
 	s.secretRoutes(mux)
 	s.rateRoutes(mux)
 	s.nodeRoutes(mux)
+	s.queryRoutes(mux)
 	mux.Handle("GET /", http.FileServerFS(web.FS))
 	return addressedToItself(port, onlyOwnContent(mux))
 }

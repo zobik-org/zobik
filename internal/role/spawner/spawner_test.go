@@ -44,8 +44,12 @@ type record struct {
 type fakeCatalog struct {
 	mu      sync.Mutex
 	entries map[string]*catalog.Entry
+	// topics is the Topic Registry, which add writes as the act of
+	// registration does.
+	topics map[string]string
 	// occupied and capacity are what the status reports of the storage.
 	occupied, capacity int64
+	bundles            []catalog.Bundle
 	records            map[string]*record // network/key
 	rev                int64
 	// onPresence runs when a presence mark is written.
@@ -53,13 +57,42 @@ type fakeCatalog struct {
 }
 
 func newCatalog() *fakeCatalog {
-	return &fakeCatalog{entries: map[string]*catalog.Entry{}, records: map[string]*record{}}
+	return &fakeCatalog{entries: map[string]*catalog.Entry{}, topics: map[string]string{}, records: map[string]*record{}}
 }
 
+// add registers e and, if the Topic Registry lacks its emergent topic, the
+// topic, described by its topic_description or else by its capability_text.
 func (c *fakeCatalog) add(e catalog.Entry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if _, ok := c.topics[e.Topic]; !ok && catalog.Emergent(e.Topic) {
+		c.topics[e.Topic] = e.TopicDescription
+		if e.TopicDescription == "" {
+			c.topics[e.Topic] = e.CapabilityText
+		}
+	}
+	e.TopicDescription = ""
 	c.entries[e.ArtifactRef] = &e
+}
+
+func (c *fakeCatalog) Topics(context.Context) ([]catalog.Topic, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []catalog.Topic
+	for t, d := range c.topics {
+		out = append(out, catalog.Topic{Topic: t, Description: d})
+	}
+	return out, nil
+}
+
+func (c *fakeCatalog) Topic(_ context.Context, name string) (*catalog.Topic, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	d, ok := c.topics[name]
+	if !ok {
+		return nil, false, nil
+	}
+	return &catalog.Topic{Topic: name, Description: d}, true, nil
 }
 
 func (c *fakeCatalog) Entry(_ context.Context, digest string) (*catalog.Entry, bool, error) {
@@ -81,6 +114,12 @@ func (c *fakeCatalog) Entries(context.Context) ([]catalog.Entry, error) {
 		out = append(out, *e)
 	}
 	return out, nil
+}
+
+func (c *fakeCatalog) Bundles(context.Context) ([]catalog.Bundle, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bundles, nil
 }
 
 func (c *fakeCatalog) Status(context.Context) (*catalog.Status, error) {
@@ -342,6 +381,7 @@ func newFixture(t *testing.T, lifetime time.Duration, noCatalog bool, edits ...f
 	n.Start("spawner", func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
 		return spawner.Run(ctx, rt, nc, spawner.Options{
 			Network: network, Driver: f.driver, Registry: f.registry, IdentityLifetime: lifetime,
+			Context: n.ContextClient(bus.SpawnerScope.Role, n.Identity("spawner")),
 			Catalog: func(context.Context) (spawner.Catalog, error) {
 				if noCatalog {
 					return nil, spawner.ErrNoCatalog
@@ -447,7 +487,7 @@ func TestProvision(t *testing.T) {
 	if act.Topic != "echo" || act.Entry.ArtifactRef != echo || act.Associations["api"] != "a" || act.MemoryMB != 0 {
 		t.Errorf("the act: %+v", act)
 	}
-	for _, key := range []string{"presence:" + echo, "embedding:" + echo, "memory:" + echo, "operator_request:" + taskID, "topic:echo"} {
+	for _, key := range []string{"presence:" + echo, "embedding:" + echo, "memory:" + echo, "operator_request:" + taskID} {
 		if !f.cat.has(key) {
 			t.Errorf("%s was not written", key)
 		}

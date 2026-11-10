@@ -88,6 +88,7 @@ func TestSpawner(t *testing.T) {
 		t.Errorf("the first node was not evicted")
 	}
 	node, logic = second, z.logic(second)
+	z.parkQueries(t, ctx, blueprint, ref)
 	// A request names an entry of the Catalog.
 	if out := z.fail(t, ctx, credentials, "node", "provision", "sha256:"+strings.Repeat("0", 64)); !strings.Contains(out, "no such entry") {
 		t.Errorf("an entry the Catalog lacks: %s", out)
@@ -129,6 +130,12 @@ func (z *network) retire(t *testing.T, ctx context.Context, node, logic, ref, bl
 	}
 	if out := z.fail(t, ctx, credentials, "node", "provision", ref); !strings.Contains(out, "artifact_vetoed") {
 		t.Errorf("provisioning a vetoed artifact: %s", out)
+	}
+	// With no instance left, the entry is archived, and the network's veto shows.
+	var lib library
+	z.query(t, ctx, &lib, "catalog", "list")
+	if e := lib.entry(ref); e == nil || e.State != "archived" || !e.VetoMark || len(e.FloorHistory) == 0 || len(e.ActiveFloors) != 0 {
+		t.Errorf("the vetoed echo in the library: %+v", e)
 	}
 	z.run(t, ctx, credentials, "node", "unveto", ref)
 	if out := z.fail(t, ctx, credentials, "node", "purge", ref); !strings.Contains(out, "seeded") {
@@ -173,6 +180,117 @@ func (z *network) retire(t *testing.T, ctx context.Context, node, logic, ref, bl
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("the purged manifest in the registry: %s", resp.Status)
+	}
+}
+
+// Las consultas del parque: the census lists the fleet with the fields of the
+// Active Node Registry; node_catalog_query returns each entry with its state;
+// topic_catalog_query returns a topic active, one available and one uncovered
+// (architecture §3.7.6, §3.12.3, §3.13.3).
+func (z *network) parkQueries(t *testing.T, ctx context.Context, blueprint, echo string) {
+	t.Helper()
+	// spare has an entry the network can bring up; barred's only entry is vetoed.
+	refs := map[string]string{}
+	for _, topic := range []string{"spare", "barred"} {
+		tag := "zobik-echo:" + topic
+		z.blueprint(t, ctx, "examples/blueprints/echo/Dockerfile", tag, "--label", "org.zobik.test="+topic)
+		raw, err := os.ReadFile(blueprint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		other := filepath.Join(t.TempDir(), "blueprint.json")
+		if err := os.WriteFile(other, []byte(strings.Replace(string(raw), "zobik-echo:dev", tag, 1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		refs[topic] = z.register(t, ctx, topic, other)
+	}
+	z.run(t, ctx, credentials, "node", "veto", refs["barred"])
+
+	var registry struct {
+		Topics []struct{ Topic, Description, State string }
+	}
+	z.query(t, ctx, &registry, "topic", "list")
+	states := map[string]string{}
+	for _, tp := range registry.Topics {
+		states[tp.Topic] = tp.State
+		if tp.Description != topicDescription(tp.Topic) {
+			t.Errorf("topic %s described as %q", tp.Topic, tp.Description)
+		}
+	}
+	if states["echo"] != "active" || states["spare"] != "available" || states["barred"] != "uncovered" {
+		t.Errorf("topic states %v", states)
+	}
+
+	var census struct {
+		Nodes []struct {
+			NodeID          string          `json:"node_id"`
+			ArtifactRef     string          `json:"artifact_ref"`
+			Topic           string          `json:"topic"`
+			ModelID         string          `json:"model_id"`
+			SignerID        string          `json:"signer_id"`
+			SimilarityFloor float64         `json:"similarity_floor"`
+			EgressGrants    json.RawMessage `json:"egress_grants"`
+			MemoryRequired  int64           `json:"memory_required"`
+		} `json:"nodes"`
+	}
+	z.query(t, ctx, &census, "node", "list")
+	if len(census.Nodes) != 2 {
+		t.Fatalf("census %+v", census.Nodes)
+	}
+	for _, n := range census.Nodes {
+		labels := containerLabels(t, ctx, z.logic(n.NodeID))
+		if n.ArtifactRef != echo || n.Topic != "echo" || n.ModelID != labels["org.zobik.model_id"] ||
+			n.SignerID != labels["org.zobik.signer_id"] || n.SimilarityFloor != 0.6 || n.MemoryRequired != 128 || string(n.EgressGrants) != "[]" {
+			t.Errorf("census row %+v", n)
+		}
+	}
+
+	var lib library
+	z.query(t, ctx, &lib, "catalog", "list")
+	for ref, want := range map[string]string{echo: "active", refs["spare"]: "registered", refs["barred"]: "registered"} {
+		if e := lib.entry(ref); e == nil || e.State != want {
+			t.Errorf("entry %s: %+v, want %s", ref, e, want)
+		}
+	}
+	if e := lib.entry(echo); e != nil && (len(e.ActiveFloors) != 2 || len(e.PresentIn) != 1 || e.PresentIn[0] != z.name || e.VetoMark) {
+		t.Errorf("echo in the library: %+v", e)
+	}
+	if e := lib.entry(refs["barred"]); e != nil && !e.VetoMark {
+		t.Errorf("barred in the library: %+v", e)
+	}
+}
+
+// library is what the tests read of node_catalog_query's answer.
+type library struct {
+	Entries []libraryEntry `json:"entries"`
+}
+
+type libraryEntry struct {
+	ArtifactRef  string            `json:"artifact_ref"`
+	State        string            `json:"state"`
+	ActiveFloors []float64         `json:"active_floors"`
+	FloorHistory []json.RawMessage `json:"floor_history"`
+	VetoMark     bool              `json:"veto_mark"`
+	PresentIn    []string          `json:"present_in"`
+}
+
+func (l *library) entry(ref string) *libraryEntry {
+	for i := range l.Entries {
+		if l.Entries[i].ArtifactRef == ref {
+			return &l.Entries[i]
+		}
+	}
+	return nil
+}
+
+// query runs a console query command and decodes the answer it prints after
+// its trace line.
+func (z *network) query(t *testing.T, ctx context.Context, out any, args ...string) {
+	t.Helper()
+	printed := z.run(t, ctx, credentials, args...)
+	i := strings.Index(printed, "\n{")
+	if i < 0 || json.Unmarshal([]byte(printed[i+1:]), out) != nil {
+		t.Fatalf("zobik %s printed: %s", strings.Join(args, " "), printed)
 	}
 }
 

@@ -403,13 +403,14 @@ The process is one more role of the `zobik` binary and **SQLite stays inside**, 
 
 **The Catalog enforces the act of registration and attribution, and does not read the rest.** Registering requires the analysis, that the digest resolves and that the artifact fits in the capacity (§3.13.3); each network writes only its own rows. What each qualified row means is decided by the Spawner, which owns the Catalog (§3.13.3): the Catalog stores one document per key with its revision, and arbitrates with it.
 
-**The service** is JSON over HTTPS under the `/v1` prefix, with the credential in the `Authorization: Bearer` header. It has one resource per half of the entry (§3.13.3): the entries, which the act of registration writes, and the qualified records, which each network's Spawner writes.
+**The service** is JSON over HTTPS under the `/v1` prefix, with the credential in the `Authorization: Bearer` header. It has one resource per half of the entry (§3.13.3): the entries, which the act of registration writes together with the topics of the Topic Registry (§3.7.6), and the qualified records, which each network's Spawner writes.
 
 | Operation | Credential | What it does |
 | :--- | :--- | :--- |
 | `POST /v1/entries` | `register`, `spawner` | The act of registration of a blueprint (below). |
 | `POST /v1/bundles` | `register`, `spawner` | That of a bundle, with the body `{ purpose_text, members }`: `members` is the list of the digests of its members, already registered. The `bundle_id` is the hash of the content, so registering the same bundle twice returns the same one. A member that is not registered returns `422` with `reason` = `unregistered_member`. |
 | `GET /v1/entries`, `GET /v1/entries/{digest}`, `GET /v1/bundles`, `GET /v1/bundles/{bundle_id}` | any | The half without a qualifier, with what the Catalog adds: the `scan_result`, the Node Runtime Interface version, the `artifact_size` and the deletion mark. |
+| `GET /v1/topics`, `GET /v1/topics/{topic}` | any | The topics of the Topic Registry, each with its `description` (§3.7.6). |
 | `PUT` and `DELETE /v1/entries/{digest}/deletion_mark` | `spawner` | Stamps and removes the deletion mark (§3.13.8). |
 | `GET /v1/status` | any | The current `ruleset_version`, which is that of the role image that `catalog` and `scanner` share (§1.2.19), and the occupied space and the storage capacity (§3.13.3, §1.2.16). |
 | `GET /v1/records/{network}/{key}` | any | A qualified record. |
@@ -424,6 +425,7 @@ The process is one more role of the `zobik` binary and **SQLite stays inside**, 
 | Key | Type | What it carries |
 | :--- | :--- | :--- |
 | `topic` | string | the topic it claims (§3.13.3) |
+| `topic_description` | string, optional | the `description` of the topic, which registers it if the Topic Registry does not have it; with the topic registered, the Catalog ignores it (§3.7.6) |
 | `artifact_ref` | string | the digest of the image in the Registry (row 16) |
 | `capability_text` | string | what the blueprint knows how to do (§3.13.3) |
 | `author_id` | string | who built the artifact (§3.13.3) |
@@ -455,9 +457,10 @@ The process is one more role of the `zobik` binary and **SQLite stays inside**, 
 * `scan_failed`, with the `ruleset_version` and the `findings`, which the Spawner reports to the Shared Catalog when an import fails (§3.13.6);
 * `unresolvable`, if the digest does not resolve in the Registry;
 * `nri_version_missing`, if the image does not carry the `io.zobik.nri.version` label (§3, *The interface version*);
+* `topic_description_missing`, if the topic is emergent, the Topic Registry does not have it and the body carries no `topic_description` (§3.13.3);
 * `storage_full`, if the `artifact_size` does not fit in the capacity (§3.13.3).
 
-**An entry is read as the half it was registered with**, without `acquisition`, plus what the Catalog adds: `scan_result`, as `{ verdict, ruleset_version, findings, as_of }` with `findings` only on a `fail`; `nri_version`; `artifact_size`, in bytes; and `deletion_mark`, a boolean.
+**An entry is read as the half it was registered with**, without `acquisition` or `topic_description`, plus what the Catalog adds: `scan_result`, as `{ verdict, ruleset_version, findings, as_of }` with `findings` only on a `fail`; `nri_version`; `artifact_size`, in bytes; and `deletion_mark`, a boolean.
 
 **Each qualified record is a JSON document with its revision**, which the Catalog increments on each write and returns as `ETag`. The conditional write is HTTP's: `If-None-Match: *` writes only if the key does not exist—the write-if-absent the Spawners arbitrate with (§3.13.3)—, `If-Match` only if the revision is the one read, and an unmet condition returns `412`. A record written with the query parameter `expires_in`, in seconds, ceases to exist for every read and for `If-None-Match: *` when it expires, which is how the presence mark expires. What is rewritten the same way is written without a condition, like the snapshot on archiving (§3.13.3).
 
@@ -481,7 +484,7 @@ The process is one more role of the `zobik` binary and **SQLite stays inside**, 
 | `audience:<audience>` | Since when the audience has been without a channel (§3.13.2). |
 | `acquisition_denied:<entry>:<price>` | The denied-acquisition key (§3.13.6). |
 | `operator_request:<TaskID>` | The outcome of an operator's request over the fleet (§3.13.8). |
-| `topic:<topic>` | The Topic Registry row (§3.7.6). |
+| `topic_embedding:<topic>` | The topic's vector in the network's space and its `model_id` (§3.7.6). |
 | `vector_space`, `credit_exhausted`, `capacity_pressure`, `storage_pressure` | The network-scope keys: irreparable vector space, exhausted credit (§3.13.6), capacity pressure (§3.13.10) and storage pressure. |
 
 **The shape of each value is part of `/v1`.** Spawners and Forges of other networks read it, and they can run another version of the binary, so a key changes shape only with another prefix; adding a key does not change it.
@@ -1380,7 +1383,9 @@ The Catalog, the blueprints and the configuration history are data and not autho
 
 **No read that returns a container's content passes the filter.** `GET /containers/{id}/archive` and `/export` return its filesystem—including the mounted volumes, like the one that keeps each role's key—, `/logs` what the process wrote, and `/containers/{id}/json` its environment and its mounts. That is why the filter is by route and not by method, and why no generic socket proxy like `docker-socket-proxy` is used, which enables by API section: enabling `containers` also opens those routes.
 
-**What `docker_reader` receives comes only from `network_monitor` and `ingress`**, because only they mount its volume, and the only thing it evaluates is the list of routes.
+**Each `docker_reader` sees only its network.** The engine belongs to the host and runs the containers of every network and every tenant on it, so on `/containers/json` and `/events` the role adds the filter `label=org.zobik.network=<network>` to the one the request brings: the Docker API combines filters on the same key with *and*, so a request cannot widen it.
+
+**What `docker_reader` receives comes only from `network_monitor` and `ingress`**, because only they mount its volume, and what it evaluates is the list of routes and its network's filter.
 
 **The Integration Sidecar is a separate binary from the same codebase, `zobik-sidecar`, with its own image** (row 12). It runs once per node, so what it weighs is multiplied by the fleet, and it brings only what is its own.
 
@@ -1835,7 +1840,7 @@ The response declares `output`, `model` and `usage`, from `/output`, `/model` an
 
 **The request's texts are constants of the `zobik` binary, and the variant declares them with the same value** in the `topics_announced` of the derivation entry. Both come from the same distribution, and the closure (§3.13.6) checks that the Deriver wins the announcement with each one. The Spawner's request carries the text in `announcement_text` and the rest in `material`; the entry announces the former and writes the latter to the Context Store of the trace it opens (§3.5.1).
 
-The texts of the subtopics are constants of the bundle's source, and they are in English like the members' `capability_text`, which is the language in which general-purpose embedding models separate best (row 15).
+The texts of the subtopics are constants of the bundle's source, and they are in English like the members' `capability_text` and the `description` of their topics, which is the language in which general-purpose embedding models separate best (row 15).
 
 ### 7.4. The members and their slots
 
@@ -2206,12 +2211,12 @@ It answers to what the architecture describes about the `data` of each fixed-con
 | `ingress_slot_unbound` | the Spawner | a slot of the `ingress_required` is not associated (§3.13.8) |
 | `blueprint_muted` | the Spawner | the delivered blueprint fell outside the neighborhood of the task that requested it (§6.4) |
 | `capacity_exhausted` | the Spawner | the reservation does not fit in the fleet (§3.13.10) |
-
-**The Spawner's close of a vacant query carries `vacant` = `true`** next to its `undelivered` (§3.13.2). It is one of the fields of every event, and the requester reads it to tell a vacant round from a channel that did not deliver (§3.5.2).
 | `embedding_unavailable` | the Spawner | the embedding generation keeps failing after `embedding_regeneration_backoff` (§3.13.8) |
 | `admission_failed` | the Spawner | the Admission Scanner gave `fail` (§3.13.8) |
 | `acquisition_denied` | the Spawner | a rule or the catalog did not allow acquiring the entry (§3.13.8) |
 | `no_forge` | the Spawner | the network has no Forge to ask for the derivation (§3.13.8) |
+
+**The Spawner's close of a vacant query carries `vacant` = `true`** next to its `undelivered` (§3.13.2). It is one of the fields of every event, and the requester reads it to tell a vacant round from a channel that did not deliver (§3.5.2).
 
 In the Spawner's `reject` of a Forge delivery go the provisioning ones and `blueprint_muted` (§6.4).
 

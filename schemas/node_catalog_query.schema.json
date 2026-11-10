@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_catalog_query.schema.json",
+  "description": "The data of a task.announced on node_catalog_query (architecture §3.13.3, implementation §10.1). It carries no selection: the answer is the whole library. The common fields are in data.schema.json.",
+  "type": "object",
+  "properties": {}
+}

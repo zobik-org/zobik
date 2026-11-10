@@ -66,6 +66,10 @@ func run(ctx context.Context, args []string) error {
 		return configCmd(ctx, rest)
 	case "node":
 		return nodeCmd(ctx, rest)
+	case "catalog":
+		return catalogCmd(ctx, rest)
+	case "topic":
+		return topicCmd(ctx, rest)
 	case "console":
 		return consoleCmd(ctx, rest)
 	case "secret":

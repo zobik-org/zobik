@@ -182,11 +182,12 @@ func (f *fixture) callHeader(cred, method, path string, body any, header http.He
 
 func registration(d string) Registration {
 	return Registration{
-		Topic:          "echo",
-		ArtifactRef:    d,
-		CapabilityText: "Repeats back the text of the task it receives.",
-		AuthorID:       "seeding",
-		Requires:       map[string]json.RawMessage{"memory_required": json.RawMessage(`128`)},
+		Topic:            "echo",
+		TopicDescription: "Repeating a text back.",
+		ArtifactRef:      d,
+		CapabilityText:   "Repeats back the text of the task it receives.",
+		AuthorID:         "seeding",
+		Requires:         map[string]json.RawMessage{"memory_required": json.RawMessage(`128`)},
 	}
 }
 
@@ -274,6 +275,79 @@ func TestRegister(t *testing.T) {
 			}
 		}
 	})
+}
+
+// The act of registration registers the emergent topic of the first entry
+// that claims it, with the description it brings, and the next ones keep it
+// (architecture §3.7.6, §3.13.3).
+func TestTopicRegistry(t *testing.T) {
+	f := newFixture(t, 1<<20)
+	reg := f.credential("main", ScopeRegister)
+	read := f.credential("main", ScopeRead)
+	register := func(r Registration) (int, Failure) {
+		t.Helper()
+		var fail Failure
+		code := f.call(reg, http.MethodPost, "/v1/entries", r, nil, &fail)
+		return code, fail
+	}
+
+	d1, _ := f.artifact(100)
+	missing := registration(d1)
+	missing.TopicDescription = ""
+	if code, fail := register(missing); code != http.StatusUnprocessableEntity || fail.Reason != ReasonTopicDescriptionMissing {
+		t.Fatalf("a new topic without description: %d %q, want 422 %s", code, fail.Reason, ReasonTopicDescriptionMissing)
+	}
+	if code, _ := register(registration(d1)); code != http.StatusCreated {
+		t.Fatalf("registering: %d", code)
+	}
+
+	// A later entry on the same topic needs no description, and its own does
+	// not replace the registered one.
+	d2, _ := f.artifact(200)
+	other := registration(d2)
+	other.TopicDescription = "Something else."
+	if code, _ := register(other); code != http.StatusCreated {
+		t.Fatalf("a second entry with another description: %d", code)
+	}
+	d3, _ := f.artifact(300)
+	bare := registration(d3)
+	bare.TopicDescription = ""
+	if code, _ := register(bare); code != http.StatusCreated {
+		t.Fatalf("a third entry without description: %d", code)
+	}
+
+	// intake and the hitl_contact_* family are not in the registry.
+	for _, topic := range []string{"intake", "hitl_contact_operator"} {
+		d, _ := f.artifact(50)
+		r := registration(d)
+		r.Topic, r.TopicDescription = topic, ""
+		if code, _ := register(r); code != http.StatusCreated {
+			t.Fatalf("an entry on %s without description: %d", topic, code)
+		}
+	}
+
+	var list struct{ Topics []Topic }
+	if code := f.call(read, http.MethodGet, "/v1/topics", nil, nil, &list); code != http.StatusOK {
+		t.Fatalf("listing the topics: %d", code)
+	}
+	want := []Topic{{Topic: "echo", Description: "Repeating a text back."}}
+	if !reflect.DeepEqual(list.Topics, want) {
+		t.Errorf("topics %+v, want %+v", list.Topics, want)
+	}
+	var one Topic
+	if code := f.call(read, http.MethodGet, "/v1/topics/echo", nil, nil, &one); code != http.StatusOK || one != want[0] {
+		t.Errorf("reading echo: %d %+v", code, one)
+	}
+	if code := f.call(read, http.MethodGet, "/v1/topics/absent", nil, nil, nil); code != http.StatusNotFound {
+		t.Errorf("an absent topic: %d, want 404", code)
+	}
+
+	// The entry reads without the description, which belongs to the topic.
+	var e map[string]json.RawMessage
+	f.call(read, http.MethodGet, "/v1/entries/"+d2, nil, nil, &e)
+	if _, ok := e["topic_description"]; ok {
+		t.Errorf("the entry carries topic_description: %s", e["topic_description"])
+	}
 }
 
 func TestCredentials(t *testing.T) {

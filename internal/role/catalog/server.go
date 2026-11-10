@@ -169,6 +169,17 @@ func (c *Catalog) Handler() http.Handler {
 		}
 		return respond(http.StatusOK, b), nil
 	})
+	route("GET /v1/topics", scope(ScopeRead), func(r *http.Request, _ *caller) (result, error) {
+		t, err := c.store.topics(r.Context())
+		return respond(http.StatusOK, map[string]any{"topics": t}), err
+	})
+	route("GET /v1/topics/{topic}", scope(ScopeRead), func(r *http.Request, _ *caller) (result, error) {
+		t, err := c.store.topic(r.Context(), r.PathValue("topic"))
+		if err != nil || t == nil {
+			return notFound(err)
+		}
+		return respond(http.StatusOK, t), nil
+	})
 	mark := func(on bool) func(*http.Request, *caller) (result, error) {
 		return func(r *http.Request, _ *caller) (result, error) {
 			c.mu.Lock()

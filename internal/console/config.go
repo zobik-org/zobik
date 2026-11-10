@@ -99,7 +99,19 @@ func (o *Operator) open(ctx context.Context, topic string, data map[string]any, 
 	if raw, err = json.Marshal(data); err != nil {
 		return nil, err
 	}
+	return o.send(ctx, topic, taskID, raw, payload)
+}
 
+// Query opens a query on topic, which carries no proof: what it asks changes
+// nothing (architecture §3.7.6, §3.12.3, §3.13.3). Its outcome arrives as a
+// delivery over the session.
+func (o *Operator) Query(ctx context.Context, topic string) (*Opened, error) {
+	return o.send(ctx, topic, "", []byte("{}"), nil)
+}
+
+// send opens the trace through the channel, with the entry subtask's TaskID
+// if the console mints it.
+func (o *Operator) send(ctx context.Context, topic, taskID string, raw, payload []byte) (*Opened, error) {
 	open, err := o.Client.Open(ctx)
 	if err != nil {
 		return nil, err

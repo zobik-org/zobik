@@ -14,6 +14,9 @@ type Outcome struct {
 	TraceID     string          `json:"trace_id"`
 	EntryTaskID string          `json:"entry_task_id"`
 	Details     json.RawMessage `json:"details"`
+	// Result is the portion the details' context_ref names, read before the
+	// delivery is acked: the answer of a query by Claim-Check, which is JSON.
+	Result json.RawMessage `json:"result,omitempty"`
 }
 
 // hub passes what reaches the panel without being asked for to the open event

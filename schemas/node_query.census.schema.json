@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_query.census.schema.json",
+  "description": "The portion census the Network Monitor writes in answer to the census form of node_query (architecture §3.12.3, implementation §10.1): one row per node the Spawner provisioned on the network, with the fields of the Active Node Registry (architecture §3.11, implementation §1.2.14), and no signal.",
+  "type": "object",
+  "required": ["nodes"],
+  "properties": {
+    "nodes": {
+      "description": "The fleet: a running node and one whose container is stopped alike, because both are deployed (architecture §3.12.3).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["node_id", "artifact_ref", "topic", "model_id", "signer_id", "similarity_floor", "egress_grants", "ingress_grants", "memory_required"],
+        "properties": {
+          "node_id": {"description": "The node's platform identity.", "type": "string"},
+          "artifact_ref": {"description": "The digest of the image its Logic Container runs (architecture §3.13.3).", "type": "string"},
+          "topic": {"description": "The topic of the niche it covers (architecture §3.11).", "type": "string"},
+          "model_id": {"description": "That of its credential: the vector space it was signed under (architecture §3.12.3).", "type": "string"},
+          "signer_id": {"description": "The key its credential was signed with (architecture §3.11).", "type": "string"},
+          "similarity_floor": {"description": "The floor it competes with (architecture §3.11).", "type": "number"},
+          "egress_grants": {
+            "description": "The egress_registry entries it reaches, each with its slot and the interface's digest (architecture §3.16.3).",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["slot", "entry", "interface"],
+              "properties": {
+                "slot": {"type": "string"},
+                "entry": {"type": "string"},
+                "interface": {"type": "string"}
+              }
+            }
+          },
+          "ingress_grants": {
+            "description": "In a channel, the ingress_registry entries it receives through (architecture §3.16.7).",
+            "type": "array",
+            "items": {"type": "object", "properties": {}}
+          },
+          "memory_required": {"description": "The memory reservation of its Logic Container, in MB, which is the entry's effective reservation it was brought up with (architecture §3.13.10).", "type": "integer", "minimum": 0}
+        }
+      }
+    }
+  }
+}
