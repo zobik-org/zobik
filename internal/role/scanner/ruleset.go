@@ -13,7 +13,7 @@ import (
 // TrivyVersion is the Trivy the role image brings, whose built-in rules come
 // compiled into the binary (implementation §1.2.19). It is the version
 // images/zobik.Dockerfile copies, and the role refuses to serve with another.
-const TrivyVersion = "0.76.1"
+const TrivyVersion = "0.76.2"
 
 // patterns are the own content patterns, in Trivy's secret configuration.
 //

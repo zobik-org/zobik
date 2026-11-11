@@ -29,7 +29,7 @@ import (
 // currentRuleset is the ruleset_version of this ruleset. Changing a rule
 // changes it, and updating it here is acknowledging that every stored entry is
 // analyzed again (implementation §1.2.19).
-const currentRuleset = "sha256:31d6f5ddae0780aab37e1163770469d363ba4a9116705eaea39d153d9ae5724f"
+const currentRuleset = "sha256:24b20f7f31972f0c15d9b4cd827b7b852b1174159f8af14969c404d938b2bb3c"
 
 func TestRulesetVersion(t *testing.T) {
 	if got := RulesetVersion(); got != currentRuleset {
