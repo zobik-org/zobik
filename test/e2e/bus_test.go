@@ -210,11 +210,12 @@ func (z *network) remove(t *testing.T) {
 	exec.Command("docker", "network", "rm", "zobik-"+z.name).Run()
 }
 
-// removeLabeled removes the containers and then the volumes that carry label.
+// removeLabeled removes the containers that carry label with their anonymous
+// volumes, and then the named volumes that carry it.
 func removeLabeled(label string) {
 	ids, _ := exec.Command("docker", "ps", "-aq", "--filter", label).Output()
 	if f := strings.Fields(string(ids)); len(f) > 0 {
-		exec.Command("docker", append([]string{"rm", "-f"}, f...)...).Run()
+		exec.Command("docker", append([]string{"rm", "-fv"}, f...)...).Run()
 	}
 	vols, _ := exec.Command("docker", "volume", "ls", "-q", "--filter", label).Output()
 	if f := strings.Fields(string(vols)); len(f) > 0 {
