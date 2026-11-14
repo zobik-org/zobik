@@ -393,4 +393,4 @@ $("expired-close").addEventListener("click", () => {
   $("expired-list").replaceChildren();
 });
 
-start();
+// operation.js, which loads after this file, calls start().

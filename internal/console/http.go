@@ -3,7 +3,6 @@ package console
 import (
 	"encoding/json"
 	"errors"
-	"maps"
 	"net/http"
 	"time"
 
@@ -157,16 +156,10 @@ func (s *Service) getConfig(w http.ResponseWriter, r *http.Request, _ string) {
 
 // getConfigSchema returns every key's declaration, as the fragments bring it.
 func (s *Service) getConfigSchema(w http.ResponseWriter, _ *http.Request, _ string) {
-	keys := map[string]json.RawMessage{}
-	for _, f := range configschema.Fragments {
-		var frag struct {
-			Properties map[string]json.RawMessage `json:"properties"`
-		}
-		if err := json.Unmarshal(f, &frag); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		maps.Copy(keys, frag.Properties)
+	keys, err := configschema.Declarations()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
 }

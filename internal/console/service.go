@@ -300,6 +300,7 @@ func (s *Service) receive(l *link, m *channelv1.ChannelMessage) {
 	}
 	var d struct {
 		Kind     string `json:"kind"`
+		Final    bool   `json:"final_round"`
 		Evidence struct {
 			TaskID string `json:"task_id"`
 		} `json:"evidence"`
@@ -318,6 +319,9 @@ func (s *Service) receive(l *link, m *channelv1.ChannelMessage) {
 	}
 	// A query comes again with each Attach; the console recognizes it by its TaskID.
 	taskID := assigned.Subject
+	if ops != nil {
+		ops.delivery(taskID, d.Final)
+	}
 	s.mu.Lock()
 	if s.seen == nil || s.seen[taskID] {
 		s.mu.Unlock()
