@@ -21,11 +21,110 @@
       <strong>Zobik</strong>
       <button id="signout" class="link">Sign out</button>
     </header>
-    <button id="new">New conversation</button>
-    <ul id="conversations"></ul>
+    <div class="areas" role="tablist">
+      <button id="area-work" class="area current" role="tab">Work</button>
+      <button id="area-operation" class="area" role="tab">Operation <span id="op-badge" class="badge" hidden></span></button>
+    </div>
+    <div id="work-side">
+      <button id="new">New conversation</button>
+      <ul id="conversations"></ul>
+    </div>
+    <ul id="op-nav" class="op-nav" hidden>
+      <li><button class="link" data-view="network">Network</button></li>
+      <li><button class="link" data-view="questions">Questions <span id="op-questions-badge" class="badge" hidden></span></button></li>
+      <li><button class="link" data-view="activity">Activity</button></li>
+      <li><button class="link" data-view="config">Configuration</button></li>
+      <li><button class="link" data-view="secrets">Secrets and rates</button></li>
+      <li><a id="op-traces" target="_blank" rel="noopener noreferrer" hidden>Traces</a></li>
+    </ul>
   </nav>
 
-  <main class="main">
+  <main id="operation" class="main operation" hidden>
+    <p id="op-unavailable" class="error" hidden></p>
+
+    <section id="view-network" class="view">
+      <section id="status" class="status" aria-live="polite"></section>
+
+      <section class="block">
+        <header class="block-head">
+          <h2>Fleet</h2>
+          <span class="fresh" data-fresh="census"></span>
+          <button data-refresh="census">Refresh</button>
+        </header>
+        <p class="hint">The nodes deployed on this network now.</p>
+        <div data-body="census"></div>
+      </section>
+
+      <section class="block">
+        <header class="block-head">
+          <h2>Library</h2>
+          <span class="fresh" data-fresh="library"></span>
+          <button data-refresh="library">Refresh</button>
+        </header>
+        <p class="hint">Every blueprint the Catalog stores, as this network sees it.</p>
+        <div data-body="library"></div>
+      </section>
+
+      <section class="block">
+        <header class="block-head">
+          <h2>Topics</h2>
+          <span class="fresh" data-fresh="topics"></span>
+          <button data-refresh="topics">Refresh</button>
+        </header>
+        <p class="hint">Every topic the tenant knows, and whether this network covers it.</p>
+        <div data-body="topics"></div>
+      </section>
+    </section>
+
+    <section id="view-questions" class="view" hidden>
+      <h2>Questions</h2>
+      <p class="hint">What the network asks the operator. Each one says what happens if nobody answers.</p>
+      <div id="op-expired"></div>
+      <ol id="op-queries" class="cards"></ol>
+    </section>
+
+    <section id="view-activity" class="view" hidden>
+      <h2>Activity</h2>
+      <p class="hint">The outcome of each act this console emitted, newest first.</p>
+      <ol id="op-activity" class="cards"></ol>
+    </section>
+
+    <section id="view-config" class="view" hidden>
+      <header class="block-head">
+        <h2>Configuration</h2>
+        <span class="fresh" data-fresh="config"></span>
+        <button data-refresh="config">Refresh</button>
+      </header>
+      <p class="hint">Change the values and publish: only the keys you change go in the edit, on the version shown.</p>
+      <form id="config-form" class="config-form"></form>
+    </section>
+
+    <section id="view-secrets" class="view" hidden>
+      <h2>Secrets</h2>
+      <p class="hint">A secret is written and never shown back. It does not travel through the network.</p>
+      <form id="secret-form" class="row-form">
+        <input name="handle" list="secret-handles" placeholder="Handle" required>
+        <datalist id="secret-handles"></datalist>
+        <input name="value" type="password" placeholder="Value" autocomplete="off">
+        <button name="write">Write</button>
+        <button name="delete" type="button" class="danger">Delete</button>
+      </form>
+      <p id="secret-result" class="result"></p>
+
+      <h2>Rates</h2>
+      <p class="hint">The rate table of a rate source, as JSON.</p>
+      <form id="rates-form" class="stack-form">
+        <input name="name" list="rate-sources" placeholder="Rate source" required>
+        <datalist id="rate-sources"></datalist>
+        <textarea name="table" rows="8" placeholder='{"…": …}' required></textarea>
+        <div><input type="file" name="file" accept="application/json,.json"></div>
+        <button>Write</button>
+      </form>
+      <p id="rates-result" class="result"></p>
+    </section>
+  </main>
+
+  <main id="work" class="main">
     <section id="expired" class="notices" hidden>
       <header><strong>While you were away</strong> <button id="expired-close" class="link">Close</button></header>
       <ul id="expired-list"></ul>
@@ -50,5 +149,6 @@
   </main>
 </div>
 <script src="app.js"></script>
+<script src="operation.js"></script>
 </body>
 </html>

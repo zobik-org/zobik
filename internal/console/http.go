@@ -3,9 +3,11 @@ package console
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"time"
 
+	"zobik.org/zobik/internal/configschema"
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/web"
 )
@@ -15,7 +17,10 @@ const (
 	pathSignIn  = "/signin"
 	PathSession = "/api/session"
 	PathConfig  = "/api/config"
-	PathEvents  = "/api/events"
+	// PathConfigSchema returns the Global Configuration schema the form is
+	// generated from: every key with its declaration (architecture §3.17.1).
+	PathConfigSchema = "/api/config/schema"
+	PathEvents       = "/api/events"
 )
 
 // CookieSession names the session cookie.
@@ -30,6 +35,7 @@ func (s *Service) Handler(port string) http.Handler {
 	mux.HandleFunc("GET "+pathSignIn, s.getSignIn)
 	mux.HandleFunc("GET "+PathConfig, s.withSession(true, s.getConfig))
 	mux.HandleFunc("POST "+PathConfig, s.withSession(true, s.postConfig))
+	mux.HandleFunc("GET "+PathConfigSchema, s.withSession(false, s.getConfigSchema))
 	// The event stream is not activity (implementation §6, The operator console).
 	mux.HandleFunc("GET "+PathEvents, s.withSession(false, s.getEvents))
 	s.workRoutes(mux)
@@ -37,6 +43,7 @@ func (s *Service) Handler(port string) http.Handler {
 	s.rateRoutes(mux)
 	s.nodeRoutes(mux)
 	s.queryRoutes(mux)
+	s.operatorRoutes(mux)
 	mux.Handle("GET /", http.FileServerFS(web.FS))
 	return addressedToItself(port, onlyOwnContent(mux))
 }
@@ -146,6 +153,22 @@ func (s *Service) getConfig(w http.ResponseWriter, r *http.Request, _ string) {
 		return
 	}
 	writeJSON(w, http.StatusOK, SnapshotJSON{ConfigVersion: snap.ConfigVersion, PublishedAt: snap.PublishedAt, Values: snap.Values})
+}
+
+// getConfigSchema returns every key's declaration, as the fragments bring it.
+func (s *Service) getConfigSchema(w http.ResponseWriter, _ *http.Request, _ string) {
+	keys := map[string]json.RawMessage{}
+	for _, f := range configschema.Fragments {
+		var frag struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(f, &frag); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		maps.Copy(keys, frag.Properties)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
 }
 
 // postConfig opens a config_change on the head, or on the version the edit

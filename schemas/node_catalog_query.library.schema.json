@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zobik.org/schemas/node_catalog_query.library.schema.json",
-  "description": "The portion library the Spawner writes in answer to a node_catalog_query (architecture §3.13.3, implementation §10.1): every entry of the Specialty Catalog as the answering network sees it, the artifact storage, and the bundles.",
+  "description": "The portion library the Spawner writes in answer to a node_catalog_query (architecture §3.13.3, implementation §10.1): every entry of the Specialty Catalog as the answering network sees it, the artifact storage, the bundles, and the conditions of the answering network that wait for the operator.",
   "type": "object",
-  "required": ["entries", "storage_occupied", "storage_capacity", "bundles"],
+  "required": ["entries", "storage_occupied", "storage_capacity", "bundles", "conditions"],
   "properties": {
     "entries": {
       "description": "One per blueprint (architecture §3.13.3).",
@@ -72,6 +72,54 @@
           "bundle_id": {"type": "string"},
           "purpose_text": {"type": "string"},
           "members": {"description": "The artifact_ref of each member.", "type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "conditions": {
+      "description": "The keys of the answering network that back a notice on network_risk, each with what it stamps; a key the Catalog does not hold is absent (architecture §3.13.3, §3.15.7).",
+      "type": "object",
+      "required": ["audiences"],
+      "properties": {
+        "vector_space": {
+          "description": "The irreparable-vector-space key: the model_id, the entries left without regenerating, and since when (architecture §3.13.7).",
+          "type": "object",
+          "required": ["model_id", "pending", "since"],
+          "properties": {
+            "model_id": {"type": "string"},
+            "pending": {"type": "array", "items": {"type": "string"}},
+            "since": {"type": "string", "format": "date-time"}
+          }
+        },
+        "audiences": {
+          "description": "One key per audience without a channel, with since when (architecture §3.13.2).",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["audience", "since"],
+            "properties": {
+              "audience": {"type": "string"},
+              "since": {"type": "string", "format": "date-time"}
+            }
+          }
+        },
+        "capacity_pressure": {
+          "description": "The capacity-pressure key: since when, and the evictions the window held when it was stamped (architecture §3.13.10).",
+          "type": "object",
+          "required": ["since", "evictions"],
+          "properties": {
+            "since": {"type": "string", "format": "date-time"},
+            "evictions": {"type": "integer", "minimum": 0}
+          }
+        },
+        "storage_pressure": {
+          "description": "The storage-pressure key: since when, and the occupied bytes of the capacity when it was stamped (architecture §3.13.3).",
+          "type": "object",
+          "required": ["since", "occupied", "capacity"],
+          "properties": {
+            "since": {"type": "string", "format": "date-time"},
+            "occupied": {"type": "integer", "minimum": 0},
+            "capacity": {"type": "integer", "minimum": 0}
+          }
         }
       }
     }

@@ -17,7 +17,8 @@
           "state": {
             "description": "In the answering network: active if a node runs on it, available if none runs but an entry that claims it meets the provisioning preconditions and is not excluded from the candidates for reasons other than the task, uncovered otherwise (architecture §3.7.6). Known values: active, available, uncovered.",
             "type": "string"
-          }
+          },
+          "capped": {"description": "Present and true if the niche is capped in the answering network (architecture §3.7.6, §3.13.5).", "type": "boolean"}
         }
       }
     }

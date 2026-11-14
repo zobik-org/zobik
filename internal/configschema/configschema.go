@@ -15,15 +15,20 @@ import (
 	"zobik.org/zobik/internal/sidecar"
 )
 
+// Fragments are the fragments the schema is assembled from, one per consumer.
+// The panel generates the administration affordance's form from them
+// (architecture §3.17.1).
+var Fragments = [][]byte{
+	taskbroker.ConfigSchema,
+	contextstore.ConfigSchema,
+	channel.ConfigSchema,
+	spawner.ConfigSchema,
+	sidecar.ConfigSchema,
+}
+
 // Load returns the assembled schema.
 var Load = sync.OnceValues(func() (*globalconfig.Schema, error) {
-	s, err := globalconfig.Assemble(
-		taskbroker.ConfigSchema,
-		contextstore.ConfigSchema,
-		channel.ConfigSchema,
-		spawner.ConfigSchema,
-		sidecar.ConfigSchema,
-	)
+	s, err := globalconfig.Assemble(Fragments...)
 	if err != nil {
 		return nil, err
 	}

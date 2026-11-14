@@ -70,6 +70,7 @@ type Service struct {
 	channel map[string]*link
 	seen    map[string]bool
 	work    *workArea
+	ops     *operatorArea
 	traces  *traceProxy
 	// tracePort is the port where ServeTraces serves the tracing backend's UI.
 	tracePort string
@@ -132,6 +133,9 @@ func (s *Service) unlock(keys *Keys) {
 		}
 		s.work = w
 	}
+	if l := s.channel[AudienceOperator]; l != nil {
+		s.ops = newOperatorArea(l, s.hub.notify)
+	}
 	if keys.Tracing != nil && s.o.TracingAddr != "" {
 		s.traces = newTraceProxy(s.o.TracingAddr, keys.Tracing)
 	}
@@ -167,7 +171,7 @@ func (s *Service) lockIfIdle() {
 		s.traces.close()
 	}
 	s.keys.Close()
-	s.keys, s.stop, s.channel, s.seen, s.work, s.traces = nil, nil, nil, nil, nil, nil
+	s.keys, s.stop, s.channel, s.seen, s.work, s.ops, s.traces = nil, nil, nil, nil, nil, nil, nil
 	s.hub.reset()
 }
 
@@ -267,7 +271,8 @@ func (s *Service) Serve(ctx context.Context, ln net.Listener) error {
 // receive takes what a channel sends over the Attach. The deliveries of an
 // outcome go to the event stream, and the console acks each one with received
 // once some stream has it: showing the outcome is delivering it
-// (implementation §6, The service between the console and the channels).
+// (implementation §6, The service between the console and the channels). The
+// Operator Channel's queries and expired notices go to the operation area.
 func (s *Service) receive(l *link, m *channelv1.ChannelMessage) {
 	if l.ch.Audience == AudienceUser {
 		if w := s.workArea(); w != nil {
@@ -275,9 +280,18 @@ func (s *Service) receive(l *link, m *channelv1.ChannelMessage) {
 		}
 		return
 	}
+	s.mu.Lock()
+	ops := s.ops
+	s.mu.Unlock()
+	if ex := m.GetExpired(); ex != nil {
+		// An expired is confirmed once the panel shows it.
+		if ops != nil {
+			ops.onExpired(ex)
+		}
+		return
+	}
 	c := m.GetConsultation()
 	if c == nil {
-		// An expired is confirmed once the panel shows it.
 		return
 	}
 	var assigned, announced bus.Event
@@ -291,7 +305,15 @@ func (s *Service) receive(l *link, m *channelv1.ChannelMessage) {
 		} `json:"evidence"`
 		Details json.RawMessage `json:"details"`
 	}
-	if json.Unmarshal(announced.Data, &d) != nil || d.Kind != "result_delivery" {
+	if json.Unmarshal(announced.Data, &d) != nil {
+		return
+	}
+	if d.Kind != kindResultDelivery {
+		// A query of the operator audience: a gate whose rule ends in operator,
+		// or a query a structural requester opens (architecture §3.17.1).
+		if ops != nil {
+			ops.query(&assigned, &announced)
+		}
 		return
 	}
 	// A query comes again with each Attach; the console recognizes it by its TaskID.

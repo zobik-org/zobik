@@ -21,7 +21,9 @@ import (
 
 // park is a Catalog with a topic in each state: echo runs, spare has an
 // eligible entry that never ran, and barred's only entry is vetoed and was
-// archived (architecture §3.7.6, §3.13.3).
+// archived and capped. The network is under capacity pressure and without a
+// user channel; storage pressure is another network's (architecture §3.7.6,
+// §3.13.3).
 func park(t *testing.T) (f *fixture, spare, barred string) {
 	f = newFixture(t, time.Hour, false)
 	spare = "sha256:" + strings.Repeat("5a", 32)
@@ -37,6 +39,10 @@ func park(t *testing.T) (f *fixture, spare, barred string) {
 		"provenance": "seeded", "cost": 0, "as_of": time.Now().UTC(),
 	}, catalog.Write{})
 	f.cat.PutRecord(f.Ctx, "other", "presence:"+spare, map[string]any{}, catalog.Write{Expires: time.Hour})
+	f.cat.PutRecord(f.Ctx, network, "niche:barred", map[string]any{"successive_candidates": 3, "capped": true}, catalog.Write{})
+	f.cat.PutRecord(f.Ctx, network, "capacity_pressure", map[string]any{"since": time.Now().UTC(), "evictions": 4}, catalog.Write{})
+	f.cat.PutRecord(f.Ctx, network, "audience:user", map[string]any{"since": time.Now().UTC()}, catalog.Write{})
+	f.cat.PutRecord(f.Ctx, "other", "storage_pressure", map[string]any{"since": time.Now().UTC(), "occupied": 9, "capacity": 10}, catalog.Write{})
 	f.cat.mu.Lock()
 	f.cat.occupied, f.cat.capacity = 100, 1000
 	f.cat.bundles = []catalog.Bundle{{BundleID: "sha256:bundle", PurposeText: "both", Members: []string{echo, spare}}}
@@ -64,7 +70,7 @@ func (f *fixture) query(topic string) (traceID, taskID string) {
 }
 
 // topic_catalog_query lists every topic of the Topic Registry, with its
-// description and its state, in the payload of its close (architecture §3.7.6).
+// description, its state and its capped mark, in the payload of its close (architecture §3.7.6).
 func TestTopicCatalogQuery(t *testing.T) {
 	f, _, _ := park(t)
 	_, taskID := f.query(spawner.TopicTopicQuery)
@@ -78,7 +84,7 @@ func TestTopicCatalogQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []spawner.TopicRow{
-		{Topic: "barred", Description: "bars", State: spawner.TopicUncovered},
+		{Topic: "barred", Description: "bars", State: spawner.TopicUncovered, Capped: true},
 		{Topic: "echo", Description: "repeats", State: spawner.TopicActive},
 		{Topic: "spare", Description: "spares", State: spawner.TopicAvailable},
 	}
@@ -94,7 +100,8 @@ func TestTopicCatalogQuery(t *testing.T) {
 
 // node_catalog_query writes the library to the Context Store, each entry with
 // its state, its floors, its acquisition, the network's veto and the networks
-// present, and the close carries the reference (architecture §3.13.3).
+// present, with the network's conditions, and the close carries the reference
+// (architecture §3.13.3).
 func TestNodeCatalogQuery(t *testing.T) {
 	f, spare, barred := park(t)
 	traceID, taskID := f.query(spawner.TopicCatalogQuery)
@@ -112,6 +119,11 @@ func TestNodeCatalogQuery(t *testing.T) {
 	}
 	if lib.StorageOccupied != 100 || lib.StorageCapacity != 1000 || len(lib.Bundles) != 1 || len(lib.Bundles[0].Members) != 2 {
 		t.Errorf("storage %d/%d, bundles %+v", lib.StorageOccupied, lib.StorageCapacity, lib.Bundles)
+	}
+	c := lib.Conditions
+	if c.CapacityPressure == nil || c.StoragePressure != nil || c.VectorSpace != nil ||
+		len(c.Audiences) != 1 || c.Audiences[0].Audience != "user" {
+		t.Errorf("conditions %+v", c)
 	}
 	got := map[string]spawner.LibraryEntry{}
 	for _, e := range lib.Entries {
