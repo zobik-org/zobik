@@ -193,7 +193,7 @@ func (z *network) embeddings(t *testing.T, ctx context.Context, fixed map[string
 	if out, err := run.CombinedOutput(); err != nil {
 		t.Fatalf("running the embeddings endpoint: %v\n%s", err, out)
 	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	t.Cleanup(func() { exec.Command("docker", "rm", "-fv", name).Run() })
 }
 
 // lifecycle waits for task to walk announced → proposed → assigned → completed,

@@ -157,5 +157,5 @@ func (z *network) openai(t *testing.T, ctx context.Context) {
 	if out, err := run.CombinedOutput(); err != nil {
 		t.Fatalf("running the OpenAI endpoint: %v\n%s", err, out)
 	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	t.Cleanup(func() { exec.Command("docker", "rm", "-fv", name).Run() })
 }
