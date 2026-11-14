@@ -195,8 +195,9 @@ function onOutcome(o) {
 // --- acts ------------------------------------------------------------------
 
 // act opens a request and records it, with the views its outcome changes: those
-// are read again once it closes.
-async function act(label, path, body, refreshViews) {
+// are read again once it closes. onError, if given, takes a request the
+// console refused instead of an alert.
+async function act(label, path, body, refreshViews, onError) {
   try {
     const opened = await api("POST", path, body);
     const a = { label, trace: opened.trace_id, at: new Date(), refresh: refreshViews };
@@ -209,7 +210,7 @@ async function act(label, path, body, refreshViews) {
     }
     return true;
   } catch (err) {
-    alert(label + ": " + err.message);
+    if (onError) onError(err); else alert(label + ": " + err.message);
     return false;
   }
 }
@@ -357,8 +358,7 @@ function retireEntry(e, kind) {
 // one of the registry's entries, and emits the node_provision (architecture
 // §3.13.8). The Spawner rejects, with its reason, a slot left without one.
 async function provisionForm(e) {
-  let registry = {};
-  try { registry = (await api("GET", "/api/config", undefined, true)).values.egress_registry || {}; } catch (_) { /* no entries to offer */ }
+  const registry = await egressRegistry();
   const entries = Object.keys(registry).sort();
   const rows = el("div", { class: "stack-form" });
   const addRow = () => rows.append(el("div", { class: "row-form" },
@@ -486,17 +486,20 @@ async function loadQuestions() {
   $("op-queries").replaceChildren(...(list.queries.length
     ? list.queries.map(renderQuestion)
     : [el("li", { class: "hint" }, "No questions wait for you.")]));
-  if (list.expired.length) {
+  const onScreen = !$("operation").hidden && opView === "questions";
+  if (list.expired.length && onScreen) {
     $("op-expired").replaceChildren(el("section", { class: "notices" },
-      el("header", {}, el("strong", {}, "Expired without your answer")),
+      el("header", {}, el("strong", {}, "While you were away")),
       el("ul", {}, ...list.expired.map((n) => el("li", {},
-        `${n.kind || "A question"}: ${n.failure_code === "unanswered" ? "nobody answered it in time" : "it closed before reaching you"}.`,
+        n.kind === "result_delivery"
+          ? `The outcome of an act ${n.failure_code === "unanswered" ? "was received without your answer" : "did not reach you"}.`
+          : `${n.kind || "A question"}: ${n.failure_code === "unanswered" ? "nobody answered it in time" : "it closed before reaching you"}.`,
         traceLink(n.trace_id))))));
     // The panel showed them: the console confirms them to the channel.
     api("POST", "/api/operator/expired", { delivery_ids: list.expired.map((n) => n.delivery_id) }, true).catch(() => {});
   }
-  // A question is shown when the Questions view is on screen.
-  if (!$("operation").hidden && opView === "questions") {
+  // A question or a notice is shown when the Questions view is on screen.
+  if (onScreen) {
     const toShow = list.queries.map((q) => q.task_id).filter((t) => !opShown.has(t));
     if (toShow.length) {
       toShow.forEach((t) => opShown.add(t));
@@ -542,6 +545,13 @@ function renderQuestion(q) {
 }
 
 // --- the configuration -----------------------------------------------------
+
+// egressRegistry is the egress_registry of the head last read, which it reads
+// if the panel has not yet.
+async function egressRegistry() {
+  if (!configView.snapshot) await loadConfig();
+  return configView.snapshot?.values.egress_registry || {};
+}
 
 // loadConfig reads the head and the schema the form is generated from.
 async function loadConfig() {
@@ -598,15 +608,12 @@ $("config-form").addEventListener("submit", async (e) => {
   const names = Object.keys(assignments);
   if (!names.length) { $("config-error").textContent = "Nothing changed."; return; }
   if (!confirm(`Publish an edit of ${names.join(", ")} on version ${configView.snapshot.config_version}?`)) return;
-  try {
-    const opened = await api("POST", "/api/config", { base_version: configView.snapshot.config_version, assignments });
-    const a = { label: `Edit the configuration: ${names.join(", ")}`, trace: opened.trace_id, at: new Date(), refresh: ["config"] };
-    traces.set(opened.trace_id, { act: a });
-    addActivity(a, null);
+  const sent = await act(`Edit the configuration: ${names.join(", ")}`, "/api/config",
+    { base_version: configView.snapshot.config_version, assignments }, ["config"],
+    (err) => { $("config-error").textContent = err.message; });
+  if (sent) {
     $("config-error").textContent = "";
     showView("activity");
-  } catch (err) {
-    $("config-error").textContent = err.message;
   }
 });
 
@@ -781,8 +788,7 @@ function mapField(schema, value) {
 
 // loadHandles offers the handles and rate sources the egress registry names.
 async function loadHandles() {
-  let registry = {};
-  try { registry = (await api("GET", "/api/config", undefined, true)).values.egress_registry || {}; } catch (_) { /* nothing to offer */ }
+  const registry = await egressRegistry();
   const handles = new Set();
   const sources = new Set();
   for (const e of Object.values(registry)) {
@@ -792,6 +798,12 @@ async function loadHandles() {
   }
   $("secret-handles").replaceChildren(...[...handles].sort().map((h) => el("option", { value: h })));
   $("rate-sources").replaceChildren(...[...sources].sort().map((h) => el("option", { value: h })));
+}
+
+// escapePath escapes each segment of a handle or a rate source, which the
+// console takes as the rest of the path, as the command line does.
+function escapePath(name) {
+  return name.split("/").map(encodeURIComponent).join("/");
 }
 
 function utf8Base64(s) {
@@ -807,7 +819,7 @@ $("secret-form").addEventListener("submit", async (e) => {
   const handle = f.elements.handle.value.trim();
   if (!f.elements.value.value) { $("secret-result").textContent = "Write the value."; return; }
   try {
-    await api("PUT", "/api/secrets/" + handle, { value: utf8Base64(f.elements.value.value) });
+    await api("PUT", "/api/secrets/" + escapePath(handle), { value: utf8Base64(f.elements.value.value) });
     $("secret-result").textContent = `Written: ${handle}.`;
     f.elements.value.value = "";
   } catch (err) {
@@ -820,7 +832,7 @@ $("secret-form").elements.delete.addEventListener("click", async () => {
   const handle = f.elements.handle.value.trim();
   if (!handle || !confirm(`Delete the secret ${handle}? What uses it stops working until it is written again.`)) return;
   try {
-    await api("DELETE", "/api/secrets/" + handle);
+    await api("DELETE", "/api/secrets/" + escapePath(handle));
     $("secret-result").textContent = `Deleted: ${handle}.`;
   } catch (err) {
     $("secret-result").textContent = err.message;
@@ -836,7 +848,7 @@ $("rates-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
   const name = f.elements.name.value.trim();
-  const r = await fetch("/api/rates/" + name, { method: "PUT", headers: { "Content-Type": "application/json" }, body: f.elements.table.value });
+  const r = await fetch("/api/rates/" + escapePath(name), { method: "PUT", headers: { "Content-Type": "application/json" }, body: f.elements.table.value });
   if (r.status === 401) { signedOut(); return; }
   if (r.ok) {
     $("rates-result").textContent = `Written: the rate table of ${name}.`;
@@ -846,3 +858,6 @@ $("rates-form").addEventListener("submit", async (e) => {
   try { msg = (await r.json()).error || msg; } catch (_) { /* no body */ }
   $("rates-result").textContent = msg;
 });
+
+// Both scripts are loaded: the panel starts.
+start();

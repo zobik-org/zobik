@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/console"
@@ -25,21 +26,12 @@ func TestOperatorQuery(t *testing.T) {
 	closes := f.Tap("task.*.worker.>")
 
 	trace := strings.ReplaceAll(uuid.NewString(), "-", "")
-	taskID := uuid.NewString()
-	ev, err := bus.NewEvent(bus.TypeAnnounced, "worker", taskID, map[string]any{
-		"topic": "hitl_contact_operator", "requester_identity": "worker",
+	taskID := f.askOperator(worker, trace, map[string]any{
 		"kind": "gate_approval", "scope": "call", "since": time.Now().UTC().Format(time.RFC3339Nano),
 		"options": []string{"approve", "deny"}, "outcome_if_silent": "deny",
 		"evidence": map[string]any{"trace_id": trace, "task_id": uuid.NewString()},
 		"details":  map[string]any{"entry": "mail", "rule": 0, "topic": "mailer", "node_id": "worker"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ev.TraceParent, ev.ConfigVersion = "00-"+trace+"-00f067aa0ba902b7-01", "v0"
-	if err := bus.Publish(f.Ctx, f.JetStream(worker), bus.SubjectAnnounced("hitl_contact_operator"), ev); err != nil {
-		t.Fatal(err)
-	}
 
 	var list console.OperatorQueries
 	deadline := time.Now().Add(15 * time.Second)
@@ -83,6 +75,7 @@ func TestOperatorQuery(t *testing.T) {
 			if len(list.Queries) != 0 {
 				t.Errorf("the answered query is still listed: %+v", list.Queries)
 			}
+			f.freeText(cookie, worker)
 			return
 		case <-timeout:
 			t.Fatal("the query was not closed")
@@ -109,6 +102,46 @@ func TestConfigSchema(t *testing.T) {
 	if k := out.Keys["egress_registry"]; k.Type != "object" {
 		t.Errorf("egress_registry %+v", k)
 	}
+}
+
+// freeText checks that a query with an empty enumeration takes a free-text
+// answer, as the panel offers it.
+func (f *fixture) freeText(cookie *http.Cookie, worker *nats.Conn) {
+	f.T.Helper()
+	trace := strings.ReplaceAll(uuid.NewString(), "-", "")
+	taskID := f.askOperator(worker, trace, map[string]any{
+		"kind": "note", "scope": "network", "since": time.Now().UTC().Format(time.RFC3339Nano),
+		"options": []string{}, "evidence": map[string]any{},
+	})
+	var list console.OperatorQueries
+	deadline := time.Now().Add(15 * time.Second)
+	for len(list.Queries) == 0 {
+		if time.Now().After(deadline) {
+			f.T.Fatal("the free-text query did not reach the operation area")
+		}
+		time.Sleep(100 * time.Millisecond)
+		f.callJSON(cookie, http.MethodGet, console.PathOperatorQueries, nil, &list)
+	}
+	if code := f.callJSON(cookie, http.MethodPost, console.PathOperatorAnswers, console.OperatorAnswer{TaskID: taskID, Text: "later"}, nil); code != http.StatusNoContent {
+		f.T.Errorf("a free-text answer to an empty enumeration: %d", code)
+	}
+}
+
+// askOperator announces a query on hitl_contact_operator in trace as the
+// worker, and returns its TaskID.
+func (f *fixture) askOperator(worker *nats.Conn, trace string, data map[string]any) string {
+	f.T.Helper()
+	taskID := uuid.NewString()
+	data["topic"], data["requester_identity"] = "hitl_contact_operator", "worker"
+	ev, err := bus.NewEvent(bus.TypeAnnounced, "worker", taskID, data)
+	if err != nil {
+		f.T.Fatal(err)
+	}
+	ev.TraceParent, ev.ConfigVersion = "00-"+trace+"-00f067aa0ba902b7-01", "v0"
+	if err := bus.Publish(f.Ctx, f.JetStream(worker), bus.SubjectAnnounced("hitl_contact_operator"), ev); err != nil {
+		f.T.Fatal(err)
+	}
+	return taskID
 }
 
 // cookie signs in and returns the session's cookie.
