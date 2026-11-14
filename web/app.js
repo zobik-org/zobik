@@ -1,6 +1,7 @@
 // The panel's work area (implementation §6, The operator console): the
 // conversations, the requests they open, and the outcomes and queries of the
 // Entry Node. Everything the network sends is set as text, never as markup.
+// The operation area is operation.js, which shares the helpers declared here.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -40,6 +41,7 @@ async function api(method, path, body, refresh) {
 function el(tag, attrs, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
     if (k === "class") e.className = v;
     else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
     else e.setAttribute(k, v);
@@ -63,6 +65,7 @@ function signedOut() {
   $("expired").hidden = true;
   $("expired-list").replaceChildren();
   shown.clear();
+  operationReset();
   $("panel").hidden = true;
   $("signin").hidden = false;
 }
@@ -84,21 +87,22 @@ function closeConversation() {
 }
 
 async function start() {
+  let work = true;
   try {
     await api("GET", "/api/conversations", undefined, true);
   } catch (e) {
     if (e.message === "no session") return;
-    $("signin").hidden = true;
-    $("panel").hidden = false;
+    // Without the work area the operation area still opens.
     $("unavailable").textContent = e.message;
-    $("unavailable").hidden = false;
-    return;
+    work = false;
   }
   $("signin").hidden = true;
   $("panel").hidden = false;
-  $("unavailable").hidden = true;
+  $("unavailable").hidden = work;
   try { traceUI = (await api("GET", "/api/session", undefined, true)).trace_ui || ""; } catch (_) { traceUI = ""; }
   openEvents();
+  operationStart();
+  if (!work) return;
   await Promise.all([loadList(), loadExpired()]);
   if (reopen) {
     const id = reopen;
@@ -134,6 +138,7 @@ function openEvents() {
     if (id === current) loadConversation(id);
   });
   events.addEventListener("expired", () => loadExpired());
+  operationEvents(events);
   events.onerror = async () => {
     // The stream ends with the session; check whether it is still open.
     try { await api("GET", "/api/conversations", undefined, true); } catch (_) { /* signedOut ran */ }

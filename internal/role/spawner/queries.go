@@ -112,6 +112,8 @@ type TopicRow struct {
 	Topic       string `json:"topic"`
 	Description string `json:"description"`
 	State       string `json:"state"`
+	// Capped is the niche's capped mark in this network (architecture §3.7.6, §3.13.5).
+	Capped bool `json:"capped,omitempty"`
 }
 
 // topicListing is every topic of the Topic Registry with its description and
@@ -133,10 +135,21 @@ func (s *spawner) topicListing(ctx context.Context, cat Catalog) ([]TopicRow, er
 	if err != nil {
 		return nil, err
 	}
+	niches, err := cat.Records(ctx, nichePrefix, s.o.Network)
+	if err != nil {
+		return nil, err
+	}
+	capped := map[string]bool{}
+	for _, r := range niches {
+		var n niche
+		if json.Unmarshal(r.Value, &n) == nil && n.Capped {
+			capped[strings.TrimPrefix(r.Key, nichePrefix)] = true
+		}
+	}
 	out := make([]TopicRow, 0, len(topics))
 	for _, t := range topics {
 		state := cmp.Or(states[t.Topic], TopicUncovered)
-		out = append(out, TopicRow{Topic: t.Topic, Description: t.Description, State: state})
+		out = append(out, TopicRow{Topic: t.Topic, Description: t.Description, State: state, Capped: capped[t.Topic]})
 	}
 	slices.SortFunc(out, func(a, b TopicRow) int { return strings.Compare(a.Topic, b.Topic) })
 	return out, nil
@@ -177,6 +190,23 @@ type Library struct {
 	StorageOccupied int64            `json:"storage_occupied"`
 	StorageCapacity int64            `json:"storage_capacity"`
 	Bundles         []catalog.Bundle `json:"bundles"`
+	Conditions      Conditions       `json:"conditions"`
+}
+
+// Conditions are the keys of this network that back a notice on network_risk,
+// each with what it stamps (architecture §3.13.3, §3.15.7). A key absent from
+// the Catalog is absent here.
+type Conditions struct {
+	VectorSpace      *vectorSpace      `json:"vector_space,omitempty"`
+	Audiences        []AudienceRow     `json:"audiences"`
+	CapacityPressure *capacityPressure `json:"capacity_pressure,omitempty"`
+	StoragePressure  *storagePressure  `json:"storage_pressure,omitempty"`
+}
+
+// AudienceRow is the key of an audience without a channel.
+type AudienceRow struct {
+	Audience string    `json:"audience"`
+	Since    time.Time `json:"since"`
 }
 
 // LibraryEntry is an entry of the library as this network sees it
@@ -274,6 +304,9 @@ func (s *spawner) library(ctx context.Context, cat Catalog) (*Library, error) {
 	if lib.Bundles == nil {
 		lib.Bundles = []catalog.Bundle{}
 	}
+	if lib.Conditions, err = s.conditions(ctx, cat); err != nil {
+		return nil, err
+	}
 	for _, e := range entries {
 		le := LibraryEntry{
 			ArtifactRef: e.ArtifactRef, Topic: e.Topic, CapabilityText: e.CapabilityText,
@@ -319,6 +352,42 @@ func (s *spawner) library(ctx context.Context, cat Catalog) (*Library, error) {
 		return cmp.Or(strings.Compare(a.Topic, b.Topic), strings.Compare(a.ArtifactRef, b.ArtifactRef))
 	})
 	return lib, nil
+}
+
+// conditions reads the keys of this network that back a notice on
+// network_risk (architecture §3.13.3).
+func (s *spawner) conditions(ctx context.Context, cat Catalog) (Conditions, error) {
+	out := Conditions{Audiences: []AudienceRow{}}
+	var vs vectorSpace
+	if _, ok, err := cat.Record(ctx, s.o.Network, keyVectorSpace, &vs); err != nil {
+		return out, err
+	} else if ok {
+		out.VectorSpace = &vs
+	}
+	var cp capacityPressure
+	if _, ok, err := cat.Record(ctx, s.o.Network, keyCapacityPressure, &cp); err != nil {
+		return out, err
+	} else if ok {
+		out.CapacityPressure = &cp
+	}
+	var sp storagePressure
+	if _, ok, err := cat.Record(ctx, s.o.Network, keyStoragePressure, &sp); err != nil {
+		return out, err
+	} else if ok {
+		out.StoragePressure = &sp
+	}
+	recs, err := cat.Records(ctx, audiencePrefix, s.o.Network)
+	if err != nil {
+		return out, err
+	}
+	for _, r := range recs {
+		var k audienceKey
+		if json.Unmarshal(r.Value, &k) == nil {
+			out.Audiences = append(out.Audiences, AudienceRow{Audience: strings.TrimPrefix(r.Key, audiencePrefix), Since: k.Since})
+		}
+	}
+	slices.SortFunc(out.Audiences, func(a, b AudienceRow) int { return strings.Compare(a.Audience, b.Audience) })
+	return out, nil
 }
 
 func completed(data map[string]any) outcome {
