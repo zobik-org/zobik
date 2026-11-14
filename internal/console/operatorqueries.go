@@ -77,10 +77,13 @@ type operatorArea struct {
 	mu      sync.Mutex
 	queries map[string]*OperatorQuery
 	expired map[string]OperatorExpired
+	// deliveries are the outcome deliveries the channel sent, by TaskID, each
+	// with whether it is in the final round.
+	deliveries map[string]bool
 }
 
 func newOperatorArea(l *link, notify func(string, any)) *operatorArea {
-	return &operatorArea{link: l, notify: notify, queries: map[string]*OperatorQuery{}, expired: map[string]OperatorExpired{}}
+	return &operatorArea{link: l, notify: notify, queries: map[string]*OperatorQuery{}, expired: map[string]OperatorExpired{}, deliveries: map[string]bool{}}
 }
 
 // query keeps a query of the operator audience the channel sent.
@@ -107,13 +110,34 @@ func (o *operatorArea) query(assigned, announced *bus.Event) {
 	o.notify(eventOperator, map[string]string{"task_id": q.TaskID})
 }
 
-// onExpired keeps the notice of a query the channel closed without an answer.
+// delivery remembers an outcome delivery the channel sent, so its expiry is
+// told apart from a query's.
+func (o *operatorArea) delivery(taskID string, final bool) {
+	o.mu.Lock()
+	o.deliveries[taskID] = final
+	o.mu.Unlock()
+}
+
+// onExpired keeps the notice of a query or a delivery the channel closed
+// without an answer. An outcome that did not reach the person comes back in
+// the next round, so it has no notice; past the final round it does
+// (implementation §6, The service between the console and the channels).
 func (o *operatorArea) onExpired(ex *channelv1.Expired) {
 	n := OperatorExpired{DeliveryID: ex.GetDeliveryId(), TaskID: ex.GetTaskId(), TraceID: ex.GetTraceId(), FailureCode: ex.GetFailureCode()}
 	o.mu.Lock()
 	if q, ok := o.queries[n.TaskID]; ok {
 		n.Kind = q.Kind
 		delete(o.queries, n.TaskID)
+	}
+	final, delivery := o.deliveries[n.TaskID]
+	delete(o.deliveries, n.TaskID)
+	if delivery {
+		n.Kind = kindResultDelivery
+		if n.FailureCode == "undelivered" && !final {
+			o.mu.Unlock()
+			o.confirm(n.DeliveryID)
+			return
+		}
 	}
 	o.expired[n.DeliveryID] = n
 	o.mu.Unlock()
@@ -147,7 +171,7 @@ func (o *operatorArea) answer(ctx context.Context, a OperatorAnswer) error {
 	}
 	data := map[string]any{}
 	switch {
-	case q.Options == nil:
+	case len(q.Options) == 0:
 		data["answer"] = a.Text
 	case !slices.Contains(q.Options, a.Decision):
 		return errNoAnswer
@@ -195,12 +219,15 @@ func (o *operatorArea) seen(deliveryIDs []string) {
 		_, ok := o.expired[id]
 		delete(o.expired, id)
 		o.mu.Unlock()
-		if !ok {
-			continue
+		if ok {
+			o.confirm(id)
 		}
-		if err := o.link.send(&channelv1.ConsoleMessage{Body: &channelv1.ConsoleMessage_Received{Received: &nriv1.Received{DeliveryId: id}}}); err != nil {
-			log.Printf("console: confirming the expired %s: %v", id, err)
-		}
+	}
+}
+
+func (o *operatorArea) confirm(deliveryID string) {
+	if err := o.link.send(&channelv1.ConsoleMessage{Body: &channelv1.ConsoleMessage_Received{Received: &nriv1.Received{DeliveryId: deliveryID}}}); err != nil {
+		log.Printf("console: confirming the expired %s: %v", deliveryID, err)
 	}
 }
 

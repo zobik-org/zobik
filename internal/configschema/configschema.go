@@ -4,6 +4,8 @@
 package configschema
 
 import (
+	"encoding/json"
+	"maps"
 	"sync"
 
 	"zobik.org/zobik/internal/egress"
@@ -41,4 +43,24 @@ var Load = sync.OnceValues(func() (*globalconfig.Schema, error) {
 		return nil, err
 	}
 	return s, nil
+})
+
+// Declarations returns every key's declaration as its fragment brings it, once
+// the schema assembles: the form the panel generates is the schema the Config
+// Store validates with (architecture §3.17.1).
+var Declarations = sync.OnceValues(func() (map[string]json.RawMessage, error) {
+	if _, err := Load(); err != nil {
+		return nil, err
+	}
+	keys := map[string]json.RawMessage{}
+	for _, f := range Fragments {
+		var frag struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(f, &frag); err != nil {
+			return nil, err
+		}
+		maps.Copy(keys, frag.Properties)
+	}
+	return keys, nil
 })
