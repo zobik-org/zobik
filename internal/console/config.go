@@ -103,10 +103,17 @@ func (o *Operator) open(ctx context.Context, topic string, data map[string]any, 
 }
 
 // Query opens a query on topic, which carries no proof: what it asks changes
-// nothing (architecture §3.7.6, §3.12.3, §3.13.3). Its outcome arrives as a
-// delivery over the session.
-func (o *Operator) Query(ctx context.Context, topic string) (*Opened, error) {
-	return o.send(ctx, topic, "", []byte("{}"), nil)
+// nothing (architecture §3.7.6, §3.12.3, §3.13.3). data is what it names, nil
+// for none. Its outcome arrives as a delivery over the session.
+func (o *Operator) Query(ctx context.Context, topic string, data map[string]any) (*Opened, error) {
+	if data == nil {
+		data = map[string]any{}
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	return o.send(ctx, topic, "", raw, nil)
 }
 
 // send opens the trace through the channel, with the entry subtask's TaskID

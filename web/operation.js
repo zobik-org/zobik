@@ -15,6 +15,9 @@ const parkViews = {
   topics: { topic: "topic_catalog_query", data: null, at: null, pending: null, error: "" },
 };
 const configView = { snapshot: null, schema: null, at: null, error: "" };
+// The point form of node_query of each node whose metrics are open, by node_id:
+// its answer, when it was read and the query in flight, if any.
+const metrics = new Map();
 
 let opView = "network";      // the operation view on screen
 let opStarted = false;
@@ -81,6 +84,7 @@ function operationReset() {
   opStarted = false;
   clearInterval(freshTimer);
   for (const v of Object.values(parkViews)) Object.assign(v, { data: null, at: null, pending: null, error: "" });
+  metrics.clear();
   Object.assign(configView, { snapshot: null, schema: null, at: null, error: "" });
   traces.clear();
   early.clear();
@@ -171,6 +175,21 @@ function onOutcome(o) {
   }
   traces.delete(o.trace_id);
   const d = o.details || {};
+  if (t.metrics) {
+    const m = metrics.get(t.metrics);
+    // A read the person closed or replaced since no longer shows.
+    if (!m || m.pending !== o.trace_id) return;
+    m.pending = null;
+    if (d.failure_code || d.failure_reason) {
+      m.error = [d.failure_code, d.failure_reason].filter(Boolean).join(": ");
+    } else {
+      m.signals = d.data?.signals || {};
+      m.at = new Date();
+      m.error = "";
+    }
+    renderCensus();
+    return;
+  }
   if (t.view) {
     const v = parkViews[t.view];
     v.pending = null;
@@ -279,7 +298,109 @@ function renderCensus() {
       ["Egress grants", (n.egress_grants || []).map((g) => `${g.slot} → ${g.entry}`).join(", ") || "—"],
       ["Vector space", n.model_id],
     ].flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)])),
-    el("div", { class: "actions" }, el("button", { class: "danger", onclick: () => removeNode(n) }, "Remove"))))) : el("p", { class: "hint" }, "Nothing to show."));
+    metricsView(n),
+    el("div", { class: "actions" },
+      el("button", { onclick: () => toggleMetrics(n) }, metrics.has(n.node_id) ? "Hide metrics" : "Metrics"),
+      el("button", { class: "danger", onclick: () => removeNode(n) }, "Remove"))))) : el("p", { class: "hint" }, "Nothing to show."));
+}
+
+// --- a node's metrics --------------------------------------------------------
+
+// toggleMetrics opens or closes a node's metrics. Opening asks the Network
+// Monitor through the point form of node_query (architecture §3.12.3).
+function toggleMetrics(n) {
+  if (metrics.has(n.node_id)) {
+    metrics.delete(n.node_id);
+    renderCensus();
+    return;
+  }
+  metrics.set(n.node_id, { signals: null, at: null, pending: "opening", error: "", open: false });
+  // min_observations, for what lacks evidence.
+  if (!configView.at) loadConfig().then(renderCensus);
+  readMetrics(n.node_id);
+}
+
+async function readMetrics(nodeID) {
+  const m = metrics.get(nodeID);
+  m.pending = "opening";
+  m.error = "";
+  renderCensus();
+  try {
+    const opened = await api("POST", "/api/queries", { topic: "node_query", node_id: nodeID }, true);
+    m.pending = opened.trace_id;
+    traces.set(opened.trace_id, { metrics: nodeID });
+    if (early.has(opened.trace_id)) {
+      const o = early.get(opened.trace_id);
+      early.delete(opened.trace_id);
+      onOutcome(o);
+    }
+  } catch (err) {
+    m.pending = null;
+    m.error = err.message;
+    renderCensus();
+  }
+}
+
+function metricsView(n) {
+  const m = metrics.get(n.node_id);
+  if (!m) return null;
+  const head = el("div", { class: "meta" },
+    m.pending ? "Reading…" : m.error ? "Not read: " + m.error : `Read at ${m.at.toLocaleTimeString()} `,
+    m.pending ? null : el("button", { class: "link", onclick: () => readMetrics(n.node_id) }, "Read again"));
+  return el("div", { class: "metrics" }, head, m.signals ? signalsView(m.signals, m) : null);
+}
+
+// The axes of architecture §3.12.2 the summary shows first, each with the
+// signals that read it at a glance; the rest go under "All signals".
+const summaryAxes = [
+  ["Quality", ["score", "margin", "reopen_rate"]],
+  ["Cost", ["cost_own_p50", "cost_per_resolution_own", "duration_p50"]],
+  ["Usage", ["usage_share", "idle_share", "win_rate"]],
+];
+
+const signalNames = [
+  "n_observations", "reopen_rate", "score", "margin",
+  "cost_own_p50", "cost_own_p90", "cost_subtree_p50", "cost_subtree_p90",
+  "cost_per_resolution_own", "cost_per_resolution_subtree", "avg_attempts", "cost_dispersion", "spend_window",
+  "duration_p50", "duration_p90", "duration_dispersion", "tokens_in_p50", "tokens_out_p50",
+  "requester_queries_per_task", "egress_gates_per_task",
+  "reopen_rate_inner", "reopen_rate_outer", "cost_own_p50_inner", "cost_own_p50_outer", "duration_p50_inner", "duration_p50_outer",
+  "usage_share", "idle_share", "win_rate", "notice_provenance",
+];
+
+const ratios = new Set(["reopen_rate", "reopen_rate_inner", "reopen_rate_outer", "usage_share", "idle_share", "win_rate"]);
+
+// signalValue shows a signal; an absent one lacks the evidence to be measured
+// (architecture §3.12.2), and the person sees how much there is.
+function signalValue(name, signals) {
+  const v = signals[name];
+  if (v === undefined) {
+    // The usage axis waits for usage_window assignments on the topic, not for
+    // observations of the node.
+    if (["usage_share", "idle_share", "win_rate"].includes(name)) return "— not enough evidence (fewer than usage_window assignments on the topic)";
+    const min = configView.snapshot?.values?.min_observations;
+    const n = signals.n_observations ?? 0;
+    return "— not enough evidence" + (min ? ` (${n} of ${min} observations)` : ` (${n} observations)`);
+  }
+  if (ratios.has(name)) return (v * 100).toFixed(1) + " %";
+  if (name.startsWith("duration_p")) return v >= 1000 ? (v / 1000).toFixed(2) + " s" : Math.round(v) + " ms";
+  if (Number.isInteger(v)) return String(v);
+  return String(Number(v.toPrecision(4)));
+}
+
+// signalsView shows a signal vector: a node's live one or a floor-history
+// row's snapshot (architecture §3.12.2, §3.13.3). state, if given, keeps
+// whether "All signals" is open across the census's renders.
+function signalsView(signals, state) {
+  const lines = summaryAxes.map(([axis, names]) => [axis, names.map((k) => `${k} ${signalValue(k, signals)}`).join(" · ")]);
+  lines[0][1] += ` · over ${signals.n_observations ?? 0} observations`;
+  const out = [el("dl", { class: "facts" }, ...lines.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]))];
+  if (signals.notice_provenance > 0) {
+    out.push(el("div", { class: "failure" }, `It emitted ${signals.notice_provenance} notice(s), which no emergent node may emit.`));
+  }
+  out.push(el("details", { open: state?.open, ontoggle: (e) => { if (state) state.open = e.target.open; } }, el("summary", {}, "All signals"),
+    el("dl", { class: "facts" }, ...signalNames.flatMap((k) => [el("dt", {}, k), el("dd", {}, signalValue(k, signals))]))));
+  return el("div", {}, ...out);
 }
 
 // The removal and the veto are explained together, because what the person
@@ -310,7 +431,9 @@ function renderLibrary() {
       ["Artifact", e.artifact_ref],
       ["Size", size(e.artifact_size)],
       ["Running with floor", e.active_floors.join(", ") || "—"],
-      ["Floor history", e.floor_history.map((h) => `${h.similarity_floor} (${h.trigger_reason}, ${new Date(h.archived_at).toLocaleDateString()})`).join(", ") || "—"],
+      ["Floor history", e.floor_history.length ? el("ul", { class: "history" }, ...e.floor_history.map((h) => el("li", {},
+        `${h.similarity_floor} (${h.trigger_reason}, ${new Date(h.archived_at).toLocaleDateString()})`,
+        h.snapshot ? el("details", {}, el("summary", {}, "Snapshot"), signalsView(h.snapshot)) : " · no snapshot"))) : "—"],
       ["Present in", e.present_in.join(", ") || "—"],
       ["Obtained", e.acquisition ? `${e.acquisition.provenance}, cost ${e.acquisition.cost}` : "—"],
     ];

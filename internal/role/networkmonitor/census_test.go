@@ -99,16 +99,66 @@ func TestCensus(t *testing.T) {
 	}
 }
 
-// The point form is not answered until El ciclo de vida: the role does not
-// propose on it (architecture §3.12.3).
-func TestPointFormUnanswered(t *testing.T) {
+// awaitClose waits for the close of taskID.
+func (f *fixture) awaitClose(taskID string) bus.Event {
+	f.T.Helper()
+	deadline := time.After(15 * time.Second)
+	for {
+		select {
+		case m := <-f.closes:
+			var e bus.Event
+			json.Unmarshal(m.Data, &e)
+			if e.Subject == taskID {
+				return e
+			}
+		case <-deadline:
+			f.T.Fatalf("%s did not close", taskID)
+		}
+	}
+}
+
+// The point form on a provisioned node closes with its vector in the close;
+// a node without observations has every signal that needs evidence absent
+// (architecture §3.12.2, §3.12.3, implementation §10.1).
+func TestPointForm(t *testing.T) {
 	f := newFixture(t)
-	proposals := f.Tap(bus.SubjectProposed(f.ID("network_monitor"), networkmonitor.Topic))
-	f.query(map[string]any{"node_id": "UA", "target_topic": "spare"})
-	select {
-	case <-proposals:
-		t.Fatal("the role proposed on the point form")
-	case <-time.After(2 * time.Second):
+	_, taskID := f.query(map[string]any{"node_id": "UA", "target_topic": "spare"})
+	e := f.awaitClose(taskID)
+	if e.Type != bus.TypeCompleted {
+		t.Fatalf("close %s %s", e.Type, e.Data)
+	}
+	var d struct {
+		NodeID      string                     `json:"node_id"`
+		TargetTopic string                     `json:"target_topic"`
+		Signals     map[string]json.RawMessage `json:"signals"`
+	}
+	json.Unmarshal(e.Data, &d)
+	if d.NodeID != "UA" || d.TargetTopic != "spare" || string(d.Signals["n_observations"]) != "0" {
+		t.Fatalf("close %s", e.Data)
+	}
+	if _, ok := d.Signals["score"]; ok {
+		t.Errorf("a node without observations carries a score: %s", e.Data)
+	}
+}
+
+// The point form is rejected on a structural node, which is not in the
+// roster, and with a target_topic other than the node's (architecture
+// §3.12.3, implementation §1.2.8).
+func TestPointFormRejected(t *testing.T) {
+	f := newFixture(t)
+	for _, c := range []struct{ name, node, topic string }{
+		{"structural", f.ID("config"), "config_change"},
+		{"other topic", "UA", "echo"},
+	} {
+		_, taskID := f.query(map[string]any{"node_id": c.node, "target_topic": c.topic})
+		e := f.awaitClose(taskID)
+		var d struct {
+			FailureCode string `json:"failure_code"`
+		}
+		json.Unmarshal(e.Data, &d)
+		if e.Type != bus.TypeFailed || d.FailureCode != "request_invalid" {
+			t.Errorf("%s: close %s %s", c.name, e.Type, e.Data)
+		}
 	}
 }
 

@@ -106,12 +106,28 @@ func TestSpawner(t *testing.T) {
 	z.retire(t, ctx, node, logic, ref, blueprint)
 }
 
-// Retirar y vetar: node remove archives a node with its containers and
-// volumes; node veto archives the other instance and keeps the artifact from
-// coming up until node unveto; node purge rejects a seeded artifact and one a
-// network runs, and deletes the image of one nobody runs.
+// Retirar y vetar: node metrics returns the vector of a provisioned node and
+// is refused on one outside the Active Node Registry; node remove archives a node with its
+// containers and volumes, and its floor-history row with the snapshot; node
+// veto archives the other instance and keeps the artifact from coming up
+// until node unveto; node purge rejects a seeded artifact and one a network
+// runs, and deletes the image of one nobody runs.
 func (z *network) retire(t *testing.T, ctx context.Context, node, logic, ref, blueprint string) {
 	t.Helper()
+	var point struct {
+		NodeID  string                     `json:"node_id"`
+		Signals map[string]json.RawMessage `json:"signals"`
+	}
+	z.query(t, ctx, &point, "node", "metrics", node)
+	if _, ok := point.Signals["n_observations"]; point.NodeID != node || !ok {
+		t.Errorf("node metrics on %s: %+v", node, point)
+	}
+	// A structural node is not in the Active Node Registry, so the console
+	// refuses it before any query.
+	if out := z.fail(t, ctx, credentials, "node", "metrics", "USTRUCTURAL"); !strings.Contains(out, "no such node") {
+		t.Errorf("node metrics on a node outside the registry: %s", out)
+	}
+
 	if out := z.run(t, ctx, credentials, "node", "remove", node); !strings.Contains(out, "archived nodes "+node) {
 		t.Errorf("node remove said: %s", out)
 	}
@@ -136,6 +152,13 @@ func (z *network) retire(t *testing.T, ctx context.Context, node, logic, ref, bl
 	z.query(t, ctx, &lib, "catalog", "list")
 	if e := lib.entry(ref); e == nil || e.State != "archived" || !e.VetoMark || len(e.FloorHistory) == 0 || len(e.ActiveFloors) != 0 {
 		t.Errorf("the vetoed echo in the library: %+v", e)
+	} else {
+		var row struct {
+			Snapshot map[string]json.RawMessage `json:"snapshot"`
+		}
+		if json.Unmarshal(e.FloorHistory[0], &row); row.Snapshot["n_observations"] == nil {
+			t.Errorf("the floor-history row without its snapshot: %s", e.FloorHistory[0])
+		}
 	}
 	z.run(t, ctx, credentials, "node", "unveto", ref)
 	if out := z.fail(t, ctx, credentials, "node", "purge", ref); !strings.Contains(out, "seeded") {
