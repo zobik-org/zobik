@@ -79,6 +79,64 @@
       "query_class": "current",
       "storage": "versioned"
     },
+    "agent_similarity_floor": {
+      "description": "The similarity between capability embeddings at or above which the Spawner counts two nodes as neighbors (architecture §2.3, §3.13.4).",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.85,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "max_concurrent_exploration": {
+      "description": "How many exploration candidates run at once in a partition at most (architecture §2.3, §3.13.4).",
+      "type": "integer",
+      "minimum": 0,
+      "default": 1,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "max_candidate_maturation": {
+      "description": "How many assignments on its topic a candidate can let pass without reaching min_observations before its trial expires (architecture §2.3, §3.13.5).",
+      "type": "integer",
+      "minimum": 1,
+      "default": 60,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "high_win_rate": {
+      "description": "The win_rate at or above which a low_usage widens the node's floor instead of archiving it (architecture §2.3, §3.13.4).",
+      "type": "number",
+      "exclusiveMinimum": 0.5,
+      "maximum": 1,
+      "default": 0.7,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "node_review_snooze": {
+      "description": "How many observations of the node a review closed with a candidate maturing snoozes it for (architecture §2.3, §3.13.5).",
+      "type": "integer",
+      "minimum": 1,
+      "default": 6,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "no_action_snooze": {
+      "description": "How much admission_clock the first review closed without replacement snoozes the node for, in milliseconds; it doubles on each successive one up to max_exploration_backoff (architecture §2.3, §3.13.5).",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "default": 86400000,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "max_exploration_backoff": {
+      "description": "The ceiling of no_action_snooze's doubling, in milliseconds (architecture §2.3, §3.13.5).",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "default": 2592000000,
+      "query_class": "current",
+      "storage": "versioned"
+    },
     "artifact_storage_pressure_share": {
       "description": "The fraction of the artifact storage capacity above which the Spawner stamps the storage-pressure key (architecture §2.3, §3.13.3).",
       "type": "number",

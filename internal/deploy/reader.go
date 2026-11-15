@@ -108,3 +108,20 @@ func (e *Engine) Census(ctx context.Context) ([]networkmonitor.Node, error) {
 	}
 	return out, nil
 }
+
+// WatchRegistry calls changed on each Logic Container created or destroyed: a
+// change to the Active Node Registry, read from the engine's /events through
+// docker_reader (implementation §1.2.8). It returns when ctx ends or the
+// stream breaks.
+func (e *Engine) WatchRegistry(ctx context.Context, changed func()) error {
+	f := client.Filters{}.Add("type", "container").Add("label", labelTopic).Add("event", "create", "destroy")
+	res := e.c.Events(ctx, client.EventsListOptions{Filters: f})
+	for {
+		select {
+		case <-res.Messages:
+			changed()
+		case err := <-res.Err:
+			return err
+		}
+	}
+}

@@ -91,7 +91,7 @@ func runCmd(ctx context.Context, args []string) error {
 				return err
 			}
 			defer e.Close()
-			return networkmonitor.Run(ctx, rt, nc, networkmonitor.Options{Fleet: e.Census, ContextAddr: role.AddrContext})
+			return networkmonitor.Run(ctx, rt, nc, networkmonitor.Options{Fleet: e.Census, Watch: e.WatchRegistry, ContextAddr: role.AddrContext})
 		}
 	case "config":
 		body = func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {

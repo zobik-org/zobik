@@ -132,12 +132,11 @@ var Roles = []Role{
 	// The Secret Store's resolver, with the store and its key in its volume
 	// (implementation §1.2.18). It uses the Bus only to read the configuration.
 	{Unit: unitSecrets, Scope: bus.SecretsScope, Args: []string{"--role=secrets"}},
-	// The Network Monitor claims the census of node_query, which it answers by
-	// reading the Active Node Registry through docker_reader (architecture
-	// §3.12.3, implementation §6). It does not observe the stream until El
-	// ciclo de vida.
+	// The Network Monitor observes the task, prop and notice families, reads the
+	// Active Node Registry through docker_reader, and claims node_query
+	// (architecture §3.12, implementation §1.2.8, §6).
 	{Unit: "network_monitor", Scope: bus.NetworkMonitorScope, Topic: networkmonitor.Topic,
-		Consumers: claimant(networkmonitor.Topic), ReadsEngine: true,
+		Consumers: networkmonitor.Consumers, ReadsEngine: true,
 		Args: []string{"--role=network_monitor"}, WaitsFor: []string{"config", unitDockerReader}},
 	// The Spawner claims the operator's requests on the fleet, and provisions on
 	// the container engine; zobik init adds its deployment parameters to Args
