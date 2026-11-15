@@ -438,7 +438,8 @@ func (s *spawner) instantiate(ctx context.Context, cat Catalog, a *claim.Assignm
 
 // upRequest is what brings up a node of an entry: the egress slots and the
 // proof of an operator's request, which a vacancy does not carry, and the
-// request itself, under which an eviction asks for its snapshots.
+// task the Spawner holds—the request or the vacant task—, under which an
+// eviction asks for its snapshots.
 type upRequest struct {
 	entry        catalog.Entry
 	associations map[string]string

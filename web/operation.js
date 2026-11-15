@@ -177,7 +177,8 @@ function onOutcome(o) {
   const d = o.details || {};
   if (t.metrics) {
     const m = metrics.get(t.metrics);
-    if (!m) return;
+    // A read the person closed or replaced since no longer shows.
+    if (!m || m.pending !== o.trace_id) return;
     m.pending = null;
     if (d.failure_code || d.failure_reason) {
       m.error = [d.failure_code, d.failure_reason].filter(Boolean).join(": ");
@@ -313,8 +314,9 @@ function toggleMetrics(n) {
     renderCensus();
     return;
   }
-  metrics.set(n.node_id, { signals: null, at: null, pending: "opening", error: "" });
-  if (!configView.at) loadConfig(); // min_observations, for what lacks evidence
+  metrics.set(n.node_id, { signals: null, at: null, pending: "opening", error: "", open: false });
+  // min_observations, for what lacks evidence.
+  if (!configView.at) loadConfig().then(renderCensus);
   readMetrics(n.node_id);
 }
 
@@ -345,7 +347,7 @@ function metricsView(n) {
   const head = el("div", { class: "meta" },
     m.pending ? "Reading…" : m.error ? "Not read: " + m.error : `Read at ${m.at.toLocaleTimeString()} `,
     m.pending ? null : el("button", { class: "link", onclick: () => readMetrics(n.node_id) }, "Read again"));
-  return el("div", { class: "metrics" }, head, m.signals ? signalsView(m.signals) : null);
+  return el("div", { class: "metrics" }, head, m.signals ? signalsView(m.signals, m) : null);
 }
 
 // The axes of architecture §3.12.2 the summary shows first, each with the
@@ -387,15 +389,16 @@ function signalValue(name, signals) {
 }
 
 // signalsView shows a signal vector: a node's live one or a floor-history
-// row's snapshot (architecture §3.12.2, §3.13.3).
-function signalsView(signals) {
+// row's snapshot (architecture §3.12.2, §3.13.3). state, if given, keeps
+// whether "All signals" is open across the census's renders.
+function signalsView(signals, state) {
   const lines = summaryAxes.map(([axis, names]) => [axis, names.map((k) => `${k} ${signalValue(k, signals)}`).join(" · ")]);
   lines[0][1] += ` · over ${signals.n_observations ?? 0} observations`;
   const out = [el("dl", { class: "facts" }, ...lines.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]))];
   if (signals.notice_provenance > 0) {
     out.push(el("div", { class: "failure" }, `It emitted ${signals.notice_provenance} notice(s), which no emergent node may emit.`));
   }
-  out.push(el("details", {}, el("summary", {}, "All signals"),
+  out.push(el("details", { open: state?.open, ontoggle: (e) => { if (state) state.open = e.target.open; } }, el("summary", {}, "All signals"),
     el("dl", { class: "facts" }, ...signalNames.flatMap((k) => [el("dt", {}, k), el("dd", {}, signalValue(k, signals))]))));
   return el("div", {}, ...out);
 }

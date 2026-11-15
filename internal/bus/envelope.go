@@ -116,6 +116,13 @@ func topicSchemas(typ, topic, kind string) []string {
 	return nil
 }
 
+// carriesSignals reports whether the data of typ on topic carries the signal
+// vector: the close of node_query and the announcement of node_review
+// (architecture §3.12.3, implementation §10.1).
+func carriesSignals(typ, topic string) bool {
+	return (typ == TypeCompleted && topic == "node_query") || (typ == TypeAnnounced && topic == "node_review")
+}
+
 // hitlPrefix is the prefix of the hitl_contact_<audience> family (architecture §3.5.3).
 const hitlPrefix = "hitl_contact_"
 
@@ -198,10 +205,10 @@ func (e *Event) ValidateTopic() error {
 	if err := json.Unmarshal(e.Data, &d); err != nil {
 		return fmt.Errorf("data: %w", err)
 	}
-	// The signal vector has a schema of its own, applied wherever it appears:
-	// the subset has no $ref (implementation §8.2, §10.1).
-	if d.Signals != nil {
-		if err := s["signals.schema.json"].ValidateJSON(d.Signals); err != nil {
+	// The signal vector has a schema of its own, applied in the payloads that
+	// carry it: the subset has no $ref (implementation §8.2, §10.1).
+	if d.Signals != nil && d.Topic != nil && carriesSignals(e.Type, *d.Topic) {
+		if err := s["signals.vector.schema.json"].ValidateJSON(d.Signals); err != nil {
 			return fmt.Errorf("data.signals: %w", err)
 		}
 	}

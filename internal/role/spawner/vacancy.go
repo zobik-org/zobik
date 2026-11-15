@@ -318,7 +318,7 @@ func (s *spawner) resolveVacancy(ctx context.Context, x act) error {
 	}()
 
 	for _, c := range candidates {
-		node, err := s.bringUp(ctx, cat, upRequest{entry: c.entry})
+		node, err := s.bringUp(ctx, cat, upRequest{entry: c.entry, request: a})
 		var r *Refusal
 		if errors.As(err, &r) {
 			switch r.Code {

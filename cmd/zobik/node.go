@@ -31,8 +31,11 @@ func nodeCmd(ctx context.Context, args []string) error {
 		return errors.New(usage)
 	}
 	kind := args[0]
-	if kind == "list" || kind == "metrics" {
-		return queryCmd(ctx, "node "+kind, console.TopicNodeQuery, args[1:])
+	switch kind {
+	case "list":
+		return queryCmd(ctx, "node list", console.TopicNodeQuery, false, args[1:])
+	case "metrics":
+		return queryCmd(ctx, "node metrics", console.TopicNodeQuery, true, args[1:])
 	}
 	switch kind {
 	case "provision", "remove", "veto", "unveto", "purge":

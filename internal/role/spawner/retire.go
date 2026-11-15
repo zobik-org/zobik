@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"zobik.org/zobik/internal/claim"
@@ -158,7 +159,7 @@ type floorRow struct {
 	TriggerReason string    `json:"trigger_reason"`
 	ModelID       string    `json:"model_id"`
 	ArchivedAt    time.Time `json:"archived_at"`
-	// Snapshot is the metrics snapshot, with the shape of signals.schema.json;
+	// Snapshot is the metrics snapshot, with the shape of signals.vector.schema.json;
 	// absent if the point query did not return it (implementation §10.1).
 	Snapshot json.RawMessage `json:"snapshot,omitempty"`
 }
@@ -170,15 +171,19 @@ func floorKey(digest string, floor float64) string {
 // archive archives nodes with reason as their trigger_reason, in the order of architecture
 // §3.13.3: it decommissions them and confirms it in the Active Node Registry,
 // and only then writes the floor history. Each node's snapshot is requested
-// before decommissioning it, as a subtask of request, the operator's request
-// being executed, or in a trace of its own if request is nil (implementation
-// §1.2.4). It removes the presence mark and the engine's image of each entry
+// before decommissioning it, as a subtask of request, the task the Spawner
+// holds; with none, the renewal's, it archives without the snapshot
+// (implementation §1.2.4). It removes the presence mark and the engine's image of each entry
 // no instance of which remains, and returns the archived node_ids.
 func (s *spawner) archive(ctx context.Context, cat Catalog, request *claim.Assignment, nodes []Running, reason string) ([]string, error) {
-	snapshots := map[string]json.RawMessage{}
-	for _, n := range nodes {
-		snapshots[n.NodeID] = s.snapshot(ctx, request, n)
+	// The queries go out together, so archiving several nodes waits for one
+	// snapshotWait and not for one per node.
+	snapshots := make([]json.RawMessage, len(nodes))
+	var asked sync.WaitGroup
+	for i, n := range nodes {
+		asked.Go(func() { snapshots[i] = s.snapshot(ctx, request, n) })
 	}
+	asked.Wait()
 	ids := []string{}
 	for _, n := range nodes {
 		if err := s.o.Driver.Decommission(ctx, n); err != nil {
@@ -198,8 +203,8 @@ func (s *spawner) archive(ctx context.Context, cat Catalog, request *claim.Assig
 
 	now := time.Now().UTC()
 	digests := map[string]bool{}
-	for _, n := range nodes {
-		row := floorRow{TriggerReason: reason, ModelID: n.ModelID, ArchivedAt: now, Snapshot: snapshots[n.NodeID]}
+	for i, n := range nodes {
+		row := floorRow{TriggerReason: reason, ModelID: n.ModelID, ArchivedAt: now, Snapshot: snapshots[i]}
 		if err := cat.PutRecord(ctx, s.o.Network, floorKey(n.ArtifactRef, n.SimilarityFloor), row, catalog.Write{}); err != nil {
 			return nil, err
 		}

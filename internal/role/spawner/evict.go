@@ -40,8 +40,8 @@ type storagePressure struct {
 // makeRoom evicts free nodes until the node p brings up fits in the fleet's
 // capacity: the free node of its partition with the oldest assignment first
 // (architecture §3.13.10). Without enough free nodes it evicts none and
-// refuses with capacity_exhausted. request is the operator's request being
-// executed, or nil in a vacancy.
+// refuses with capacity_exhausted. request is the task the Spawner holds:
+// the operator's request or the vacant task.
 func (s *spawner) makeRoom(ctx context.Context, cat Catalog, request *claim.Assignment, p Provisioning) error {
 	short, err := s.o.Driver.Shortfall(ctx, p)
 	if err != nil || short == 0 {

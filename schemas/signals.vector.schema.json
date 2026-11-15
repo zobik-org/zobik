@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://zobik.org/schemas/signals.schema.json",
-  "description": "The signal vector of a node (architecture §3.12.2, implementation §10.1): what the point form of node_query closes with and node_review announces with, in data.signals, and what a floor-history row stores as its snapshot (architecture §3.12.3, §3.13.3). The validator applies it to data.signals wherever it appears. A signal without enough evidence is omitted, and the reader takes it as not evaluable.",
+  "$id": "https://zobik.org/schemas/signals.vector.schema.json",
+  "description": "The signal vector of a node (architecture §3.12.2, implementation §10.1): what the point form of node_query closes with and node_review announces with, in data.signals, and what a floor-history row stores as its snapshot (architecture §3.12.3, §3.13.3). The validator applies it to data.signals in those payloads; its name has a dot, which no topic has, so no topic resolves to it. A signal without enough evidence is omitted, and the reader takes it as not evaluable.",
   "type": "object",
   "required": ["n_observations", "notice_provenance"],
   "properties": {

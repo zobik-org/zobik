@@ -20,7 +20,7 @@
       "minLength": 1
     },
     "signals": {
-      "description": "In the point form, the node's signal vector, with the shape of signals.schema.json, which the validator applies to it (architecture §3.12.2, implementation §10.1).",
+      "description": "In the point form, the node's signal vector, with the shape of signals.vector.schema.json, which the validator applies to it (architecture §3.12.2, implementation §10.1).",
       "type": "object",
       "properties": {}
     }

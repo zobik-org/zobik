@@ -2,8 +2,6 @@ package spawner
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"log"
 	"time"
@@ -25,34 +23,30 @@ const snapshotWait = 10 * time.Second
 // snapshot asks the Network Monitor for the node's signal vector through the
 // point form of node_query, before decommissioning it: the Network Monitor
 // lets go of a node when it leaves the roster (implementation §1.2.4). The
-// query is a subtask of the operator's request the Spawner executes, or the
-// root of a trace of its own when request is nil. It returns nil if the query
-// does not close with the vector within snapshotWait: the cheap half-failure
-// of architecture §3.13.3.
+// query is a subtask of request, the task the Spawner holds—the operator's
+// request or the vacant task—; without one there is no trace to ask in,
+// because the network does not open traces (architecture §3.5.1), and it
+// returns nil at once. It also returns nil if the query does not close with
+// the vector within snapshotWait: the cheap half-failure of architecture
+// §3.13.3.
 func (s *spawner) snapshot(ctx context.Context, request *claim.Assignment, n Running) json.RawMessage {
+	if request == nil {
+		return nil
+	}
 	taskID := uuid.NewString()
 	data := map[string]any{
 		"topic": TopicNodeQuery, "requester_identity": s.rt.ID,
 		"node_id": n.NodeID, "target_topic": n.Topic,
 	}
-	var traceParent, version string
-	if request != nil {
-		for k, v := range request.Inherited() {
-			data[k] = v
-		}
-		traceParent, version = request.ChildTraceParent(), request.Assigned.ConfigVersion
-	} else {
-		trace, span := make([]byte, 16), make([]byte, 8)
-		rand.Read(trace)
-		rand.Read(span)
-		traceParent, version = "00-"+hex.EncodeToString(trace)+"-"+hex.EncodeToString(span)+"-01", s.head.Load().ConfigVersion
+	for k, v := range request.Inherited() {
+		data[k] = v
 	}
 	e, err := bus.NewEvent(bus.TypeAnnounced, s.rt.ID, taskID, data)
 	if err != nil {
 		log.Printf("spawner: the snapshot of %s: %v", n.NodeID, err)
 		return nil
 	}
-	e.TraceParent, e.ConfigVersion = traceParent, version
+	e.TraceParent, e.ConfigVersion = request.ChildTraceParent(), request.Assigned.ConfigVersion
 	if err := e.ValidateTopic(); err != nil {
 		log.Printf("spawner: the snapshot of %s: %v", n.NodeID, err)
 		return nil
