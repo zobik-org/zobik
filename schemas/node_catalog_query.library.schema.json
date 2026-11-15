@@ -45,7 +45,7 @@
                 "trigger_reason": {"description": "That of the archiving: a value of node_review's, or one the Spawner archives with on its own (architecture §3.12.3, §3.13.8, §3.13.10).", "type": "string"},
                 "model_id": {"description": "The vector space in which the floor makes sense.", "type": "string"},
                 "archived_at": {"type": "string", "format": "date-time"},
-                "snapshot": {"description": "The metrics snapshot of the archiving: the signal vector of architecture §3.12.2. Absent if the row has none.", "type": "object", "properties": {}}
+                "snapshot": {"description": "The metrics snapshot of the archiving: the signal vector of architecture §3.12.2, with the shape of signals.schema.json (implementation §10.1). Absent if the row has none.", "type": "object", "properties": {}}
               }
             }
           },

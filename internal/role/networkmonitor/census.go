@@ -3,6 +3,7 @@ package networkmonitor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"slices"
 	"strings"
@@ -50,8 +51,9 @@ func pointForm(e *bus.Event) bool {
 	return d.NodeID != ""
 }
 
-// answer reads the fleet, writes the census to the Context Store and closes
-// the query (architecture §3.12.3). A failure of the Bus, of the Context Store
+// answer closes the query (architecture §3.12.3): the census, written to the
+// Context Store from the fleet, or the point form, with the node's signals in
+// the close. A failure of the Bus, of the Context Store
 // or of the engine leaves the query without closing: the lease expires and it
 // comes back with its re-announcement.
 func (m *monitor) answer(ctx context.Context, a *claim.Assignment) {
@@ -68,9 +70,25 @@ func (m *monitor) answer(ctx context.Context, a *claim.Assignment) {
 		}
 		return
 	}
-	ref, err := m.census(opCtx, a)
+	var data map[string]any
+	var err error
+	if pointForm(a.Announcement) {
+		data, err = m.point(opCtx, a)
+	} else {
+		var ref map[string]any
+		if ref, err = m.census(opCtx, a); err == nil {
+			data = map[string]any{"context_ref": ref}
+		}
+	}
+	var r *rejection
+	if errors.As(err, &r) {
+		if err := m.claimant.Fail(opCtx, a, codeRequestInvalid, r.reason); err != nil {
+			log.Printf("network_monitor: closing %s: %v", a.TaskID, err)
+		}
+		return
+	}
 	if err == nil {
-		err = m.claimant.Complete(opCtx, a, map[string]any{"context_ref": ref})
+		err = m.claimant.Complete(opCtx, a, data)
 	}
 	if err != nil {
 		log.Printf("network_monitor: %s left to its re-announcement: %v", a.TaskID, err)

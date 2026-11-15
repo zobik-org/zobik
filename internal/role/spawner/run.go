@@ -76,6 +76,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 		niches:    map[string]niche{},
 		audiences: map[string]bool{},
 		sweep:     make(chan struct{}, 1),
+		queries:   map[string]chan *bus.Event{},
 	}
 	for _, topic := range []string{TopicProvision, TopicRetire, TopicCatalogQuery, TopicTopicQuery} {
 		s.claimants[topic] = claim.New(rt.ID, rt.Credential, js, nc, topic)
@@ -140,6 +141,9 @@ type spawner struct {
 	audiences map[string]bool
 	// sweep asks for the regeneration of every stale vector (architecture §3.13.7).
 	sweep chan struct{}
+	// queries are the queries it opened whose close it waits for, by TaskID.
+	qmu     sync.Mutex
+	queries map[string]chan *bus.Event
 }
 
 // leaseTTL is task_lease_ttl.
@@ -231,6 +235,7 @@ func (s *spawner) handle(ctx context.Context, m jetstream.Msg) {
 		s.vacancyAssigned(&e)
 	case bus.TypeCompleted, bus.TypeFailed, bus.TypeAborted:
 		s.obs.closed(&e)
+		s.queryClosed(&e)
 	}
 	m.Ack()
 }
@@ -427,16 +432,19 @@ func (s *spawner) instantiate(ctx context.Context, cat Catalog, a *claim.Assignm
 	}
 	return s.bringUp(ctx, cat, upRequest{
 		entry: *entry, associations: associations, proof: req.OperatorProof, grants: proof.ProvisionGrants,
+		request: a,
 	})
 }
 
 // upRequest is what brings up a node of an entry: the egress slots and the
-// proof of an operator's request, which a vacancy does not carry.
+// proof of an operator's request, which a vacancy does not carry, and the
+// request itself, under which an eviction asks for its snapshots.
 type upRequest struct {
 	entry        catalog.Entry
 	associations map[string]string
 	proof        string
 	grants       []signing.Association
+	request      *claim.Assignment
 }
 
 // bringUp provisions a node of the entry, after the validation of whoever
@@ -475,7 +483,7 @@ func (s *spawner) bringUp(ctx context.Context, cat Catalog, r upRequest) (*Node,
 		Proof: r.proof, ProvisionGrants: r.grants, MemoryMB: memory.MemoryRequired,
 		Floor: floor,
 	}
-	if err := s.makeRoom(ctx, cat, p); err != nil {
+	if err := s.makeRoom(ctx, cat, r.request, p); err != nil {
 		return nil, err
 	}
 	node, err := s.provisionRetrying(ctx, p)

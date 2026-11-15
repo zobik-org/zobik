@@ -31,7 +31,8 @@ func topicCmd(ctx context.Context, args []string) error {
 
 // queryCmd opens a query on the park as a client of the console, waits for
 // its close and prints its answer as JSON: the portion of one answered by
-// Claim-Check, or the data of the close (architecture §3.17.1).
+// Claim-Check, or the data of the close (architecture §3.17.1). A node_query
+// that names a node, the only argument of node metrics, is its point form.
 func queryCmd(ctx context.Context, name, topic string, args []string) error {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	var n networkFlags
@@ -39,7 +40,11 @@ func queryCmd(ctx context.Context, name, topic string, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
+	point := name == "node metrics"
+	switch {
+	case point && fs.NArg() != 1:
+		return errors.New("usage: zobik node metrics <node_id>")
+	case !point && fs.NArg() != 0:
 		return fmt.Errorf("usage: zobik %s", name)
 	}
 	if err := n.resolve(); err != nil {
@@ -57,7 +62,12 @@ func queryCmd(ctx context.Context, name, topic string, args []string) error {
 	if err != nil {
 		return err
 	}
-	opened, err := c.Query(ctx, topic)
+	var opened *console.Opened
+	if point {
+		opened, err = c.NodeMetrics(ctx, fs.Arg(0))
+	} else {
+		opened, err = c.Query(ctx, topic)
+	}
 	if err != nil {
 		return err
 	}

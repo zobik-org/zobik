@@ -78,8 +78,9 @@ type monitor struct {
 }
 
 // Run is the network_monitor role: it observes the Bus and measures each node
-// of the roster (architecture §3.12.1, §3.12.2), and answers the census of
-// node_query from the Active Node Registry (architecture §3.12.3). It is ready
+// of the roster (architecture §3.12.1, §3.12.2), and answers node_query: the
+// census from the Active Node Registry, the point form from its aggregate
+// (architecture §3.12.3). It is ready
 // once it reads the Global Configuration and its history, binds its consumers,
 // loads its aggregate and reads the roster.
 func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error {
@@ -318,14 +319,11 @@ func (m *monitor) put(ctx context.Context, key string, v any) error {
 
 // claim takes part in the cycle of node_query: it proposes on each census
 // announcement, by auction without similarity (architecture §3.7.6, §3.12.3),
-// and answers what it is awarded. Until the point form is answered, the role
-// does not propose on it, and it expires.
+// and on each point one, whose target_topic its single instance owns
+// (implementation thesis 3), and answers what it is awarded.
 func (m *monitor) claim(ctx context.Context, e *bus.Event, subject string) error {
 	switch {
 	case e.Type == bus.TypeAnnounced && subject == bus.SubjectAnnounced(Topic):
-		if pointForm(e) {
-			return nil
-		}
 		opCtx, cancel := context.WithTimeout(ctx, opTimeout)
 		defer cancel()
 		return m.claimant.Propose(opCtx, e, nil)

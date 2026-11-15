@@ -60,7 +60,8 @@ func (f *fixture) provisioned() string {
 }
 
 // remove archives the node in the order of architecture §3.13.3: the node
-// leaves the fleet, the floor history gets its row with operator_removal, and
+// leaves the fleet, the floor history gets its row with operator_removal and
+// the snapshot the point query returned before the decommissioning, and
 // without another instance the presence mark and the engine's image go.
 func TestRemove(t *testing.T) {
 	f := newFixture(t, time.Hour, false)
@@ -71,11 +72,15 @@ func TestRemove(t *testing.T) {
 		t.Fatalf("%s %v", typ, data)
 	}
 	var row struct {
-		TriggerReason string `json:"trigger_reason"`
-		ModelID       string `json:"model_id"`
+		TriggerReason string                     `json:"trigger_reason"`
+		ModelID       string                     `json:"model_id"`
+		Snapshot      map[string]json.RawMessage `json:"snapshot"`
 	}
 	if _, ok, _ := f.cat.Record(f.Ctx, network, "floor:"+echo+":0.5", &row); !ok || row.TriggerReason != "operator_removal" || row.ModelID != f.driver.modelID {
 		t.Errorf("floor row %v %+v", ok, row)
+	}
+	if string(row.Snapshot["n_observations"]) != "0" {
+		t.Errorf("the floor row's snapshot: %v", row.Snapshot)
 	}
 	if !f.cat.has("presence:" + echo) {
 		t.Error("the presence mark went with an instance still running")

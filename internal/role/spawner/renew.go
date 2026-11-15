@@ -141,7 +141,7 @@ func (s *spawner) archiveDeleted(ctx context.Context, cat Catalog, fleet []Runni
 	defer s.fleet.Unlock()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), archiveTimeout)
 	defer cancel()
-	if ids, err := s.archive(ctx, cat, deleted, TriggerOperatorRemoval); err != nil {
+	if ids, err := s.archive(ctx, cat, nil, deleted, TriggerOperatorRemoval); err != nil {
 		log.Printf("spawner: renewal: archiving what is being deleted: %v", err)
 	} else {
 		log.Printf("spawner: renewal: archived %v, whose image was deleted", ids)

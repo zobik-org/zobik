@@ -1,11 +1,26 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zobik.org/schemas/node_query.completed.schema.json",
-  "description": "The data of the task.completed with which the Network Monitor closes a node_query (architecture §3.12.3, implementation §10.1). The census travels by Claim-Check in context_ref, with the shape of node_query.census.schema.json. The common fields are in data.schema.json.",
+  "description": "The data of the task.completed with which the Network Monitor closes a node_query (architecture §3.12.3, implementation §10.1). The census travels by Claim-Check in context_ref, with the shape of node_query.census.schema.json; the point form carries the node's signals in the close itself. The common fields are in data.schema.json.",
   "type": "object",
   "properties": {
     "context_ref": {
       "description": "In the census, where the listing is in the Context Store: the portion census of the query task's section. Its fields are those of data.schema.json.",
+      "type": "object",
+      "properties": {}
+    },
+    "node_id": {
+      "description": "In the point form, the node the signals are of (architecture §3.12.3).",
+      "type": "string",
+      "minLength": 1
+    },
+    "target_topic": {
+      "description": "In the point form, the topic of the node's specialty (architecture §3.12.3).",
+      "type": "string",
+      "minLength": 1
+    },
+    "signals": {
+      "description": "In the point form, the node's signal vector, with the shape of signals.schema.json, which the validator applies to it (architecture §3.12.2, implementation §10.1).",
       "type": "object",
       "properties": {}
     }

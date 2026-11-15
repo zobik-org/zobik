@@ -71,7 +71,7 @@ func (s *spawner) retire(ctx context.Context, cat Catalog, a *claim.Assignment) 
 		if fleet[i].Topic != req.TargetTopic {
 			return nil, Refuse(CodeRequestInvalid, "the node's topic is %s, not %s", fleet[i].Topic, req.TargetTopic)
 		}
-		ids, err := s.archive(ctx, cat, fleet[i:i+1], TriggerOperatorRemoval)
+		ids, err := s.archive(ctx, cat, a, fleet[i:i+1], TriggerOperatorRemoval)
 		return map[string]any{"node_ids": ids}, err
 	}
 
@@ -96,7 +96,7 @@ func (s *spawner) retire(ctx context.Context, cat Catalog, a *claim.Assignment) 
 		if err != nil {
 			return nil, err
 		}
-		ids, err := s.archive(ctx, cat, running(fleet, digest), TriggerOperatorRemoval)
+		ids, err := s.archive(ctx, cat, a, running(fleet, digest), TriggerOperatorRemoval)
 		return map[string]any{"node_ids": ids}, err
 	case KindUnveto:
 		rev, ok, err := cat.Record(ctx, s.o.Network, vetoPrefix+digest, nil)
@@ -153,14 +153,13 @@ func (s *spawner) purge(ctx context.Context, cat Catalog, digest string) error {
 }
 
 // floorRow is a row of the floor history (architecture §3.13.3), keyed by the
-// entry and the floor. It carries no snapshot until the point form of
-// node_query exists: the cheap half-failure of archiving.
+// entry and the floor.
 type floorRow struct {
 	TriggerReason string    `json:"trigger_reason"`
 	ModelID       string    `json:"model_id"`
 	ArchivedAt    time.Time `json:"archived_at"`
-	// Snapshot is the metrics snapshot, which no archiving writes until the
-	// point form of node_query.
+	// Snapshot is the metrics snapshot, with the shape of signals.schema.json;
+	// absent if the point query did not return it (implementation §10.1).
 	Snapshot json.RawMessage `json:"snapshot,omitempty"`
 }
 
@@ -170,10 +169,16 @@ func floorKey(digest string, floor float64) string {
 
 // archive archives nodes with reason as their trigger_reason, in the order of architecture
 // §3.13.3: it decommissions them and confirms it in the Active Node Registry,
-// and only then writes the floor history. It removes the presence mark and the
-// engine's image of each entry no instance of which remains, and returns the
-// archived node_ids.
-func (s *spawner) archive(ctx context.Context, cat Catalog, nodes []Running, reason string) ([]string, error) {
+// and only then writes the floor history. Each node's snapshot is requested
+// before decommissioning it, as a subtask of request, the operator's request
+// being executed, or in a trace of its own if request is nil (implementation
+// §1.2.4). It removes the presence mark and the engine's image of each entry
+// no instance of which remains, and returns the archived node_ids.
+func (s *spawner) archive(ctx context.Context, cat Catalog, request *claim.Assignment, nodes []Running, reason string) ([]string, error) {
+	snapshots := map[string]json.RawMessage{}
+	for _, n := range nodes {
+		snapshots[n.NodeID] = s.snapshot(ctx, request, n)
+	}
 	ids := []string{}
 	for _, n := range nodes {
 		if err := s.o.Driver.Decommission(ctx, n); err != nil {
@@ -194,7 +199,7 @@ func (s *spawner) archive(ctx context.Context, cat Catalog, nodes []Running, rea
 	now := time.Now().UTC()
 	digests := map[string]bool{}
 	for _, n := range nodes {
-		row := floorRow{TriggerReason: reason, ModelID: n.ModelID, ArchivedAt: now}
+		row := floorRow{TriggerReason: reason, ModelID: n.ModelID, ArchivedAt: now, Snapshot: snapshots[n.NodeID]}
 		if err := cat.PutRecord(ctx, s.o.Network, floorKey(n.ArtifactRef, n.SimilarityFloor), row, catalog.Write{}); err != nil {
 			return nil, err
 		}

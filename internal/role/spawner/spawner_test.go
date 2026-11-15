@@ -20,6 +20,7 @@ import (
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role"
 	"zobik.org/zobik/internal/role/catalog"
+	"zobik.org/zobik/internal/role/networkmonitor"
 	"zobik.org/zobik/internal/role/spawner"
 	"zobik.org/zobik/internal/role/taskbroker"
 	"zobik.org/zobik/internal/signing"
@@ -388,6 +389,21 @@ func newFixture(t *testing.T, lifetime time.Duration, noCatalog bool, edits ...f
 				}
 				return f.cat, nil
 			},
+		})
+	})
+	// The Network Monitor answers the point query of the snapshot archiving
+	// asks for (implementation §1.2.4).
+	n.Start("network_monitor", func(ctx context.Context, rt *role.Runtime, nc *nats.Conn) error {
+		return networkmonitor.Run(ctx, rt, nc, networkmonitor.Options{
+			Fleet: func(ctx context.Context) ([]networkmonitor.Node, error) {
+				fleet, _ := f.driver.Fleet(ctx)
+				nodes := make([]networkmonitor.Node, 0, len(fleet))
+				for _, r := range fleet {
+					nodes = append(nodes, networkmonitor.Node{NodeID: r.NodeID, Topic: r.Topic, ArtifactRef: r.ArtifactRef, ModelID: r.ModelID})
+				}
+				return nodes, nil
+			},
+			ContextAddr: n.ContextAddr,
 		})
 	})
 	n.Start("task_broker", taskbroker.Run)

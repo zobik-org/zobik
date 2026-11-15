@@ -191,11 +191,19 @@ func (e *Event) ValidateTopic() error {
 		return err
 	}
 	var d struct {
-		Topic *string `json:"topic"`
-		Kind  string  `json:"kind"`
+		Topic   *string         `json:"topic"`
+		Kind    string          `json:"kind"`
+		Signals json.RawMessage `json:"signals"`
 	}
 	if err := json.Unmarshal(e.Data, &d); err != nil {
 		return fmt.Errorf("data: %w", err)
+	}
+	// The signal vector has a schema of its own, applied wherever it appears:
+	// the subset has no $ref (implementation §8.2, §10.1).
+	if d.Signals != nil {
+		if err := s["signals.schema.json"].ValidateJSON(d.Signals); err != nil {
+			return fmt.Errorf("data.signals: %w", err)
+		}
 	}
 	if d.Topic == nil {
 		return nil
