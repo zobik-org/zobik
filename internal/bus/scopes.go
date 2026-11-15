@@ -9,7 +9,9 @@ const (
 	BucketConfig = "config"
 	BucketTasks  = "tasks"
 	// BucketRates holds the rate tables, one key per rate_source (implementation §8.5).
-	BucketRates   = "rates"
+	BucketRates = "rates"
+	// BucketMonitor holds the Network Monitor's working aggregate (implementation §1.2.8).
+	BucketMonitor = "network_monitor"
 	StreamHistory = "config_history"
 	// SubjectHistory prefixes each published version: config.history.<config_version>.
 	SubjectHistory = "config.history"
@@ -175,11 +177,18 @@ var TracingCollectorScope = Scope{
 	Subscribe: inboxSub,
 }
 
-// NetworkMonitorScope is the Network Monitor's: it claims and closes node_query
-// (architecture §3.12.3).
+// NetworkMonitorScope is the Network Monitor's: it observes the task, prop and
+// notice families, keeps its aggregate in its bucket, and claims and closes
+// node_query (architecture §3.12.1, §3.12.3, implementation §1.2.8).
 var NetworkMonitorScope = Scope{
-	Role:      "network_monitor",
-	Publish:   join(consumerPub, configRead, participant),
+	Role: "network_monitor",
+	Publish: join(consumerPub, configRead, participant, []string{
+		"$KV." + BucketMonitor + ".>",
+		"$JS.API.STREAM.INFO.KV_" + BucketMonitor,
+		"$JS.API.DIRECT.GET.KV_" + BucketMonitor + ".>",
+		"$JS.API.CONSUMER.CREATE.KV_" + BucketMonitor + ".>",
+		"$JS.API.CONSUMER.DELETE.KV_" + BucketMonitor + ".>",
+	}),
 	Subscribe: inboxSub,
 }
 

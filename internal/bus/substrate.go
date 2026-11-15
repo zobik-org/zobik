@@ -116,7 +116,8 @@ var historyStream = jetstream.StreamConfig{
 }
 
 // EnsureBuckets creates the Config Store's head and history, the rates bucket,
-// empty, and the Task Broker's bucket (implementation §1.2.5, §1.2.7, §8.5). The task bucket's lifetime
+// empty, the Network Monitor's bucket and the Task Broker's (implementation
+// §1.2.5, §1.2.7, §1.2.8, §8.5). The task bucket's lifetime
 // starts at tasksTTL; from then on the Task Broker adjusts it, so an existing
 // bucket is left as it is.
 func EnsureBuckets(ctx context.Context, js jetstream.JetStream, tasksTTL time.Duration) error {
@@ -137,6 +138,15 @@ func EnsureBuckets(ctx context.Context, js jetstream.JetStream, tasksTTL time.Du
 		Storage: jetstream.FileStorage,
 	}); err != nil {
 		return fmt.Errorf("bus: bucket %s: %w", BucketRates, err)
+	}
+	// The Network Monitor's bucket has no TTL: the role trims each window by
+	// evidence_staleness when reading it (implementation §1.2.8).
+	if _, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:  BucketMonitor,
+		History: 1,
+		Storage: jetstream.FileStorage,
+	}); err != nil {
+		return fmt.Errorf("bus: bucket %s: %w", BucketMonitor, err)
 	}
 	_, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
 		Bucket:  BucketTasks,

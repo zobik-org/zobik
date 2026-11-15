@@ -6,19 +6,11 @@ import (
 	"log"
 	"slices"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
-
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
-	"google.golang.org/grpc"
 
 	"zobik.org/zobik/internal/bus"
 	"zobik.org/zobik/internal/claim"
 	"zobik.org/zobik/internal/globalconfig"
-	"zobik.org/zobik/internal/role"
-	contextv1 "zobik.org/zobik/proto/zobik/context/v1"
 )
 
 // Topic is the fixed-convention topic the Network Monitor claims (architecture §3.12.3).
@@ -47,92 +39,6 @@ type Node struct {
 	EgressGrants    json.RawMessage `json:"egress_grants"`
 	IngressGrants   json.RawMessage `json:"ingress_grants"`
 	MemoryRequired  int64           `json:"memory_required"`
-}
-
-// Options are what the role reaches besides the Bus.
-type Options struct {
-	// Fleet reads the Active Node Registry through docker_reader
-	// (implementation §1.2.14).
-	Fleet func(ctx context.Context) ([]Node, error)
-	// ContextAddr is the Context Store's address, where it writes the census.
-	ContextAddr string
-}
-
-// Run is the network_monitor role. Until El ciclo de vida it is only the
-// claimant of the census form of node_query, answered by reading the Active
-// Node Registry: it neither observes the stream nor keeps an aggregate, so it
-// does not propose on the point form, which expires (architecture §3.12.3).
-// It is ready once it reads the Global Configuration and binds its consumer.
-func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error {
-	js, err := jetstream.New(nc)
-	if err != nil {
-		return err
-	}
-	l := rt.MainLoop()
-	head, err := role.AwaitHead(ctx, l, js)
-	if err != nil {
-		return err
-	}
-	consumer, err := role.AwaitConsumer(ctx, l, js, rt, "task")
-	if err != nil {
-		return err
-	}
-	conn, err := grpc.NewClient(o.ContextAddr, grpc.WithTransportCredentials(rt.RPCCredentials()))
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	m := &monitor{
-		id: rt.ID, js: js, o: o,
-		claimant: claim.New(rt.ID, rt.Credential, js, nc, Topic),
-		context:  contextv1.NewContextStoreClient(conn),
-	}
-	m.leaseTTL.Store(int64(head.Duration("task_lease_ttl")))
-	defer m.answering.Wait()
-	rt.SetReady(true)
-	role.Consume(ctx, l, consumer, func(msg jetstream.Msg) { m.handle(ctx, msg) })
-	return nil
-}
-
-type monitor struct {
-	id       string
-	js       jetstream.JetStream
-	o        Options
-	claimant *claim.Claimant
-	context  contextv1.ContextStoreClient
-	// leaseTTL is task_lease_ttl as of the last head read, in nanoseconds.
-	leaseTTL  atomic.Int64
-	answering sync.WaitGroup
-}
-
-// handle proposes on each census announcement, by auction without similarity
-// (architecture §3.7.6, §3.12.3), and answers what it is awarded.
-func (m *monitor) handle(ctx context.Context, msg jetstream.Msg) {
-	var e bus.Event
-	if err := json.Unmarshal(msg.Data(), &e); err != nil || e.Validate() != nil || e.Subject == "" {
-		msg.Ack()
-		return
-	}
-	switch {
-	case e.Type == bus.TypeAnnounced && msg.Subject() == bus.SubjectAnnounced(Topic):
-		if pointForm(&e) {
-			break
-		}
-		opCtx, cancel := context.WithTimeout(ctx, opTimeout)
-		defer cancel()
-		if err := m.claimant.Propose(opCtx, &e, nil); err != nil {
-			log.Printf("network_monitor: proposing on %s: %v", e.Subject, err)
-			msg.NakWithDelay(time.Second)
-			return
-		}
-	case e.Type == bus.TypeRejected:
-		m.claimant.Rejected(&e)
-	case e.Type == bus.TypeAssigned:
-		if a, ok := m.claimant.Assigned(&e); ok {
-			m.answering.Go(func() { m.answer(ctx, a) })
-		}
-	}
-	msg.Ack()
 }
 
 // pointForm reports whether the query names a node.

@@ -1,0 +1,157 @@
+{
+  "description": "The Global Configuration keys the Network Monitor reads (architecture §2.3, implementation §1.2.5, §5). Durations are integers in milliseconds.",
+  "properties": {
+    "quality_window": {
+      "description": "How many of the node's last closes, among those within evidence_staleness, its quality and cost signals are computed over (architecture §3.12.1).",
+      "type": "integer",
+      "minimum": 1,
+      "default": 30,
+      "query_class": "current",
+      "storage": "versioned",
+      "preconditions": [
+        {"rule": "config.min_observations <= config.quality_window", "message": "min_observations cannot exceed quality_window (architecture §2.3)"},
+        {"rule": "double(config.min_observations) <= config.outer_share * double(config.quality_window)", "message": "min_observations cannot exceed outer_share · quality_window (architecture §2.3)"}
+      ]
+    },
+    "min_observations": {
+      "description": "How many observations a signal needs before it is actionable (architecture §3.12.1).",
+      "type": "integer",
+      "minimum": 1,
+      "default": 6,
+      "query_class": "current",
+      "storage": "versioned",
+      "preconditions": [
+        {"rule": "config.min_observations <= config.quality_window", "message": "min_observations cannot exceed quality_window (architecture §2.3)"},
+        {"rule": "double(config.min_observations) <= config.outer_share * double(config.quality_window)", "message": "min_observations cannot exceed outer_share · quality_window (architecture §2.3)"}
+      ]
+    },
+    "evidence_staleness": {
+      "description": "How old, in wall-clock time, an observation can be and still enter a window, in milliseconds (architecture §3.12.1).",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "default": 2592000000,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "grace_period": {
+      "description": "How much admission_clock passes after a task.completed before it is classified clean, in milliseconds (architecture §3.12.1).",
+      "type": "integer",
+      "minimum": 0,
+      "default": 90000000,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "score_floor": {
+      "description": "The quality constraint of the network's objective function: score ≥ score_floor (architecture §3.12.2).",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.5,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "outer_share": {
+      "description": "The fraction of the quality_window tasks, those with the lowest similarity to the node, that forms the outer group of the radial axis (architecture §3.12.2).",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 0.5,
+      "default": 0.25,
+      "query_class": "current",
+      "storage": "versioned",
+      "preconditions": [
+        {"rule": "double(config.min_observations) <= config.outer_share * double(config.quality_window)", "message": "min_observations cannot exceed outer_share · quality_window (architecture §2.3)"}
+      ]
+    },
+    "usage_window": {
+      "description": "How many of the last assignments granted on the node's topic the usage signals are computed over (architecture §3.12.2).",
+      "type": "integer",
+      "minimum": 1,
+      "default": 20,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "review_emission_rate": {
+      "description": "How many node_review an instance emits per hour at most in its partition (architecture §3.12.1).",
+      "type": "integer",
+      "minimum": 1,
+      "default": 12,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "exploration_share": {
+      "description": "The fraction of review_emission_rate reserved for routine reviews (architecture §3.12.1).",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.25,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "w1": {
+      "description": "The weight of reopen_rate in the score: score = 1 − clamp(w1·reopen_rate, 0, 1) (implementation §5.1).",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "default": 5,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "max_idle_share": {
+      "description": "The idle_share above which low_usage triggers (implementation §5.4).",
+      "type": "number",
+      "minimum": 0.5,
+      "exclusiveMaximum": 1,
+      "default": 0.8,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "no_demand_retention": {
+      "description": "How much admission_clock passes without an assignment on a topic before no_demand triggers on its nodes, in milliseconds (implementation §5.5).",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "default": 604800000,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "cost_drift_threshold": {
+      "description": "By how much the cost_own_p50 of the current window exceeds that of the previous one when high_cost triggers (implementation §5.2).",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "default": 0.3,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "duration_drift_threshold": {
+      "description": "By how much the duration_p50 of the current window exceeds that of the previous one when high_latency triggers (implementation §5.2).",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "default": 0.5,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "outer_reopen_threshold": {
+      "description": "By how much reopen_rate_outer exceeds reopen_rate_inner when outer_gradient triggers (implementation §5.3).",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "default": 0.05,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "outer_cost_threshold": {
+      "description": "By how much cost_own_p50_outer exceeds cost_own_p50_inner, as a ratio, when outer_gradient triggers (implementation §5.3).",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "default": 0.5,
+      "query_class": "current",
+      "storage": "versioned"
+    },
+    "outer_duration_threshold": {
+      "description": "By how much duration_p50_outer exceeds duration_p50_inner, as a ratio, when outer_gradient triggers (implementation §5.3).",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "default": 0.5,
+      "query_class": "current",
+      "storage": "versioned"
+    }
+  }
+}

@@ -12,6 +12,7 @@ import (
 	"zobik.org/zobik/internal/globalconfig"
 	"zobik.org/zobik/internal/role/channel"
 	"zobik.org/zobik/internal/role/contextstore"
+	"zobik.org/zobik/internal/role/networkmonitor"
 	"zobik.org/zobik/internal/role/spawner"
 	"zobik.org/zobik/internal/role/taskbroker"
 	"zobik.org/zobik/internal/sidecar"
@@ -25,6 +26,7 @@ var Fragments = [][]byte{
 	contextstore.ConfigSchema,
 	channel.ConfigSchema,
 	spawner.ConfigSchema,
+	networkmonitor.ConfigSchema,
 	sidecar.ConfigSchema,
 }
 
