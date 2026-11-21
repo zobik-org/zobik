@@ -50,8 +50,13 @@ const (
 
 // state is the aggregate the role keeps in memory and in its bucket.
 type state struct {
-	nodes map[string]*Aggregate
-	marks map[string]mark
+	// self is the role's identity: the requester of its reviews.
+	self    string
+	nodes   map[string]*Aggregate
+	marks   map[string]mark
+	reviews map[string]*Review
+	// emissions are the reviews emitted in the last hour (implementation §5.7).
+	emissions []emission
 }
 
 type monitor struct {
@@ -68,7 +73,10 @@ type monitor struct {
 	mu     sync.Mutex
 	st     state
 	params Params
-	clock  admission
+	// version is the head's config_version, which each review's trace pins
+	// (architecture §3.5.1).
+	version string
+	clock   admission
 	// read is, per family, the server's time before which every stored event
 	// has been applied.
 	read map[string]time.Time
@@ -78,9 +86,10 @@ type monitor struct {
 }
 
 // Run is the network_monitor role: it observes the Bus and measures each node
-// of the roster (architecture §3.12.1, §3.12.2), and answers node_query: the
-// census from the Active Node Registry, the point form from its aggregate
-// (architecture §3.12.3). It is ready
+// of the roster (architecture §3.12.1, §3.12.2), emits node_review through its
+// emission queue (architecture §3.12.3, implementation §5), and answers
+// node_query: the census from the Active Node Registry, the point form from
+// its aggregate (architecture §3.12.3). It is ready
 // once it reads the Global Configuration and its history, binds its consumers,
 // loads its aggregate and reads the roster.
 func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error {
@@ -109,6 +118,7 @@ func Run(ctx context.Context, rt *role.Runtime, nc *nats.Conn, o Options) error 
 		claimant: claim.New(rt.ID, rt.Credential, js, nc, Topic),
 		context:  contextv1.NewContextStoreClient(conn),
 		params:   ReadParams(head),
+		version:  head.ConfigVersion,
 		read:     map[string]time.Time{},
 		resets:   map[string]bool{},
 	}
@@ -156,7 +166,7 @@ func (m *monitor) load(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	st := state{nodes: map[string]*Aggregate{}, marks: map[string]mark{}}
+	st := state{self: m.id, nodes: map[string]*Aggregate{}, marks: map[string]mark{}, reviews: map[string]*Review{}}
 	lister, err := kv.ListKeys(ctx)
 	if err != nil {
 		return err
@@ -192,6 +202,16 @@ func (m *monitor) load(ctx context.Context) error {
 				return fmt.Errorf("%s: %w", k, err)
 			}
 			st.marks[strings.TrimPrefix(k, keyStream)] = mk
+		case strings.HasPrefix(k, keyReview):
+			var r Review
+			if err := json.Unmarshal(e.Value(), &r); err != nil {
+				return fmt.Errorf("%s: %w", k, err)
+			}
+			st.reviews[r.TaskID] = &r
+		case k == keyEmissions:
+			if err := json.Unmarshal(e.Value(), &st.emissions); err != nil {
+				return fmt.Errorf("%s: %w", k, err)
+			}
 		}
 	}
 	m.kv, m.st = kv, st
@@ -292,6 +312,11 @@ func (m *monitor) apply(ctx context.Context, family string, seq uint64, stored t
 			return err
 		}
 	}
+	for id, r := range d.reviews {
+		if err := m.put(ctx, keyReview+id, r); err != nil {
+			return err
+		}
+	}
 	mk := m.st.marks[family]
 	if seq > mk.Seq {
 		mk = mark{Seq: seq, Stored: stored}
@@ -301,6 +326,9 @@ func (m *monitor) apply(ctx context.Context, family string, seq uint64, stored t
 	}
 	for id, a := range d.nodes {
 		m.st.nodes[id] = a
+	}
+	for id, r := range d.reviews {
+		m.st.reviews[id] = r
 	}
 	m.st.marks[family] = mk
 	return nil
@@ -337,8 +365,9 @@ func (m *monitor) claim(ctx context.Context, e *bus.Event, subject string) error
 	return nil
 }
 
-// tick is the role's cycle: it reads the head and the history, and classifies
-// the closes whose grace_period has passed.
+// tick is the role's cycle: it reads the head and the history, classifies the
+// closes whose grace_period has passed, closes the roots of the reviews that
+// closed and runs the emission queue.
 func (m *monitor) tick(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, opTimeout)
 	defer cancel()
@@ -349,11 +378,20 @@ func (m *monitor) tick(ctx context.Context) error {
 	m.leaseTTL.Store(int64(head.Duration("task_lease_ttl")))
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.params = ReadParams(head)
+	m.params, m.version = ReadParams(head), head.ConfigVersion
 	if err := m.clock.follow(ctx, m.js); err != nil {
 		return err
 	}
-	return m.classifyClean(ctx)
+	if err := m.classifyClean(ctx); err != nil {
+		return err
+	}
+	if err := m.settle(ctx); err != nil {
+		return err
+	}
+	if read, ok := m.read["task"]; ok {
+		return m.emit(ctx, read)
+	}
+	return nil
 }
 
 // classifyClean classifies clean every task.completed whose grace_period of

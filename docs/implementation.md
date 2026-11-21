@@ -200,7 +200,7 @@ On Windows and macOS there is also a hard cut, that of the engine's VM (§6), wh
 
 **The snapshot is requested before decommissioning**, when archiving without a `node_review` in hand (§3.13.3): on `remove` and `veto` (§3.13.8) and on eviction (§3.13.10). The Network Monitor deletes a node's key when it sees it leave the roster (§1.2.8), so a point query after the decommissioning finds nothing.
 
-* **The query is a subtask of the task the Spawner holds**: the `node_retire`, the `node_provision` that evicts or the vacant task whose eviction it executes. The renewal that archives an entry with a deletion mark (§3.13.8) holds none, and the network does not open traces (§3.5.1), so it archives without the snapshot.
+* **The query is a subtask of the task the Spawner holds**: the `node_retire`, the `node_provision` that evicts or the vacant task whose eviction it executes. The renewal that archives an entry with a deletion mark (§3.13.8) holds none, so it opens a trace for the query with its credential (§3.5.1).
 * **It waits for the close for a bound fixed in the binary**, and without it archives without the snapshot, the cheap half-failure of §3.13.3.
 
 **The engine keeps only the images of what runs.** To create a node, the Spawner pulls its image from the Registry (row 16) through the host's link (§6, *The tenant CA, the link and the join code*), and the engine keeps it in its local storage. On archiving, after confirming the decommissioning (§3.13.3), the Spawner deletes that image by digest. Docker refuses to delete an image that any container on the host uses, even a stopped one, and the Spawner ignores that refusal: another instance still uses the image, of this network or of another that shares the host, and the Spawner that archives the last one deletes it. What goes is the artifact's own layer; the base image stays, because the deployment brings it.
@@ -300,11 +300,11 @@ The consumers through which it receives announcements, proposals and closes belo
 
 #### 1.2.8. Network Monitor—Go + NATS JetStream KV
 
-Consistent with the single substrate (rows 1, 5, 7): the working aggregate of §3.12.1 lives in a KV bucket, **one key per node of the roster**, with the evidence of its windows, its deferred classifications in flight and its snooze. Go fits a passive process of percentiles over windows. The conditions under which it emits each `trigger_reason` are the trigger logic of §5.
+Consistent with the single substrate (rows 1, 5, 7): the working aggregate of §3.12.1 lives in a KV bucket, **one key per node of the roster**, with the evidence of its windows, its deferred classifications in flight, its snooze and its place in the emission queue. **Each open review has a key of its own**, with the trace the role opened for it (§3.5.1), so that the instance that inherits the range closes that root. It does not live in the node's key because the review that archives a node closes after the node has left the roster, and its key with it. Go fits a passive process of percentiles over windows. The conditions under which it emits each `trigger_reason` are the trigger logic of §5.
 
 **It reads the stream through durable consumers, one per family it observes, and each key stores the sequence of the last event it applied in each one.** `task.>` brings the announcements, with the reopens and the subtasks the subtree is reconstructed from, the awards, whose similarity—the one the Task Broker recomputes from the `task_embedding` and the credential's embedding (§3.7.5, step 4)—places each task on the radial axis, and the closes with their `metrics`; `prop.>`, the proposals, whose count gives `win_rate`; and `notice.>`, the notices of `notice_provenance` (§3.12.2). The consumer of `task.>` also brings the cycle of `node_query`, whose point form it answers from the node's key; it closes with `request_invalid` a `node_id` that is not in its roster—where no structural node is—or a `target_topic` that is not the node's. A node is busy from its `task.assigned` until the close of that task or its re-announcement, which is how the stream shows the task returning to `UNASSIGNED` (§3.1). The roster and its changes come from the engine's `/events` through `docker_reader` (§6), the same route as the `oom` event (§5.8). On restart, the role resumes from its last acknowledgment, and the Bus's retention delivers what happened while it was not running (§1.2.1). It acknowledges an event after writing the keys the event moves, so a restart between the two delivers an already applied event again; each key recognizes it by its sequence and discards it. That is why the atomic write of one key is enough, which is what the KV gives, with no transactions across keys.
 
-**The gap is detected on resuming.** If the first sequence the stream keeps is later than the next one the consumer expected, retention deleted events without delivering them. The role records the interval—from the time of the last applied event, which it stores in a key of its own, to that of the first one kept—and applies the rule of §3.12.1: the observations and assignments before the gap leave the windows, and the deferred classifications in flight across it are discarded. The roster is checked in the same step: an addition or a removal that happened with the role down appears as a difference between the keys and the Active Node Registry, and counts like any change to the roster (§5.4), placed after the events the role rereads, so the usage window waits for new assignments instead of counting those of the previous population.
+**The gap is detected on resuming.** If the first sequence the stream keeps is later than the next one the consumer expected, retention deleted events without delivering them. The role records the interval—from the time of the last applied event, which it stores in a key of its own, to that of the first one kept—and applies the rule of §3.12.1: the observations and assignments before the gap leave the windows, and the deferred classifications in flight across it are discarded. A gap in `task.>` also closes the open reviews without a snooze, because it may hide their close: the damage is a redundant review (§3.12.1). The roster is checked in the same step: an addition or a removal that happened with the role down appears as a difference between the keys and the Active Node Registry, and counts like any change to the roster (§5.4), placed after the events the role rereads, so the usage window waits for new assignments instead of counting those of the previous population.
 
 **The `admission_clock` comes from the Config Store's history stream** (§1.2.5). On starting, the role reads it from its first version and adds up the intervals with `network_admission = open`, each from the publication timestamp of the version that opens it to that of the next one; in each cycle it reads the versions published since. It reads the history and not only the head because a pause shorter than its cycle would otherwise be lost, and the instances would stop coinciding (§3.12.1). An event's instant is the timestamp the Bus stamped when storing it.
 
@@ -314,7 +314,7 @@ Consistent with the single substrate (rows 1, 5, 7): the working aggregate of §
 
 **The spec already declares it a service, not storage** (thesis 7): §3.4 and §2.1 classify it as an *off-Bus service*, which **is queried through its own interface**. That interface has to exercise three things that §3.4 explicitly puts **inside** the contract, in contrast with the storage mechanism it leaves out:
 
-* **Authorizing each access against the scope token** (§3.14.3), which the Integration Sidecar presents on behalf of the Logic Container: verifying the JWS against the root through the chain of whoever minted it (thesis 9)—the `task_broker` role certificate, the credential of the Entry Node or of the Operator Channel, or the capability credential of an emergent channel, whose proof has to grant an `entry_topic`—, requiring that the authenticated connection it arrives through (§6, *The off-Bus interfaces*) be that of the subject the token names, and only then checking the read against its `TraceID` and the write against its `TaskID` section. The rejection of an out-of-scope access stays contained here, and the rest of the network does not find out.
+* **Authorizing each access against the scope token** (§3.14.3), which the Integration Sidecar presents on behalf of the Logic Container: verifying the JWS against the root through the chain of whoever minted it (thesis 9)—the `task_broker` role certificate, the credential of the structural component that opened the trace, or the capability credential of an emergent channel, whose proof has to grant an `entry_topic`—, requiring that the authenticated connection it arrives through (§6, *The off-Bus interfaces*) be that of the subject the token names, and only then checking the read against its `TraceID` and the write against its `TaskID` section. The rejection of an out-of-scope access stays contained here, and the rest of the network does not find out.
 * **Purging on trace close**, when the whole tree reaches a terminal state plus `context_retention_grace`.
 * **Immediate on-demand purge**, authorized by the root's scope token.
 
@@ -1151,7 +1151,7 @@ When the objective is `duration` (§4.1), the same conjunction runs over `durati
 
 ## 5. The Network Monitor's trigger logic
 
-§3.12.3 fixes what each `trigger_reason` asserts about a node, and with that which rule the Spawner applies to it. This section is the default **trigger logic**: with which signals of §3.12.2 the Network Monitor detects each assertion, against which threshold, and why that condition asserts what the name says. It includes the two pieces of §3.12.1 that the architecture fixes as a property and not as a mechanism: the score formula (§5.1) and the order of the emission queue (§5.7).
+§3.12.3 fixes what each `trigger_reason` asserts about a node, and with that which rule the Spawner applies to it. This section is the default **trigger logic**: with which signals of §3.12.2 the Network Monitor detects each assertion, against which threshold, and why that condition asserts what the name says. It includes the pieces of §3.12.1 that the architecture fixes as a property and not as a mechanism: the score formula (§5.1), the emission queue (§5.7) and how the snooze is used up (§5.9).
 
 **It is compiled into the Network Monitor**, by the same argument as the Spawner's strategy (§4): changing it is deploying another version of the `zobik` binary, and that deployment needs no coordination because a single instance observes each topic (§3.12.1). What makes it replaceable is that the vector travels whole in every `node_review` (§3.12.3): a different logic changes when a node is reviewed, not what the Spawner receives.
 
@@ -1169,7 +1169,7 @@ When the objective is `duration` (§4.1), the same conjunction runs over `durati
 | `outer_gradient` | the outer group performs worse than the inner one in quality, cost or duration, with the outer group at `min_observations` (§5.3) | the node's observations | `outer_reopen_threshold`, `outer_cost_threshold`, `outer_duration_threshold` |
 | `low_usage` | `idle_share > max_idle_share`, with `usage_window` assignments since the last change to the topic's roster | the topic's assignments | `max_idle_share` |
 | `no_demand` | no assignment on the topic during `no_demand_retention` | `admission_clock` | `no_demand_retention` |
-| `routine` | none of the above; the emission queue's reserve chooses it (§3.12.1) | — | — |
+| `routine` | `n_observations ≥ min_observations` and none of the above; the emission queue's reserve chooses it (§3.12.1, §5.6) | the node's observations | — |
 
 ### 5.1. `low_score` and `notice_provenance`: the violation, read literally
 
@@ -1255,7 +1255,7 @@ Each part of the assertion of §3.12.3 is a part of the condition:
 
 ### 5.6. `routine` and precedence
 
-**`routine` has no condition of its own.** The emission queue's `exploration_share` reserve chooses it among the eligible nodes that meet no other condition (§3.12.1), in the order of §5.7.
+**`routine` asks only that N be evaluable**: `n_observations ≥ min_observations`. The emission queue's `exploration_share` reserve chooses it among the eligible nodes that meet no other condition (§3.12.1), in the order of §5.7. Below the minimum the Spawner has nothing to compare, so the review would close `no_action` and advance N's backoff (§3.13.4, §3.13.5) without anyone having looked. A node that does not mature is reached by the usage axis, by the occurrence triggers and, if it is a candidate, by the maturation expiry (§3.13.5).
 
 **When N meets several conditions, a single one travels** (§3.12.3), in this order of precedence:
 
@@ -1270,7 +1270,15 @@ Each part of the assertion of §3.12.3 is a part of the condition:
 
 ### 5.7. The emission queue
 
-§3.12.1 fixes the queue, its capped rate and the `exploration_share` reserve for `routine`. The default logic decides in which order what is waiting goes out:
+§3.12.1 fixes the queue, its capped rate and the `exploration_share` reserve for `routine`. The default logic decides how the flow is divided and in which order what is waiting goes out.
+
+> **In any hour an instance emits at most `review_emission_rate` reviews, and those of the reserve—`routine` and `no_demand`—at most the fraction `exploration_share` of them.** The evidence classes take the rest, and also the reserve's share while no node waits in it.
+
+**The reserve is the reserve classes' share and also their ceiling**, because `exploration_share` is what the network invests in exploration (§2.3): with the reserve's classes free to fill the evidence's share, the dial would stop bounding it. The reverse loan costs exploration nothing, because it happens only when no node waits in the reserve. With the defaults (§6), 3 reviews of the reserve and 9 of evidence per hour.
+
+**What waits is a node, and its condition is read again when it goes out.** A node enters the queue when it meets a condition and is eligible (§5.9), and keeps in its key the instant it entered (§1.2.8), so the order survives a restart. When its turn comes it travels with the condition that holds at that moment, by the precedence of §5.6; if none holds any longer, it leaves the queue without a review.
+
+**The order of what is waiting:**
 
 > **Outside the reserve**, by class: `notice_provenance`, then `memory_exhausted`, then `low_score`, then `outer_gradient`, then `high_cost` and `high_latency`, and finally `low_usage`. Within each class the one that has been waiting longest goes out first, except in `high_cost`, which is ordered by `spend_window`. **Within the reserve**, `no_demand` before `routine`, and each by waiting time.
 
@@ -1289,6 +1297,14 @@ Each part of the assertion of §3.12.3 is a part of the condition:
 * **Only the Logic Container's.** The Integration Sidecar has a fixed reservation from the platform; an `oom` of its own is a defect of the binary and not something a larger reservation from the blueprint corrects.
 * **Without `min_observations`**, like `notice_provenance`: what is asserted is a fact, and a single death is enough to know the reservation does not suffice.
 * **It almost never repeats on the same node.** The Spawner replaces N with another instance with a larger reservation (§3.13.10), and the next death, if there is one, is of another `node_id`. The exception is N waiting for the operator's answer, whose reviews the Spawner closes without action (§3.13.10).
+
+### 5.9. Eligibility: the snooze and the open review
+
+**A node is eligible for a condition when it has no review open and its snooze does not silence that condition** (§3.13.5). The review is announced in a trace the role opens for it and closes when the review closes (§3.5.1). While it is open the node does not enter the queue: the snooze comes in that close, and a second review would ask before the first one is answered.
+
+> **`data.snooze_until` carries an amount, in the currency of what the snooze waits for (§2.3):** observations of N with `snoozed`, milliseconds of `admission_clock` with `no_action`. The Network Monitor anchors it at the close it observes, and the snooze is used up when N gathers that many new observations, or when `admission_clock` advances that much. With `capped` it is absent, because that snooze does not expire (§3.13.5).
+
+**An amount and not an instant, because both counters are the Network Monitor's.** It counts N's observations, and it derives `admission_clock` without sharing it (§3.12.1), so the Spawner has no reading of either against which to compute an instant.
 
 ## 6. Deployment: the operator console and `zobik init`
 
@@ -2108,7 +2124,7 @@ It answers to thesis 9, which fixes a single format—compact JWS over Ed25519�
 | `capability` | the root: a structural node | — |
 | `capability` | a Spawner | its `role_certificate`, with `role` equal to `spawner` |
 | `scope_token` | a Task Broker | its `role_certificate`, with `role` equal to `task_broker` |
-| `scope_token` | the channel that opens the trace (§3.14.3) | its `capability`; if a Spawner signed it, with an `operator_proof` of `node_provision` that grants `entry_topic` |
+| `scope_token` | whoever opens the trace: a structural component or a channel (§3.14.3) | its `capability`; if a Spawner signed it, with an `operator_proof` of `node_provision` that grants `entry_topic` |
 
 It is the depth of the chain of §3.14.2: a structural credential carries no `signer_credential` and an emergent one carries the Spawner's certificate. The `signer_id` the Spawner stamps in the Active Node Registry (§3.11) is the `kid` of the node's credential.
 

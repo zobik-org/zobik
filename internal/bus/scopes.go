@@ -180,11 +180,13 @@ var TracingCollectorScope = Scope{
 }
 
 // NetworkMonitorScope is the Network Monitor's: it observes the task, prop and
-// notice families, keeps its aggregate in its bucket, and claims and closes
-// node_query (architecture §3.12.1, §3.12.3, implementation §1.2.8).
+// notice families, keeps its aggregate in its bucket, claims and closes
+// node_query, and announces node_review in the trace it opens for each review
+// (architecture §3.5.1, §3.12.1, §3.12.3, implementation §1.2.8).
 var NetworkMonitorScope = Scope{
 	Role: "network_monitor",
 	Publish: join(consumerPub, configRead, participant, []string{
+		"task.announced.node_review",
 		"$KV." + BucketMonitor + ".>",
 		"$JS.API.STREAM.INFO.KV_" + BucketMonitor,
 		"$JS.API.DIRECT.GET.KV_" + BucketMonitor + ".>",

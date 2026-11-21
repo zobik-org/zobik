@@ -53,10 +53,26 @@ type metrics struct {
 // delta is what an event moves: copies of the keys it changes, applied
 // together once every key is written.
 type delta struct {
-	family string
-	seq    uint64
-	nodes  map[string]*Aggregate
-	state  *state
+	family  string
+	seq     uint64
+	nodes   map[string]*Aggregate
+	reviews map[string]*Review
+	state   *state
+}
+
+// review returns the copy of the open review taskID the event changes, or nil
+// if it is not one or its close was already observed.
+func (d *delta) review(taskID string) *Review {
+	if r, ok := d.reviews[taskID]; ok {
+		return r
+	}
+	r := d.state.reviews[taskID]
+	if r == nil || r.Closed {
+		return nil
+	}
+	c := *r
+	d.reviews[taskID] = &c
+	return &c
 }
 
 // touch returns the copy of id's key the event changes, or nil if the node is
@@ -98,7 +114,7 @@ func (s *state) holder(topic, taskID string) string {
 
 // observe computes what the event at seq of family moves, gap included.
 func (s *state) observe(family string, seq uint64, stored time.Time, e *bus.Event, subject string, p Params) *delta {
-	d := &delta{family: family, seq: seq, nodes: map[string]*Aggregate{}, state: s}
+	d := &delta{family: family, seq: seq, nodes: map[string]*Aggregate{}, reviews: map[string]*Review{}, state: s}
 	if m := s.marks[family]; m.Seq != 0 && seq > m.Seq+1 {
 		// The stream no longer reaches the point where the role stopped: the
 		// events in between were lost (architecture §3.12.1).
@@ -106,6 +122,15 @@ func (s *state) observe(family string, seq uint64, stored time.Time, e *bus.Even
 		for id := range s.nodes {
 			if a := d.touch(id); a != nil {
 				a.dropBefore(stored)
+			}
+		}
+		// A review whose close the gap could have hidden is closed without a
+		// snooze: the damage is a redundant review (architecture §3.12.1).
+		if family == "task" {
+			for id := range s.reviews {
+				if r := d.review(id); r != nil {
+					r.Closed = true
+				}
 			}
 		}
 	}
@@ -248,9 +273,17 @@ func (s *state) closed(d *delta, e *bus.Event, data eventData, requester, topic 
 				o.Failed = true
 				a.classify(o)
 			}
+			// A snooze that waits for observations counts this one
+			// (implementation §5.9).
+			if sn := a.Snooze; sn != nil && sn.Action == ActionSnoozed && e.Type != bus.TypeAborted {
+				sn.Observations--
+			}
 			// A task.aborted is not an observation (architecture §3.12.1).
 			a.trimObservations(stored, p)
 		}
+	}
+	if requester == s.self && topic == TopicReview {
+		s.reviewClosed(d, e, stored)
 	}
 	r := s.nodes[requester]
 	if r == nil || r.Holding == nil || r.Holding.TaskID == e.Subject || r.Holding.TraceID != bus.TraceID(e.TraceParent) {
