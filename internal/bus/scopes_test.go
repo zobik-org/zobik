@@ -105,6 +105,11 @@ func TestRolePublishPermissions(t *testing.T) {
 	ch.publishes(t, tap, "prop."+ch.id+".hitl_contact_operator")
 	ch.denied(t, "task.assigned."+ch.id)
 
+	nm := connectRole(t, s, a, NetworkMonitorScope.Role)
+	nm.publishes(t, tap, "task.announced.node_review")
+	nm.publishes(t, tap, "task.completed."+nm.id+".node_review")
+	nm.denied(t, "task.announced.intake")
+
 	ctx := connectRole(t, s, a, ContextScope.Role)
 	ctx.denied(t, "task.completed.UNODE.echo")
 	ctx.denied(t, "task.announced.echo")

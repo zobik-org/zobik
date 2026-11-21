@@ -184,8 +184,14 @@ func TestPurge(t *testing.T) {
 
 // The renewal archives the nodes whose entry has a deletion mark: the image
 // was deleted while their presence mark had expired (architecture §3.13.8).
+// It holds no task, so it asks for the snapshot in a trace it opens, with
+// operator as the origin audience, and closes its root once the query closes
+// (architecture §3.5.1, implementation §1.2.4).
 func TestRenewalArchivesDeleted(t *testing.T) {
 	f := newFixture(t, 6*time.Second, false)
+	announced := f.Tap(bus.SubjectAnnounced(spawner.TopicNodeQuery))
+	spawnerID := f.ID("spawner")
+	closes := f.Tap(bus.SubjectTerminal(bus.TypeCompleted, spawnerID, spawner.TopicNodeQuery))
 	id := f.provisioned()
 	f.cat.SetDeletionMark(f.Ctx, echo, true)
 	deadline := time.Now().Add(15 * time.Second)
@@ -194,11 +200,44 @@ func TestRenewalArchivesDeleted(t *testing.T) {
 		done := slices.Contains(f.driver.decommissioned, id)
 		f.driver.mu.Unlock()
 		if done && f.cat.has("floor:"+echo+":0.5") {
-			return
+			break
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Errorf("decommissioned %v", f.driver.decommissioned)
+	var row struct {
+		Snapshot map[string]json.RawMessage `json:"snapshot"`
+	}
+	if _, ok, _ := f.cat.Record(f.Ctx, network, "floor:"+echo+":0.5", &row); !ok || row.Snapshot["n_observations"] == nil {
+		t.Fatalf("decommissioned %v, floor row %v %v", f.driver.decommissioned, ok, row.Snapshot)
+	}
+
+	var query bus.Event
+	select {
+	case m := <-announced:
+		json.Unmarshal(m.Data, &query)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no point query")
+	}
+	var d struct {
+		OriginAudience string `json:"origin_audience"`
+	}
+	json.Unmarshal(query.Data, &d)
+	trace := bus.TraceID(query.TraceParent)
+	if d.OriginAudience != "operator" || trace == "" || query.ConfigVersion == "" {
+		t.Errorf("the query's trace: %q %q %q", d.OriginAudience, query.TraceParent, query.ConfigVersion)
+	}
+	for {
+		select {
+		case m := <-closes:
+			var e bus.Event
+			json.Unmarshal(m.Data, &e)
+			if e.Subject == trace {
+				return
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the root of %s did not close", trace)
+		}
+	}
 }
 
 func ids(data map[string]any) []string {

@@ -27,7 +27,7 @@
       "type": "string"
     },
     "origin_audience": {
-      "description": "The audience of the channel that opened the trace, inherited like workspace (architecture §3.5.3).",
+      "description": "The audience requester resolves to throughout the trace: that of the channel that opened it, or operator in one a structural component opened for its own work; inherited like workspace (architecture §3.5.1, §3.5.3).",
       "type": "string"
     },
     "context_ref": {

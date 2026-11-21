@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zobik.org/schemas/node_review.schema.json",
+  "description": "The data of a task.announced on node_review, which the Network Monitor announces in the trace it opens for the review and the Spawner of target_topic's partition claims (architecture §3.12.3, implementation §10.1). The common fields are in data.schema.json.",
+  "type": "object",
+  "required": ["node_id", "target_topic", "n_observations", "trigger_reason", "signals", "reopens_by_requester"],
+  "properties": {
+    "node_id": {
+      "description": "The node under review, by its platform identity (architecture §3.12.3).",
+      "type": "string",
+      "minLength": 1
+    },
+    "target_topic": {
+      "description": "The topic of the node's specialty, which routes the review to its partition (architecture §3.7.7).",
+      "type": "string",
+      "minLength": 1
+    },
+    "n_observations": {
+      "description": "The closes in the node's quality window (architecture §3.12.1).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "trigger_reason": {
+      "description": "What the review asserts about the node, which decides the Spawner's rule (architecture §3.12.3).",
+      "type": "string",
+      "enum": ["low_score", "notice_provenance", "memory_exhausted", "high_cost", "high_latency", "outer_gradient", "low_usage", "no_demand", "routine"]
+    },
+    "signals": {
+      "description": "The node's full signal vector, with the shape of signals.vector.schema.json, which the validator applies to it (architecture §3.12.2, implementation §10.1).",
+      "type": "object",
+      "properties": {}
+    },
+    "reopens_by_requester": {
+      "description": "The node's reopens in the quality window, grouped by the platform identity of the requester that reopened: diagnostic, with no weight and no trigger (architecture §3.12.3).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["requester_identity", "reopens"],
+        "properties": {
+          "requester_identity": {"description": "The requester that reopened.", "type": "string", "minLength": 1},
+          "reopens": {"description": "How many of the window's closes it reopened.", "type": "integer", "minimum": 1}
+        }
+      }
+    }
+  }
+}
