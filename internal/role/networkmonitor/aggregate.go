@@ -48,6 +48,12 @@ type Aggregate struct {
 	// assignment on its topic, its entry into the roster or the end of an
 	// observation gap (architecture §3.12.1).
 	DemandFrom time.Time `json:"demand_from"`
+	// Snooze is what the close of its last review snoozed it for
+	// (implementation §5.9).
+	Snooze *Snooze `json:"snooze,omitempty"`
+	// QueuedAt is when it entered the emission queue, zero while it is not in it
+	// (implementation §5.7).
+	QueuedAt time.Time `json:"queued_at,omitzero"`
 }
 
 // Holding is the task a node holds, with what its subtasks add up while it
@@ -120,6 +126,20 @@ type Params struct {
 	ScoreFloor        float64
 	W1                float64
 	OuterShare        float64
+	// The trigger logic's (implementation §5).
+	MaxIdleShare           float64
+	NoDemandRetention      time.Duration
+	CostDriftThreshold     float64
+	DurationDriftThreshold float64
+	OuterReopenThreshold   float64
+	OuterCostThreshold     float64
+	OuterDurationThreshold float64
+	// The emission queue's (architecture §3.12.1).
+	ReviewEmissionRate int
+	ExplorationShare   float64
+	// NodeReviewSnooze is the snooze of a review closed without the Spawner's
+	// outcome (implementation §5.9).
+	NodeReviewSnooze int
 }
 
 // ReadParams reads the parameters from a published version.
@@ -138,6 +158,17 @@ func ReadParams(rec *globalconfig.Record) Params {
 		ScoreFloor:        num("score_floor"),
 		W1:                num("w1"),
 		OuterShare:        num("outer_share"),
+
+		MaxIdleShare:           num("max_idle_share"),
+		NoDemandRetention:      rec.Duration("no_demand_retention"),
+		CostDriftThreshold:     num("cost_drift_threshold"),
+		DurationDriftThreshold: num("duration_drift_threshold"),
+		OuterReopenThreshold:   num("outer_reopen_threshold"),
+		OuterCostThreshold:     num("outer_cost_threshold"),
+		OuterDurationThreshold: num("outer_duration_threshold"),
+		ReviewEmissionRate:     int(num("review_emission_rate")),
+		ExplorationShare:       num("exploration_share"),
+		NodeReviewSnooze:       int(num("node_review_snooze")),
 	}
 }
 
@@ -179,6 +210,13 @@ type Vector struct {
 // window is the last quality_window classified closes within
 // evidence_staleness (architecture §3.12.1).
 func (a *Aggregate) window(p Params, now time.Time) []Observation {
+	w, _ := a.windows(p, now)
+	return w
+}
+
+// windows are the current window and the previous one: the quality_window
+// closes before it, within evidence_staleness too (implementation §5.2).
+func (a *Aggregate) windows(p Params, now time.Time) (current, previous []Observation) {
 	from := now.Add(-p.EvidenceStaleness)
 	var w []Observation
 	for _, o := range a.Observations {
@@ -186,10 +224,14 @@ func (a *Aggregate) window(p Params, now time.Time) []Observation {
 			w = append(w, o)
 		}
 	}
-	if len(w) > p.QualityWindow {
-		w = w[len(w)-p.QualityWindow:]
+	if len(w) <= p.QualityWindow {
+		return w, nil
 	}
-	return w
+	current, previous = w[len(w)-p.QualityWindow:], w[:len(w)-p.QualityWindow]
+	if len(previous) > p.QualityWindow {
+		previous = previous[len(previous)-p.QualityWindow:]
+	}
+	return current, previous
 }
 
 // Vector computes the node's signals at now.

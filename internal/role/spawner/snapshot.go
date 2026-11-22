@@ -24,21 +24,26 @@ const snapshotWait = 10 * time.Second
 // point form of node_query, before decommissioning it: the Network Monitor
 // lets go of a node when it leaves the roster (implementation §1.2.4). The
 // query is a subtask of request, the task the Spawner holds—the operator's
-// request or the vacant task—; without one there is no trace to ask in,
-// because the network does not open traces (architecture §3.5.1), and it
-// returns nil at once. It also returns nil if the query does not close with
-// the vector within snapshotWait: the cheap half-failure of architecture
+// request or the vacant task—; the renewal holds none, so it passes nil and
+// the query goes in a trace the Spawner opens for it and closes when the query
+// closes (architecture §3.5.1). It returns nil if the query does not close
+// with the vector within snapshotWait: the cheap half-failure of architecture
 // §3.13.3.
 func (s *spawner) snapshot(ctx context.Context, request *claim.Assignment, n Running) json.RawMessage {
-	if request == nil {
-		return nil
-	}
 	taskID := uuid.NewString()
 	data := map[string]any{
 		"topic": TopicNodeQuery, "requester_identity": s.rt.ID,
 		"node_id": n.NodeID, "target_topic": n.Topic,
 	}
-	for k, v := range request.Inherited() {
+	var root *claim.Root
+	var inherited map[string]any
+	if request != nil {
+		inherited = request.Inherited()
+	} else {
+		r := claim.OpenRoot(s.head.Load().ConfigVersion, TopicNodeQuery)
+		root, inherited = &r, r.Inherited()
+	}
+	for k, v := range inherited {
 		data[k] = v
 	}
 	e, err := bus.NewEvent(bus.TypeAnnounced, s.rt.ID, taskID, data)
@@ -46,7 +51,11 @@ func (s *spawner) snapshot(ctx context.Context, request *claim.Assignment, n Run
 		log.Printf("spawner: the snapshot of %s: %v", n.NodeID, err)
 		return nil
 	}
-	e.TraceParent, e.ConfigVersion = request.ChildTraceParent(), request.Assigned.ConfigVersion
+	if root != nil {
+		root.Announce(e)
+	} else {
+		e.TraceParent, e.ConfigVersion = request.ChildTraceParent(), request.Assigned.ConfigVersion
+	}
 	if err := e.ValidateTopic(); err != nil {
 		log.Printf("spawner: the snapshot of %s: %v", n.NodeID, err)
 		return nil
@@ -56,19 +65,24 @@ func (s *spawner) snapshot(ctx context.Context, request *claim.Assignment, n Run
 	s.qmu.Lock()
 	s.queries[taskID] = closed
 	s.qmu.Unlock()
-	defer func() {
+	forget := func() {
 		s.qmu.Lock()
 		delete(s.queries, taskID)
 		s.qmu.Unlock()
-	}()
-	ctx, cancel := context.WithTimeout(ctx, snapshotWait)
+	}
+	wait, cancel := context.WithTimeout(ctx, snapshotWait)
 	defer cancel()
-	if err := bus.Publish(ctx, s.js, bus.SubjectAnnounced(TopicNodeQuery), e); err != nil {
+	if err := bus.Publish(wait, s.js, bus.SubjectAnnounced(TopicNodeQuery), e); err != nil {
+		forget()
 		log.Printf("spawner: the snapshot of %s: %v", n.NodeID, err)
 		return nil
 	}
 	select {
 	case c := <-closed:
+		forget()
+		if root != nil {
+			s.closeRoot(ctx, root, n)
+		}
 		var d struct {
 			Signals       json.RawMessage `json:"signals"`
 			FailureReason string          `json:"failure_reason"`
@@ -79,9 +93,38 @@ func (s *spawner) snapshot(ctx context.Context, request *claim.Assignment, n Run
 			return nil
 		}
 		return d.Signals
-	case <-ctx.Done():
+	case <-wait.Done():
 		log.Printf("spawner: the snapshot of %s: the query did not close within %v", n.NodeID, snapshotWait)
+		if root == nil {
+			forget()
+			return nil
+		}
+		// A root closes after its subtask (architecture §3.9.1): the trace
+		// waits for the query's close beyond the act that asked for it, which
+		// returns now, and for at most rootWait.
+		go func() {
+			defer forget()
+			select {
+			case <-closed:
+			case <-time.After(rootWait):
+			}
+			s.closeRoot(ctx, root, n)
+		}()
 		return nil
+	}
+}
+
+// rootWait bounds how long the trace of a snapshot query that did not close in
+// time waits for that close before its root is closed anyway.
+const rootWait = 10 * time.Minute
+
+// closeRoot closes the trace the Spawner opened for a snapshot query
+// (architecture §3.5.1).
+func (s *spawner) closeRoot(ctx context.Context, root *claim.Root, n Running) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
+	defer cancel()
+	if err := root.Close(ctx, s.js, s.rt.ID); err != nil {
+		log.Printf("spawner: closing the trace of the snapshot of %s: %v", n.NodeID, err)
 	}
 }
 
