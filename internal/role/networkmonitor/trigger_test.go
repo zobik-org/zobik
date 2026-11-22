@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"zobik.org/zobik/internal/bus"
 )
 
 var triggerParams = func() Params {
@@ -252,4 +254,45 @@ func equal(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// A gap in task.> releases the node of an open review, which can be reviewed
+// again, and the review waits for its close to close the root
+// (implementation §1.2.8).
+func TestGapReleasesReview(t *testing.T) {
+	s := &state{
+		self: "UMONITOR", nodes: map[string]*Aggregate{},
+		marks:   map[string]mark{"task": {Seq: 1, Stored: t0}},
+		reviews: map[string]*Review{"T": {TaskID: "T", NodeID: "UNODE"}},
+	}
+	d := s.observe("task", 5, t0.Add(time.Hour), nil, "", params)
+	r := d.reviews["T"]
+	if r == nil || !r.Released || r.Closed {
+		t.Fatalf("after the gap %+v", r)
+	}
+	s.reviews["T"] = r
+	if s.underReview()["UNODE"] {
+		t.Error("the released node is still under review")
+	}
+}
+
+// A review closed without the Spawner's outcome snoozes its node for
+// node_review_snooze observations (implementation §5.9).
+func TestFailedReviewSnoozes(t *testing.T) {
+	p := params
+	p.NodeReviewSnooze = 6
+	s := &state{
+		self:    "UMONITOR",
+		nodes:   map[string]*Aggregate{"UNODE": {NodeID: "UNODE", Applied: map[string]uint64{}}},
+		marks:   map[string]mark{},
+		reviews: map[string]*Review{"T": {TaskID: "T", NodeID: "UNODE"}},
+	}
+	e := &bus.Event{Type: bus.TypeFailed, Subject: "T", Data: json.RawMessage(`{"topic":"node_review","failure_reason":"x"}`)}
+	d := s.observe("task", 1, t0, e, "task.failed.UMONITOR.node_review", p)
+	if r := d.reviews["T"]; r == nil || !r.Closed {
+		t.Fatalf("the review %+v", r)
+	}
+	if sn := d.nodes["UNODE"].Snooze; sn == nil || sn.Action != ActionSnoozed || sn.Observations != 6 {
+		t.Errorf("the snooze %+v", sn)
+	}
 }

@@ -110,6 +110,9 @@ type Review struct {
 	// again with the same id.
 	Announcement *bus.Event `json:"announcement"`
 	Published    bool       `json:"published"`
+	// Released is a gap that could have hidden the review's close: its node
+	// can be reviewed again, and the root still waits for the close.
+	Released bool `json:"released,omitempty"`
 	// Closed is the review's close observed: what is left is closing the root.
 	Closed bool `json:"closed"`
 }
@@ -144,30 +147,34 @@ type waiting struct {
 	v      Vector
 }
 
-// openReview says whether the node has a review open.
-func (s *state) openReview(id string) bool {
+// underReview are the nodes with a review open.
+func (s *state) underReview() map[string]bool {
+	out := map[string]bool{}
 	for _, r := range s.reviews {
-		if r.NodeID == id {
-			return true
+		if !r.Closed && !r.Released {
+			out[r.NodeID] = true
 		}
 	}
-	return false
+	return out
 }
 
 // reviewClosed reads the close of a review: the snooze it carries goes to the
-// node, if it is still in the roster, and the root is left to close
-// (implementation §5.9).
-func (s *state) reviewClosed(d *delta, e *bus.Event, stored time.Time) {
+// node, if it is still in the roster, and the root is left to close. A close
+// without the Spawner's outcome—a task.failed or a task.aborted—snoozes it like
+// snoozed, for node_review_snooze observations (implementation §5.9).
+func (s *state) reviewClosed(d *delta, e *bus.Event, stored time.Time, p Params) {
 	r := d.review(e.Subject)
 	if r == nil {
 		return
 	}
 	r.Closed = true
-	if e.Type != bus.TypeCompleted {
-		return
-	}
-	if a := d.touch(r.NodeID); a != nil {
+	a := d.touch(r.NodeID)
+	switch {
+	case a == nil:
+	case e.Type == bus.TypeCompleted:
 		a.Snooze = snoozeOf(e.Data, stored)
+	case p.NodeReviewSnooze > 0:
+		a.Snooze = &Snooze{Action: ActionSnoozed, Observations: p.NodeReviewSnooze}
 	}
 }
 
@@ -177,12 +184,13 @@ func (s *state) reviewClosed(d *delta, e *bus.Event, stored time.Time) {
 // still unread would otherwise be missed.
 func (m *monitor) emit(ctx context.Context, now time.Time) error {
 	var queue []waiting
+	reviewing := m.st.underReview()
 	for _, id := range m.st.ids() {
 		a := m.st.nodes[id]
 		reason, v := "", Vector{}
 		// No node_review on a hitl_contact_* channel, and none while one is open
 		// (architecture §3.12.3, implementation §5.9).
-		if !strings.HasPrefix(a.Topic, signing.HITLPrefix) && !m.st.openReview(id) {
+		if !strings.HasPrefix(a.Topic, signing.HITLPrefix) && !reviewing[id] {
 			reason, v = a.condition(m.params, now, &m.clock)
 			if a.Snooze.silences(reason, now, &m.clock) {
 				reason = ""
@@ -217,7 +225,7 @@ func (m *monitor) emit(ctx context.Context, now time.Time) error {
 	m.st.emissions = slices.DeleteFunc(m.st.emissions, func(e emission) bool { return wall.Sub(e.At) >= time.Hour })
 	reserve, evidence := split(queue)
 	for _, w := range pick(reserve, evidence, m.st.emissions, m.params) {
-		if err := m.announce(ctx, w, wall); err != nil {
+		if err := m.announce(ctx, w, now, wall); err != nil {
 			return err
 		}
 	}
@@ -230,7 +238,7 @@ func (m *monitor) emit(ctx context.Context, now time.Time) error {
 // share while no node waits in it (implementation §5.7).
 func pick(reserve, evidence []waiting, emitted []emission, p Params) []waiting {
 	rate := p.ReviewEmissionRate
-	share := min(int(math.Round(p.ExplorationShare*float64(rate))), rate)
+	share := min(int(math.Floor(p.ExplorationShare*float64(rate))), rate)
 	var inReserve, inEvidence int
 	for _, e := range emitted {
 		if e.Reserve {
@@ -289,17 +297,19 @@ func split(queue []waiting) (reserve, evidence []waiting) {
 }
 
 // announce opens the review's trace and announces the review as a subtask of
-// its root (architecture §3.5.1, §3.12.3). The review's key, the node out of
-// the queue and the emission are written before publishing, so a restart
-// publishes it again instead of losing it.
-func (m *monitor) announce(ctx context.Context, w waiting, at time.Time) error {
+// its root (architecture §3.5.1, §3.12.3); now is the instant its vector was
+// read at, and at the emission's. The emission, the review's key and the node
+// out of the queue are written before publishing, so a restart publishes it
+// again instead of losing it, and the emission counts even if it never went
+// out.
+func (m *monitor) announce(ctx context.Context, w waiting, now, at time.Time) error {
 	a := m.st.nodes[w.id]
 	root := claim.OpenRoot(m.version, TopicReview)
 	data := map[string]any{
 		"topic": TopicReview, "requester_identity": m.id,
 		"node_id": w.id, "target_topic": a.Topic,
 		"n_observations": w.v.NObservations, "trigger_reason": w.reason,
-		"signals": w.v, "reopens_by_requester": a.reopens(m.params, at),
+		"signals": w.v, "reopens_by_requester": a.reopens(m.params, now),
 	}
 	for k, v := range root.Inherited() {
 		data[k] = v
@@ -315,6 +325,11 @@ func (m *monitor) announce(ctx context.Context, w waiting, at time.Time) error {
 	if err := e.ValidateTopic(); err != nil {
 		return fmt.Errorf("the review of %s: %w", w.id, err)
 	}
+	emissions := append(slices.Clone(m.st.emissions), emission{At: at, Reserve: reserved(w.reason)})
+	if err := m.put(ctx, keyEmissions, emissions); err != nil {
+		return err
+	}
+	m.st.emissions = emissions
 	r := &Review{TaskID: e.Subject, NodeID: w.id, Reason: w.reason, Root: root, Announcement: e}
 	if err := m.put(ctx, keyReview+r.TaskID, r); err != nil {
 		return err
@@ -325,11 +340,6 @@ func (m *monitor) announce(ctx context.Context, w waiting, at time.Time) error {
 	if err := m.putNode(ctx, c); err != nil {
 		return err
 	}
-	emissions := append(slices.Clone(m.st.emissions), emission{At: at, Reserve: reserved(w.reason)})
-	if err := m.put(ctx, keyEmissions, emissions); err != nil {
-		return err
-	}
-	m.st.emissions = emissions
 	log.Printf("network_monitor: reviewing %s for %s", w.id, w.reason)
 	return m.publishReview(ctx, r)
 }

@@ -100,14 +100,12 @@ func (s *spawner) snapshot(ctx context.Context, request *claim.Assignment, n Run
 			return nil
 		}
 		// A root closes after its subtask (architecture §3.9.1): the trace
-		// waits for the query's close, which comes at the latest when its lease
-		// expires and nobody takes it again.
+		// waits for the query's close beyond the act that asked for it, which
+		// returns now, and for at most rootWait.
 		go func() {
 			defer forget()
 			select {
 			case <-closed:
-			case <-ctx.Done():
-				return
 			case <-time.After(rootWait):
 			}
 			s.closeRoot(ctx, root, n)

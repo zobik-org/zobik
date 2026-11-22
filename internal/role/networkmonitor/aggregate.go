@@ -137,6 +137,9 @@ type Params struct {
 	// The emission queue's (architecture §3.12.1).
 	ReviewEmissionRate int
 	ExplorationShare   float64
+	// NodeReviewSnooze is the snooze of a review closed without the Spawner's
+	// outcome (implementation §5.9).
+	NodeReviewSnooze int
 }
 
 // ReadParams reads the parameters from a published version.
@@ -165,6 +168,7 @@ func ReadParams(rec *globalconfig.Record) Params {
 		OuterDurationThreshold: num("outer_duration_threshold"),
 		ReviewEmissionRate:     int(num("review_emission_rate")),
 		ExplorationShare:       num("exploration_share"),
+		NodeReviewSnooze:       int(num("node_review_snooze")),
 	}
 }
 

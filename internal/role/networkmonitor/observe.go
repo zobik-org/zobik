@@ -124,12 +124,13 @@ func (s *state) observe(family string, seq uint64, stored time.Time, e *bus.Even
 				a.dropBefore(stored)
 			}
 		}
-		// A review whose close the gap could have hidden is closed without a
-		// snooze: the damage is a redundant review (architecture §3.12.1).
+		// A review whose close the gap could have hidden releases its node,
+		// which can be reviewed again: the damage is a redundant review
+		// (architecture §3.12.1). Its root waits for that close.
 		if family == "task" {
 			for id := range s.reviews {
 				if r := d.review(id); r != nil {
-					r.Closed = true
+					r.Released = true
 				}
 			}
 		}
@@ -283,7 +284,7 @@ func (s *state) closed(d *delta, e *bus.Event, data eventData, requester, topic 
 		}
 	}
 	if requester == s.self && topic == TopicReview {
-		s.reviewClosed(d, e, stored)
+		s.reviewClosed(d, e, stored, p)
 	}
 	r := s.nodes[requester]
 	if r == nil || r.Holding == nil || r.Holding.TaskID == e.Subject || r.Holding.TraceID != bus.TraceID(e.TraceParent) {

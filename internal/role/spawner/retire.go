@@ -172,7 +172,7 @@ func floorKey(digest string, floor float64) string {
 // §3.13.3: it decommissions them and confirms it in the Active Node Registry,
 // and only then writes the floor history. Each node's snapshot is requested
 // before decommissioning it, as a subtask of request, the task the Spawner
-// holds; with none, the renewal's, it archives without the snapshot
+// holds; with none, the renewal's, in a trace the Spawner opens for it
 // (implementation §1.2.4). It removes the presence mark and the engine's image of each entry
 // no instance of which remains, and returns the archived node_ids.
 func (s *spawner) archive(ctx context.Context, cat Catalog, request *claim.Assignment, nodes []Running, reason string) ([]string, error) {
