@@ -1,6 +1,6 @@
 # The fake embeddings endpoint of the end-to-end tests.
 # Build from the repository root: docker build -f test/e2e/embeddings/Dockerfile -t zobik-embeddings:e2e .
-FROM golang:1.27.4@sha256:08bcb99a38f85a265f9a93d1d3323e2440eec333380f3ea26ee0dec9264bb41c AS build
+FROM golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d AS build
 WORKDIR /src
 # Only what the endpoint is built from, so an edit elsewhere keeps the cache.
 COPY go.mod go.sum ./
